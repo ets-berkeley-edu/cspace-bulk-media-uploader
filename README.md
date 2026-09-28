@@ -67,8 +67,8 @@ cd frontend && npm ci && npm test && npm run typecheck && npm run build
 
 ## Checking against the real CollectionSpace
 
-Several calls are marked `VERIFY` in `backend/bmu/cspace/client.py` (`PUT media/{csid}/blob`'s multipart
-field name and response, advanced search syntax, the `accountperms` format, authority search, relation search). Run the check script from a machine that can reach the server:
+The CollectionSpace calls in `backend/bmu/cspace/client.py` were checked against the PAHMA QA tenant. To
+recheck them (for example against another tenant), run the check script from a machine that can reach the server:
 
 ```sh
 pip install -e backend

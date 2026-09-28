@@ -101,6 +101,28 @@ def test_partial_failure_and_rerun_skips_finished_steps(api, login, add_uploaded
     assert len(fake.media) == 2 and len(fake.blobs) == 1 and len(fake.relations) == 2  # 1 seeded media + 1
 
 
+def test_rerun_finds_relation_whose_response_was_lost(api, login, add_uploaded, worker, fake):
+    """CollectionSpace saved the relation but the BMU never got the response: the rerun must find it, not duplicate it."""
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_d.jpg"])
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    fake.fail_next["relations_lost"] = 504
+    worker.tick()
+    j = api.get(f"/api/jobs/{job}").json()
+    assert j["job"]["status"] == "NeedsAttention"
+    assert j["rows"][0]["result"]["steps"]["relMediaObject"]["s"] == "failed"
+    assert j["rows"][0]["result"]["steps"]["relObjectMedia"]["s"] == "done"
+    assert len(fake.relations) == 2  # both saved on the server, one despite the error
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    worker.tick()
+    j = api.get(f"/api/jobs/{job}").json()
+    steps = j["rows"][0]["result"]["steps"]
+    assert j["job"]["status"] == "Completed"
+    assert steps["relMediaObject"]["csid"] in fake.relations
+    assert len(fake.relations) == 2  # one each way, no duplicate
+
+
 def test_limited_user_cannot_create_objects(api, login, add_uploaded):
     login("limited")
     job = new_job(api)

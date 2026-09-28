@@ -1,7 +1,7 @@
 """Minimal CollectionSpace REST client used by the web app (checks, autocomplete) and the worker.
 
 Every call uses the signed-in user's own credentials (HTTP Basic), never a service account.
-Items marked VERIFY are to be confirmed against the Lyrasis QA tenant.
+Calls were checked against the Lyrasis PAHMA QA tenant with scripts/check_cspace.py.
 """
 from __future__ import annotations
 
@@ -45,6 +45,11 @@ def _children(el: Element, name: str) -> Iterable[Element]:
     return (c for c in el.iter() if _local(c.tag) == name)
 
 
+def _items(root: Element) -> Iterable[Element]:
+    """List results: <list-item>, or <relation-list-item> for relations (confirmed on QA)."""
+    return (c for c in root.iter() if _local(c.tag).endswith("list-item"))
+
+
 def _text(el: Element, name: str) -> str:
     for c in el.iter():
         if _local(c.tag) == name:
@@ -78,7 +83,8 @@ class Permissions:
 
     @classmethod
     def from_xml(cls, xml: bytes) -> "Permissions":
-        # VERIFY: accountperms may list either an <actionGroup> (e.g. "CRUDL") or <action><name> elements.
+        # Confirmed on QA: <permission><resourceName> with an <actionGroup> such as "CRUDL";
+        # <action><name> elements are also accepted.
         root = SafeET.fromstring(xml)
         res: dict[str, set[str]] = {}
         for perm in _children(root, "permission"):
@@ -128,7 +134,7 @@ class CSpaceClient:
     # -- lookups --------------------------------------------------------------------------
     def find_objects(self, object_number: str) -> list[str]:
         """CSIDs of non-deleted Object records whose objectNumber equals object_number exactly."""
-        # VERIFY: advanced search syntax and exact-match behavior on the QA tenant.
+        # Confirmed on QA: the advanced search matches objectNumber exactly.
         q = f'collectionobjects_common:objectNumber = "{_quote(object_number)}"'
         r = self._request("GET", "collectionobjects", params={"as": q, "wf_deleted": "false", "pgSz": "10"})
         return [csid for csid, num in _list_items(r.content, "objectNumber") if num == object_number]
@@ -144,7 +150,7 @@ class CSpaceClient:
         r = self._request("GET", path, params={"pt": text, "wf_deleted": "false", "pgSz": str(limit)})
         out = []
         root = SafeET.fromstring(r.content)
-        for item in _children(root, "list-item"):
+        for item in _items(root):
             ref = _text(item, "refName")
             name = _text(item, "termDisplayName") or _text(item, "displayName") or display_name(ref)
             if ref:
@@ -157,7 +163,7 @@ class CSpaceClient:
 
         CollectionSpace creates the Blob record, stores the file and sets the Media record's blobCsid
         in one call. The body is streamed. Returns the new Blob CSID when the response names it, else "".
-        VERIFY on QA: the multipart field name ("file") and the response (status, Location, blobCsid).
+        Confirmed on QA: field "file"; the Media record's blobCsid is set to the new Blob.
         """
         files = {"file": (filename, stream, content_type or "application/octet-stream")}
         r = self._request("PUT", f"media/{media_csid}/blob", files=files)
@@ -180,7 +186,7 @@ class CSpaceClient:
 
     def find_relations(self, subject_csid: str, object_csid: str, predicate: str = "affects") -> list[str]:
         """CSIDs of existing relations from subject to object, so a rerun never creates a duplicate.
-        VERIFY on QA: the relations list query parameters (sbj, obj, prd)."""
+        Results are <relation-list-item> elements, not <list-item> (seen on QA)."""
         r = self._request("GET", "relations", params={"sbj": subject_csid, "obj": object_csid, "prd": predicate, "wf_deleted": "false"})
         return [csid for csid, _ in _list_items(r.content, "csid") if csid]
 
@@ -199,7 +205,7 @@ def _csid_from(r: httpx.Response) -> str:
 
 def _list_items(xml: bytes, field_name: str) -> list[tuple[str, str]]:
     root = SafeET.fromstring(xml)
-    return [(_text(it, "csid"), _text(it, field_name)) for it in _children(root, "list-item")]
+    return [(_text(it, "csid"), _text(it, field_name)) for it in _items(root)]
 
 
 def display_name(ref_name: str) -> str:
