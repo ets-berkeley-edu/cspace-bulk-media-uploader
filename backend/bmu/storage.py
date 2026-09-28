@@ -18,7 +18,7 @@ from typing import Any, Iterator
 import boto3
 from boto3.dynamodb.conditions import Attr, Key
 from botocore.config import Config
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, ConnectionClosedError, EndpointConnectionError
 
 from .config import Settings
 
@@ -68,7 +68,19 @@ class Storage:
         self.audit_table = self.dynamodb.Table(f"{p}-audit")
 
     # ---- setup (local development and tests) ------------------------------------------
-    def create_tables(self) -> None:
+    def create_tables(self, wait_seconds: float = 60) -> None:
+        """Create the tables and bucket if missing. In docker compose the web app and the worker start
+        together, possibly before DynamoDB Local and S3 accept connections, so keep retrying until then."""
+        deadline = time.monotonic() + wait_seconds
+        while True:
+            try:
+                return self._create_tables()
+            except (EndpointConnectionError, ConnectionClosedError):
+                if time.monotonic() > deadline:
+                    raise
+                time.sleep(1)
+
+    def _create_tables(self) -> None:
         p = self.s.table_prefix
         existing = {t.name for t in self.dynamodb.tables.all()}
         specs = [
@@ -89,14 +101,23 @@ class Storage:
                 KeySchema=[{"AttributeName": a, "KeyType": k} for a, k in keys])
             if gsis:
                 kw["GlobalSecondaryIndexes"] = gsis
-            self.dynamodb.create_table(**kw).wait_until_exists()
+            try:
+                self.dynamodb.create_table(**kw)
+            except ClientError as e:  # the web app and the worker may both be creating it
+                if e.response["Error"]["Code"] != "ResourceInUseException":
+                    raise
+            self.dynamodb.Table(name).wait_until_exists()
         try:
             self.s3.head_bucket(Bucket=self.s.s3_bucket)
         except ClientError:
             kw = {"Bucket": self.s.s3_bucket}
             if self.s.aws_region != "us-east-1":
                 kw["CreateBucketConfiguration"] = {"LocationConstraint": self.s.aws_region}
-            self.s3.create_bucket(**kw)
+            try:
+                self.s3.create_bucket(**kw)
+            except ClientError as e:
+                if e.response["Error"]["Code"] not in ("BucketAlreadyOwnedByYou", "BucketAlreadyExists"):
+                    raise
         # versioning lets the worker pin the exact version of each staged file
         try:
             self.s3.put_bucket_versioning(Bucket=self.s.s3_bucket, VersioningConfiguration={"Status": "Enabled"})

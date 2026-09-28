@@ -37,7 +37,7 @@ server-side TIFF thumbnails.
 | `backend/tests/` | pytest: unit tests and the full run path with moto (AWS) and the simulated CollectionSpace |
 | `frontend/` | Vue 3 + TypeScript app (Vite, Vitest) |
 | `scripts/check_cspace.py` | Checks the BMU's calls against a real CollectionSpace server |
-| `docker-compose.yml` | Local stack: web, worker, Vue dev server, DynamoDB Local, MinIO, simulated CollectionSpace |
+| `docker-compose.yml` | Local stack: web, worker, Vue dev server, DynamoDB Local, moto (S3), simulated CollectionSpace |
 
 ## Run it locally
 
