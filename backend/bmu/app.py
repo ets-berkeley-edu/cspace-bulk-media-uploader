@@ -149,6 +149,10 @@ class AddFiles(BaseModel):
     files: list[FileSpec] = Field(min_length=1)
 
 
+class CheckRequest(BaseModel):
+    rows: list[int] | None = None  # the rows to look up in CollectionSpace; None: any row whose lookup is stale
+
+
 _SAFE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
@@ -277,7 +281,7 @@ def _routes(app: FastAPI) -> None:
         else:
             row["upload"] = {"s": "failed", "reason": "missing" if not head else "size mismatch"}
         s.storage.put_row(job_id, row)
-        return row
+        return _recheck_after_change(s, sess, job_id, n)
 
     @app.post("/api/jobs/{job_id}/rows/{n}/upload-failed")
     def upload_failed(job_id: str, n: int, sess: Session = Depends(current_session), s: Services = Depends(svc)):
@@ -285,7 +289,7 @@ def _routes(app: FastAPI) -> None:
         row = s.storage.get_row(job_id, n) or _404()
         row["upload"] = {"s": "failed", "reason": "browser"}
         s.storage.put_row(job_id, row)
-        return row
+        return _recheck_after_change(s, sess, job_id, n)
 
     # ---- rows -----------------------------------------------------------------------------------
     @app.patch("/api/jobs/{job_id}/rows/{n}")
@@ -298,7 +302,7 @@ def _routes(app: FastAPI) -> None:
         except ValueError as e:
             raise HTTPException(422, str(e))
         s.storage.put_row(job_id, row)
-        return row
+        return _recheck_after_change(s, sess, job_id, n)
 
     @app.delete("/api/jobs/{job_id}/rows/{n}")
     def delete_row(job_id: str, n: int, sess: Session = Depends(current_session), s: Services = Depends(svc)):
@@ -309,20 +313,27 @@ def _routes(app: FastAPI) -> None:
         if row.get("s3Key"):
             s.storage.delete_object(row["s3Key"])
         s.storage.delete_row(job_id, n)
-        return {"ok": True}
+        return {"ok": True, "others": _recheck(s, sess, job_id, targets=set())["changed"]}
 
     # ---- checks and scheduling --------------------------------------------------------------------
     @app.post("/api/jobs/{job_id}/check")
-    def check(job_id: str, sess: Session = Depends(current_session), s: Services = Depends(svc)):
+    def check(job_id: str, body: CheckRequest | None = None, sess: Session = Depends(current_session),
+              s: Services = Depends(svc)):
+        """The editor's checks: after files are added (a batch of rows), and when a job is opened (stale rows).
+        Every row is re-evaluated; only the given rows (or rows with stale lookups) query CollectionSpace."""
         _job_or_404(s, sess, job_id)
-        return _run_checks(s, sess, job_id)
+        targets = set(body.rows) if body and body.rows is not None else None
+        r = _recheck(s, sess, job_id, targets=targets)
+        return {"rows": r["rows"], "counts": r["counts"]}
 
     @app.post("/api/jobs/{job_id}/schedule")
     def schedule(job_id: str, sess: Session = Depends(current_session), s: Services = Depends(svc)):
         job = _job_or_404(s, sess, job_id)
         if job["status"] not in RESCHEDULABLE:
             raise HTTPException(409, f"The job is {job['status']} and can't be scheduled.")
-        result = _run_checks(s, sess, job_id)
+        # Roles can change during a session: fetch the permissions again, then check the whole job afresh.
+        sess = _refresh_permissions(s, sess)
+        result = _recheck(s, sess, job_id, targets=None, refresh=True)
         work = [r for r in result["rows"] if r.get("include") and (r.get("result") or {}).get("state") != "Done"]
         if not work:
             raise HTTPException(409, "Nothing to run: every document is done or disabled.")
@@ -343,23 +354,48 @@ def _routes(app: FastAPI) -> None:
         return s.storage.get_job(job_id)
 
 
-def _run_checks(s: Services, sess: Session, job_id: str) -> dict:
-    rows = s.storage.get_rows(job_id)
+def _refresh_permissions(s: Services, sess: Session) -> Session:
     client = sess.client(s)
     try:
-        check_rows(s.tenant, rows, client, sess.perms)
+        perms = client.account_permissions().summary
     except CSpaceError as e:
         raise _cspace_http(e)
     finally:
         client.close()
+    if perms != sess.perms:
+        s.storage.update_session_perms(sess.key, perms)
+    return sess.model_copy(update={"perms": perms})
+
+
+def _recheck(s: Services, sess: Session, job_id: str, targets: set[int] | None, refresh: bool = False) -> dict:
+    """Re-run the checks on every row (see check_rows) and save the rows whose checks or lookups changed."""
+    rows = s.storage.get_rows(job_id)
+    before = {r["n"]: (r.get("checks"), r.get("lookups")) for r in rows}
+    client = sess.client(s)
+    try:
+        check_rows(s.tenant, rows, client, sess.perms, targets=targets, refresh=refresh)
+    except CSpaceError as e:
+        raise _cspace_http(e)
+    finally:
+        client.close()
+    changed = []
     for r in rows:
-        s.storage.put_row(job_id, r)
+        if before[r["n"]] != (r.get("checks"), r.get("lookups")):
+            s.storage.put_row(job_id, r)
+            changed.append(r)
     counts = {"block": 0, "warn": 0}
     for r in rows:
         w = worst(r)
         if w in counts and r.get("include"):
             counts[w] += 1
-    return {"rows": rows, "counts": counts}
+    return {"rows": rows, "changed": changed, "counts": counts}
+
+
+def _recheck_after_change(s: Services, sess: Session, job_id: str, n: int) -> dict:
+    """After one row changed: that row, rechecked, plus any other rows whose checks changed as a result."""
+    r = _recheck(s, sess, job_id, targets={n})
+    row = next(x for x in r["rows"] if x["n"] == n)
+    return {"row": row, "others": [x for x in r["changed"] if x["n"] != n]}
 
 
 def _404():

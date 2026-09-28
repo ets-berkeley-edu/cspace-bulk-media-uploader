@@ -12,7 +12,10 @@ This first iteration covers the **core run path for PAHMA**:
 - Edit each document's handling (link to an existing object, create a new object and link, or media only),
   Restricted, identification number, date, media type, creator/contributor/rights holder (autocomplete of
   existing authority terms; values are refNames), description and copyright.
-- Check against CollectionSpace (object found, not ambiguous, permissions, duplicate IDs) and Schedule.
+- Checks while editing, as in the design: each document is checked against CollectionSpace when its file is
+  added and whenever it changes (object found and not ambiguous, permissions, duplicate IDs, file type, date),
+  with the results on the row as "Must fix" or "Warning". Schedule job stays disabled until nothing needs
+  fixing, then fetches permissions again and re-checks the whole job.
 - A worker runs the job one row at a time, following the design's steps: create the Media record, find (or
   create the skeletal) Object, attach the file with a multipart `PUT media/{csid}/blob` (CollectionSpace
   creates the Blob record and sets `blobCsid`), and relate Media and Object both ways. Each step records its
@@ -22,10 +25,7 @@ This first iteration covers the **core run path for PAHMA**:
   job waits or runs, for at most 72 hours) and deleted when the run ends, whatever the outcome.
 - One job per tenant at a time (a lock with a heartbeat), and an audit entry for each run.
 
-Deferred to later iterations: drafts with locking and take-over, queue reordering and Cancel run, Fix and
-reschedule with row edits, Groups, automatic protected files and the Public portal column, the Botanical
-Garden initials pane, the other four tenants, the audit-log UI, 1,000-row tuning, Restricted Media and
-server-side TIFF thumbnails.
+The goal is the full design document and UI mockup; this is the first part of it.
 
 ## Layout
 

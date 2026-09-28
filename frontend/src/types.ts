@@ -72,11 +72,25 @@ export interface Row {
   description: string;
   copyright: string;
   include: boolean;
-  upload: { s: "pending" | "uploading" | "done" | "failed"; pct?: number; reason?: string };
+  upload: { s: "pending" | "uploading" | "verifying" | "done" | "failed"; pct?: number; reason?: string };
   checks: Check[];
+  /** The last CollectionSpace searches for this row (object number, identification number). */
+  lookups?: { object?: Lookup; media?: Lookup };
   result: RowResult | null;
   s3Key?: string;
   uploadForm?: { url: string; fields: Record<string, string> };
+}
+
+export interface Lookup {
+  value: string;
+  csids: string[];
+  at: number;
+}
+
+/** The API's answer to a change to one row: that row, rechecked, and other rows whose checks changed. */
+export interface RowChange {
+  row: Row;
+  others: Row[];
 }
 
 export type JobStatus = "Draft" | "Queued" | "Running" | "Completed" | "NeedsAttention" | "Failed";

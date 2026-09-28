@@ -1,4 +1,4 @@
-import type { Check, Job, Me, Row, Term } from "./types";
+import type { Check, Job, Me, Row, RowChange, Term } from "./types";
 
 export class ApiError extends Error {
   constructor(public status: number, message: string, public detail: unknown = null) {
@@ -40,11 +40,13 @@ export const api = {
   deleteJob: (id: string) => request("DELETE", `/api/jobs/${id}`),
   addFiles: (id: string, files: { name: string; size: number; type: string }[]) =>
     request<{ rows: Row[] }>("POST", `/api/jobs/${id}/files`, { files }),
-  uploaded: (id: string, n: number) => request<Row>("POST", `/api/jobs/${id}/rows/${n}/uploaded`),
-  uploadFailed: (id: string, n: number) => request<Row>("POST", `/api/jobs/${id}/rows/${n}/upload-failed`),
-  editRow: (id: string, n: number, changes: Partial<Row>) => request<Row>("PATCH", `/api/jobs/${id}/rows/${n}`, changes),
-  deleteRow: (id: string, n: number) => request("DELETE", `/api/jobs/${id}/rows/${n}`),
-  check: (id: string) => request<{ rows: Row[]; counts: { block: number; warn: number } }>("POST", `/api/jobs/${id}/check`),
+  uploaded: (id: string, n: number) => request<RowChange>("POST", `/api/jobs/${id}/rows/${n}/uploaded`),
+  uploadFailed: (id: string, n: number) => request<RowChange>("POST", `/api/jobs/${id}/rows/${n}/upload-failed`),
+  editRow: (id: string, n: number, changes: Partial<Row>) => request<RowChange>("PATCH", `/api/jobs/${id}/rows/${n}`, changes),
+  deleteRow: (id: string, n: number) => request<{ ok: boolean; others: Row[] }>("DELETE", `/api/jobs/${id}/rows/${n}`),
+  /** Check rows against CollectionSpace: the given rows, or (no rows) any whose lookups are stale. */
+  check: (id: string, rows?: number[]) =>
+    request<{ rows: Row[]; counts: { block: number; warn: number } }>("POST", `/api/jobs/${id}/check`, rows ? { rows } : {}),
   schedule: (id: string) => request<Job>("POST", `/api/jobs/${id}/schedule`),
   terms: (field: string, q: string) =>
     request<{ terms: Term[] }>("GET", `/api/authorities?field=${encodeURIComponent(field)}&q=${encodeURIComponent(q)}`),

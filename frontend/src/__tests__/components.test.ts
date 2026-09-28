@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
 import AuthorityInput from "../components/AuthorityInput.vue";
 import DocumentRow from "../components/DocumentRow.vue";
-import type { Row, TenantInfo } from "../types";
+import type { Perms, Row, TenantInfo } from "../types";
 
 const REF = "urn:cspace:pahma.cspace.berkeley.edu:personauthorities:name(person):item:name(7475)'Leslie Freund'";
 
@@ -42,8 +42,10 @@ describe("AuthorityInput", () => {
 const tenant: TenantInfo = {
   key: "pahma", name: "PAHMA", filenameHint: "hint", mediaTypes: ["image"], languageDefault: "", authorityFields: {},
   publish: { field: "approvedForWeb", header: "Restricted", invert: true },
-  handling: [{ id: "link", label: "Link to existing object", object: "existing", id_rule: "object" }],
+  handling: [{ id: "link", label: "Link to existing object", object: "existing", id_rule: "object" },
+             { id: "create", label: "Create new object + link", object: "create", id_rule: "object" }],
 };
+const perms: Perms = { media: true, relations: true, objects: true, readObjects: true, authorities: true };
 function row(p: Partial<Row> = {}): Row {
   return { n: 1, file: "15-1234_a.jpg", size: 10, contentType: "image/jpeg", handling: "link", obj: "15-1234", objParsed: "15-1234",
     img: "15-1234_a", parseOk: true, idnum: "15-1234", date: "", restricted: false, type: "", creator: "", contributor: "",
@@ -53,11 +55,40 @@ function row(p: Partial<Row> = {}): Row {
 describe("DocumentRow", () => {
   it("shows Needs fixing for blocking checks and locks rows that created records", () => {
     let w = mount({ components: { DocumentRow }, template: "<table><tbody><DocumentRow v-bind='p'/></tbody></table>",
-      data: () => ({ p: { row: row({ checks: [{ level: "block", text: "No object" }] }), tenant, expanded: false, readonly: false } }) });
+      data: () => ({ p: { row: row({ checks: [{ level: "block", text: "No object" }] }), tenant, perms, expanded: false, readonly: false } }) });
     expect(w.text()).toContain("Needs fixing");
     w = mount({ components: { DocumentRow }, template: "<table><tbody><DocumentRow v-bind='p'/></tbody></table>",
-      data: () => ({ p: { row: row({ result: { state: "Partial", steps: { media: { s: "done", csid: "m1" } } } }), tenant, expanded: true, readonly: false } }) });
+      data: () => ({ p: { row: row({ result: { state: "Partial", steps: { media: { s: "done", csid: "m1" } } } }), tenant, perms, expanded: true, readonly: false } }) });
     expect(w.text()).toContain("already created records");
     expect(w.find("select").attributes("disabled")).toBeDefined();
+  });
+});
+
+function mountRow(p: Record<string, unknown>) {
+  return mount({ components: { DocumentRow }, template: "<table><tbody><DocumentRow v-bind='p'/></tbody></table>",
+    data: () => ({ p: { row: row(), tenant, perms, expanded: true, readonly: false, ...p } }) });
+}
+
+describe("DocumentRow checks", () => {
+  it("labels checks Must fix and Warning, and flags warnings in the Status column", () => {
+    const w = mountRow({ row: row({ checks: [{ level: "warn", text: "A Media record with ID 15-1234 already exists" }],
+      lookups: { object: { value: "15-1234", csids: ["c1"], at: 0 } } }) });
+    expect(w.text()).toContain("Warning: A Media record");
+    expect(w.text()).toContain("Found — will link");
+    expect(w.find('[title="This document has warnings"]').exists()).toBe(true);
+    expect(mountRow({ row: row({ checks: [{ level: "block", text: "No object" }] }) }).text()).toContain("Must fix: No object");
+  });
+
+  it("disables handling options the user has no permission for", () => {
+    const w = mountRow({ perms: { ...perms, objects: false } });
+    const create = w.findAll("option").find((o) => o.attributes("value") === "create")!;
+    expect(create.attributes("disabled")).toBeDefined();
+    expect(create.text()).toContain("(no permission)");
+  });
+
+  it("shows upload progress, then Verifying, before the checks", () => {
+    expect(mountRow({ row: row({ upload: { s: "uploading", pct: 40 } }) }).text()).toContain("Uploading 40%");
+    expect(mountRow({ row: row({ upload: { s: "verifying" } }) }).text()).toContain("Verifying…");
+    expect(mountRow({ row: row(), checking: true }).text()).toContain("Checking…");
   });
 });

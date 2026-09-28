@@ -85,6 +85,6 @@ def add_uploaded(api, services):
             assert "uploadForm" in row and row["uploadForm"]["fields"]["key"] == row["s3Key"]
             services.storage.s3.put_object(Bucket=services.settings.s3_bucket, Key=row["s3Key"], Body=content)
             u = api.post(f"/api/jobs/{job_id}/rows/{row['n']}/uploaded")
-            assert u.json()["upload"]["s"] == "done"
+            assert u.json()["row"]["upload"]["s"] == "done"
         return rows
     return _add
