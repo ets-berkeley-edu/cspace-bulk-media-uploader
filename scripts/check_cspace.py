@@ -36,6 +36,14 @@ def step(label, fn):
         return None
 
 
+def _repeating(c: CSpaceClient, media: str) -> dict:
+    """The Media record's media types and languages as saved."""
+    from defusedxml import ElementTree as ET
+    root = ET.fromstring(c._request("GET", f"media/{media}").content)
+    vals = lambda tag: [e.text for e in root.iter() if e.tag.rsplit("}", 1)[-1] == tag]
+    return {"type": vals("type"), "language": vals("language")}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--object", default="1-2345", help="an object number that exists on the server")
@@ -57,17 +65,25 @@ def main():
     step(f"find media id {a.object}", lambda: c.find_media(a.object))
     for kind, cfg in t.authorities.items():
         step(f"search {kind} '{a.term}'", lambda: [x["displayName"] for x in c.search_terms(cfg["service"], cfg["vocabulary"], a.term)][:5])
+    langs = step("languages vocabulary (count, first 5)", lambda: (lambda ts: (len(ts), [x["displayName"] for x in ts[:5]]))(c.vocabulary_items("languages")))
+    step("tenant's default language is in it", lambda: t.language_default in {x["refName"] for x in c.vocabulary_items("languages")}
+         or f"NOT FOUND: {t.language_default}")
     if not a.create:
         print("Read-only checks done. Add --create to test creating records.")
         return
     num = f"BMU-TEST-{int(time.time())}"
     row = new_row(t, f"{num}.png", len(PNG), "image/png")
     row["restricted"] = True
+    # repeating fields: two media types and two languages (design: Media type, Language)
+    row["type"] = [o.value for o in t.media_types[:2]]
+    others = [x["refName"] for x in c.vocabulary_items("languages") if x["refName"] != t.language_default][:1]
+    row["language"] = [t.language_default] + others
     # Same order as the worker (design): Media first, then the file with PUT media/{csid}/blob.
     media = step("create Media (no blobCsid)", lambda: c.create_media(media_xml(t, row)))
     if media:
         blob = step("attach file (PUT media/{csid}/blob)", lambda: c.upload_file(media, row["file"], io.BytesIO(PNG), "image/png"))
         step("read back the Media record's blobCsid", lambda: c.media_blob_csid(media))
+        step(f"read back types {row['type']} and {len(row['language'])} languages", lambda: _repeating(c, media))
     obj = step(f"create Object {num}", lambda: c.create_object(object_xml(num)))
     if media and obj:
         step("existing relations Media -> Object (expect none)", lambda: c.find_relations(media, obj))

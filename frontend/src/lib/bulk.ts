@@ -5,7 +5,7 @@
 import type { Row } from "../types";
 
 /** The panel's choices; a missing key means "no change". */
-export type BulkChanges = Partial<Pick<Row, "handling" | "restricted" | "type" | "creator" | "contributor" | "rightsHolder">>;
+export type BulkChanges = Partial<Pick<Row, "handling" | "restricted" | "type" | "language" | "creator" | "contributor" | "rightsHolder">>;
 
 type Problem = "done" | "disabled" | "created" | "handling";
 
@@ -34,7 +34,7 @@ export function objectStepRan(r: Row): boolean {
 
 /** Would these choices change this row? Choosing a value it already has is no change. */
 export function rowChanges(r: Row, c: BulkChanges): boolean {
-  return (Object.keys(c) as (keyof BulkChanges)[]).some((k) => r[k] !== c[k]);
+  return (Object.keys(c) as (keyof BulkChanges)[]).some((k) => JSON.stringify(r[k] ?? null) !== JSON.stringify(c[k] ?? null));
 }
 
 function rowProblem(r: Row, c: BulkChanges): Problem | null {

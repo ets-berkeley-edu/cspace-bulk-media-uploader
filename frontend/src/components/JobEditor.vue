@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { api, ApiError } from "../api";
 import { canPreview, readExifDate, uploadToS3 } from "../lib/files";
 import { jobCounts, worstLevel } from "../lib/status";
-import type { Job, Me, Row, RowChange } from "../types";
+import type { Job, Me, Option, Row, RowChange } from "../types";
 import type { BulkChanges } from "../lib/bulk";
 import BulkPanel from "./BulkPanel.vue";
 import DocumentRow from "./DocumentRow.vue";
@@ -20,6 +20,11 @@ const message = ref<{ cls: string; text: string } | null>(null);
 const busy = ref(false);
 const checking = reactive(new Set<number>()); // rows waiting for a CollectionSpace check
 const selected = reactive(new Set<number>());
+// The languages vocabulary, for the repeating Language pickers (loaded once, from CollectionSpace).
+const languages = ref<Option[]>([]);
+api.vocabulary("languages")
+  .then((r) => { languages.value = r.terms.map((t) => ({ value: t.refName, label: t.displayName })); })
+  .catch((e) => { message.value = { cls: "msg-warn", text: `Couldn't load the languages list: ${(e as Error).message}` }; });
 const bulkPanel = ref<InstanceType<typeof BulkPanel> | null>(null);
 const allSelected = computed(() => rows.value.length > 0 && rows.value.every((r) => selected.has(r.n)));
 const drag = ref(false);
@@ -253,7 +258,7 @@ function toggle(n: number) {
     </div>
 
     <div class="editor-split">
-    <BulkPanel ref="bulkPanel" :rows="rows" :selected="selected" :tenant="me.tenant" :perms="me.perms" :readonly="!editable" :busy="busy"
+    <BulkPanel ref="bulkPanel" :rows="rows" :selected="selected" :tenant="me.tenant" :perms="me.perms" :readonly="!editable" :busy="busy" :languages="languages"
                @apply="(t, c) => bulk(t, c, true)" @include="(t, on) => bulk(t, { include: on }, false)" />
     <div class="grid-main">
     <div class="table-wrap">
@@ -269,7 +274,7 @@ function toggle(n: number) {
         <tbody>
           <tr v-if="!rows.length"><td colspan="8" class="muted" style="text-align:center;padding:18px">No documents yet. Drop files in the box above, or browse, to add them to this job.</td></tr>
           <DocumentRow v-for="r in rows" :key="r.n" :row="r" :tenant="me.tenant" :perms="me.perms" :checking="checking.has(r.n)" :preview="previews.get(r.n)"
-                       :expanded="expanded.has(r.n)" :readonly="readonly || !editable" :selected="selected.has(r.n)"
+                       :expanded="expanded.has(r.n)" :readonly="readonly || !editable" :selected="selected.has(r.n)" :languages="languages"
                        @toggle="toggle(r.n)" @edit="edit(r, $event)" @remove="remove(r)" @select="select(r.n, $event)" />
         </tbody>
       </table>

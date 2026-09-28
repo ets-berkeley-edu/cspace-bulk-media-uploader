@@ -203,19 +203,26 @@ class Storage:
                 out.append(row)
         return out
 
+    @staticmethod
+    def _upgrade(row: dict) -> dict:
+        """Rows saved before media type was repeating hold one string; it is now a list."""
+        if isinstance(row.get("type"), str):
+            row["type"] = [row["type"]] if row["type"] else []
+        return row
+
     def get_rows(self, job_id: str) -> list[dict]:
         out: list[dict] = []
         kw: dict[str, Any] = dict(KeyConditionExpression=Key("PK").eq(f"JOB#{job_id}") & Key("SK").begins_with("ROW#"))
         while True:
             r = self.jobs.query(**kw)
-            out += [_strip(_clean(i)) for i in r["Items"]]
+            out += [self._upgrade(_strip(_clean(i))) for i in r["Items"]]
             if "LastEvaluatedKey" not in r:
                 return out
             kw["ExclusiveStartKey"] = r["LastEvaluatedKey"]
 
     def get_row(self, job_id: str, n: int) -> dict | None:
         item = self.jobs.get_item(Key={"PK": f"JOB#{job_id}", "SK": f"ROW#{n:05d}"}).get("Item")
-        return _strip(_clean(item)) if item else None
+        return self._upgrade(_strip(_clean(item))) if item else None
 
     def put_row(self, job_id: str, row: dict, guard: bool = True) -> None:
         """Save a row's data and bump its version "v". Guarded: only if nobody saved it since it was read

@@ -28,6 +28,11 @@ RESCHEDULABLE = ("Draft", "NeedsAttention", "Failed")
 
 ClientFactory = Callable[[str, str], CSpaceClient]
 
+# Vocabularies the BMU offers whole (their terms change rarely, so they are cached for an hour).
+VOCABULARIES = ("languages",)
+VOCAB_CACHE_SECONDS = 3600
+_VOCAB_CACHE: dict[tuple[str, str], tuple[float, list[dict]]] = {}
+
 
 class Services:
     """Everything a request needs; replaced in tests."""
@@ -227,6 +232,25 @@ def _routes(app: FastAPI) -> None:
             raise _cspace_http(e)
         finally:
             client.close()
+
+    # ---- vocabularies (languages): every term, for the repeating Language picker ---------------
+    @app.get("/api/vocabularies/{name}")
+    def vocabulary(name: str, sess: Session = Depends(current_session), s: Services = Depends(svc)):
+        if name not in VOCABULARIES:
+            raise HTTPException(404, "No such vocabulary")
+        key = (sess.tenant, name)
+        hit = _VOCAB_CACHE.get(key)
+        if hit and now() - hit[0] < VOCAB_CACHE_SECONDS:
+            return {"terms": hit[1]}
+        client = sess.client(s)
+        try:
+            terms = sorted(client.vocabulary_items(name), key=lambda t: t["displayName"].lower())
+        except CSpaceError as e:
+            raise _cspace_http(e)
+        finally:
+            client.close()
+        _VOCAB_CACHE[key] = (now(), terms)
+        return {"terms": terms}
 
     # ---- jobs --------------------------------------------------------------------------------
     @app.get("/api/jobs")

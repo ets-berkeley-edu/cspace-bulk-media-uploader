@@ -27,7 +27,7 @@ describe("files", () => {
 
 describe("job counts", () => {
   const base = { n: 1, file: "a.jpg", size: 1, contentType: "", handling: "link", obj: "1", objParsed: "1", img: "", parseOk: true,
-    idnum: "1", date: "", restricted: false, type: "", creator: "", contributor: "", rightsHolder: "", description: "", copyright: "",
+    idnum: "1", date: "", restricted: false, type: [], creator: "", contributor: "", rightsHolder: "", description: "", copyright: "",
     include: true, upload: { s: "done" as const }, checks: [], result: null };
   it("counts only rows with work left, and uploads still on their way", () => {
     const c = jobCounts([

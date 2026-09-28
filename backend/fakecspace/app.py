@@ -155,8 +155,24 @@ def search_media(request: Request):
     return _search(request, store.media, "identificationNumber", "media")
 
 
+# A few terms of the languages vocabulary (the real one is much longer).
+LANGUAGES = {"eng": "English", "spa": "Spanish", "fre": "French", "ger": "German", "chi": "Chinese", "jpn": "Japanese",
+             "haw": "Hawaiian", "nav": "Navajo"}
+
+
+def _language_ref(code: str) -> str:
+    return f"urn:cspace:{DOMAIN}:vocabularies:name(languages):item:name({code})'{LANGUAGES[code]}'"
+
+
 @app.get("/cspace-services/{service}/urn:cspace:name({vocab})/items")
 def search_terms(service: str, vocab: str, request: Request):
+    if service == "vocabularies" and vocab == "languages":
+        if (d := _check(request, "vocabularies", "R")):
+            return d
+        items = "".join(f"<list-item><csid>{uuid.uuid5(uuid.NAMESPACE_URL, c)}</csid><shortIdentifier>{c}</shortIdentifier>"
+                        f"<displayName>{escape(n)}</displayName><refName>{escape(_language_ref(c))}</refName></list-item>"
+                        for c, n in LANGUAGES.items())
+        return _xml(f'<ns2:abstract-common-list xmlns:ns2="http://collectionspace.org/services/jaxb">{items}</ns2:abstract-common-list>')
     if service not in ("personauthorities", "orgauthorities"):
         return Response(status_code=404)
     if (d := _check(request, service, "R")):
