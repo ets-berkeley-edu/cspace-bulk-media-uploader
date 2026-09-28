@@ -101,3 +101,36 @@ tr.disabled td:not(.keep) { opacity: .5; }
 .steps div { white-space: nowrap; }
 code { font-size: 11px; }
 @media (max-width: 700px) { .hide-narrow { display: none; } }
+
+/* ---- editor layout with the bulk-change panel (design: User interface; UI mockup) ---- */
+.editor-split { display: grid; grid-template-columns: 264px minmax(0, 1fr); gap: 16px; align-items: start; }
+.editor-split:has(.bulk-side.collapsed) { grid-template-columns: 44px minmax(0, 1fr); }
+.bulk-side { position: sticky; top: 12px; min-width: 0; }
+.bulk-panel { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.bulk-head { display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 12px; min-height: 42px; }
+.bulk-title { flex: 1; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bulk-side.collapsed .bulk-head { justify-content: center; padding: 8px 0; }
+.bulk-side.collapsed .bulk-title { display: none; }
+.bulk-side.collapsed .icon-btn svg { transform: rotate(180deg); }
+.icon-btn { width: 28px; height: 28px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border: 1px solid transparent; background: transparent; color: var(--text-secondary); border-radius: 6px; }
+.icon-btn svg { width: 16px; height: 16px; }
+.bulk-open { padding: 0 12px 12px; }
+.bulk-sel { font-size: 12px; color: var(--text-secondary); margin: 0 0 10px; }
+.bulk-group { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 12px; }
+.bulk-group.divided { border-top: 1px solid var(--border); padding-top: 10px; margin-bottom: 0; }
+.bulk-group select, .bulk-group button { width: 100%; }
+.bulk-note { font-size: 12px; color: var(--text-warning); }
+.bulk-note.neutral { color: var(--text-secondary); }
+.section-title { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+.section-hint { font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; }
+.bulk-rail { display: flex; width: 100%; min-height: 200px; padding: 6px 0 12px; border: none; background: none; flex-direction: column; align-items: center; gap: 10px; color: var(--text-secondary); cursor: pointer; }
+.bulk-rail .rail-label { writing-mode: vertical-rl; transform: rotate(180deg); font-size: 12px; font-weight: 600; white-space: nowrap; }
+.bulk-rail .rail-count { font-size: 11px; font-weight: 600; background: var(--text-accent); color: var(--surface-2); border-radius: 10px; min-width: 20px; padding: 1px 6px; text-align: center; }
+.grid-main { min-width: 0; }
+@media (max-width: 900px) {
+  .editor-split, .editor-split:has(.bulk-side.collapsed) { grid-template-columns: 1fr; }
+  .bulk-side { position: static; }
+  .bulk-side.collapsed .bulk-head { justify-content: flex-start; padding: 8px 8px 8px 12px; }
+  .bulk-side.collapsed .bulk-title { display: block; }
+  .bulk-rail { display: none; }
+}

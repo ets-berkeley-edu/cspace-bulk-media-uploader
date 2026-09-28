@@ -7,11 +7,12 @@ import AuthorityInput from "./AuthorityInput.vue";
 
 const props = defineProps<{
   row: Row; tenant: TenantInfo; perms: Perms; preview?: string; expanded: boolean; readonly: boolean; checking?: boolean;
+  selected?: boolean;
 }>();
-const emit = defineEmits<{ edit: [changes: Partial<Row>]; remove: []; toggle: [] }>();
+const emit = defineEmits<{ edit: [changes: Partial<Row>]; remove: []; toggle: []; select: [on: boolean] }>();
 
 const locked = computed(() => Object.values(props.row.result?.steps ?? {}).some((s) => !!s.csid));
-const ro = computed(() => props.readonly || locked.value);
+const ro = computed(() => props.readonly || locked.value || !props.row.include);
 const handling = computed(() => props.tenant.handling.find((h) => h.id === props.row.handling));
 
 const status = computed(() => rowStatus(props.row, props.tenant, props.checking));
@@ -27,6 +28,8 @@ function text(field: keyof Row, e: Event) {
 <template>
   <tr :class="{ disabled: !row.include }">
     <td><div class="thumb"><img v-if="preview" :src="preview" alt="" /><span v-else>{{ row.file.split(".").pop()?.toUpperCase() }}</span></div></td>
+    <td class="keep"><input type="checkbox" :checked="selected" :aria-label="`Select ${row.file}`"
+      @change="emit('select', ($event.target as HTMLInputElement).checked)" /></td>
     <td class="keep"><button class="chevron" :class="{ open: expanded }" :aria-expanded="expanded" aria-label="Show details" @click="emit('toggle')">▸</button></td>
     <td>
       <div>{{ row.file }}</div>
@@ -52,7 +55,7 @@ function text(field: keyof Row, e: Event) {
     </td>
   </tr>
   <tr v-if="expanded" class="detail">
-    <td colspan="7">
+    <td colspan="8">
       <div v-if="locked" class="msg msg-info">This document already created records in CollectionSpace, so it can't be changed here.</div>
       <div class="grid">
         <label class="field"><span>Object number <template v-if="row.obj === row.objParsed">(parsed)</template></span>

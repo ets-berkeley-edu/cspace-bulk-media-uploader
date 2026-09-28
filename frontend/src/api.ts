@@ -43,6 +43,9 @@ export const api = {
   uploaded: (id: string, n: number) => request<RowChange>("POST", `/api/jobs/${id}/rows/${n}/uploaded`),
   uploadFailed: (id: string, n: number) => request<RowChange>("POST", `/api/jobs/${id}/rows/${n}/upload-failed`),
   editRow: (id: string, n: number, changes: Partial<Row>) => request<RowChange>("PATCH", `/api/jobs/${id}/rows/${n}`, changes),
+  /** The bulk-change panel: the same changes to many rows, never applied partially. */
+  bulk: (id: string, rows: number[], changes: Partial<Row>) =>
+    request<{ rows: Row[] }>("POST", `/api/jobs/${id}/rows/bulk`, { rows, changes }),
   deleteRow: (id: string, n: number) => request<{ ok: boolean; others: Row[] }>("DELETE", `/api/jobs/${id}/rows/${n}`),
   /** Check rows against CollectionSpace: the given rows, or (no rows) any whose lookups are stale. */
   check: (id: string, rows?: number[]) =>

@@ -33,13 +33,42 @@ def default_idnum(tenant: Tenant, row: dict) -> str:
     return row["img"] if h and h.id_rule == "image" else row["obj"]
 
 
+def edit_problem(row: dict, changes: dict[str, Any]) -> str | None:
+    """Why this row can't take these changes, or None. Changes that match the row's current values are no
+    change, so they never count against it (design: bulk-change panel)."""
+    real = {k: v for k, v in changes.items() if row.get(k) != v}
+    if not real:
+        return None
+    if (row.get("result") or {}).get("state") == "Done":
+        return "done"
+    if set(real) == {"include"}:
+        return None  # any row with work left can be disabled or enabled, a Partial one too
+    if not row.get("include", True):
+        return "disabled"
+    if is_locked(row):
+        return "created"
+    if "handling" in real and object_step_ran(row):
+        return "handling"
+    return None
+
+
+PROBLEM_TEXT = {
+    "done": "This document is done; there is nothing left to change.",
+    "disabled": "This document is disabled. Enable it first.",
+    "created": "This document already created records in CollectionSpace and can't be changed.",
+    "handling": "The last run already found or created this document's object, so its handling can't change.",
+}
+
+
 def apply_edit(tenant: Tenant, row: dict, changes: dict[str, Any]) -> dict:
     """Apply user edits to a row that hasn't created anything in CollectionSpace yet."""
-    if is_locked(row):
-        raise ValueError("This document already created records in CollectionSpace and can't be changed.")
     unknown = set(changes) - EDITABLE
     if unknown:
         raise ValueError(f"Unknown fields: {', '.join(sorted(unknown))}")
+    problem = edit_problem(row, changes)
+    if problem:
+        raise ValueError(PROBLEM_TEXT[problem])
+    changes = {k: v for k, v in changes.items() if row.get(k) != v}
     touched = set(row.get("touched", []))
     for k, v in changes.items():
         if k == "handling":
@@ -66,6 +95,12 @@ def apply_edit(tenant: Tenant, row: dict, changes: dict[str, Any]) -> dict:
         row["idnum"] = default_idnum(tenant, row)
     row["touched"] = sorted(touched)
     return row
+
+
+def object_step_ran(row: dict) -> bool:
+    """A Failed row whose object step already ran keeps its object, so its handling can't change."""
+    steps = (row.get("result") or {}).get("steps") or {}
+    return any((steps.get(k) or {}).get("s") == "done" for k in ("findObject", "createObject"))
 
 
 def is_locked(row: dict) -> bool:
