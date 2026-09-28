@@ -224,6 +224,10 @@ def get_media(csid: str, request: Request):
     m = store.media.get(csid)
     if not m:
         return Response(status_code=404)
+    if m.get("xml"):  # the record as saved, with the blobCsid CollectionSpace set, like the real server
+        body = re.sub(r"<\?xml[^>]*\?>", "", m["xml"])
+        body = re.sub(r"(</[\w:]*media_common>)", f"<blobCsid>{m.get('blobCsid', '')}</blobCsid>\\1", body, count=1)
+        return _xml(body)
     return _xml(f'<document name="media"><ns2:media_common xmlns:ns2="http://collectionspace.org/services/media">'
                 f"<identificationNumber>{escape(m.get('identificationNumber', ''))}</identificationNumber>"
                 f"<blobCsid>{m.get('blobCsid', '')}</blobCsid></ns2:media_common></document>")
