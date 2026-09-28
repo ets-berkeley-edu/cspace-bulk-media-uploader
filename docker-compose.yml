@@ -1,0 +1,57 @@
+# Local development stack: web API, worker, Vue dev server, DynamoDB Local, MinIO (S3) and a
+# simulated CollectionSpace. Start with:  cp .env.example .env  (fill in the keys)  &&  docker compose up --build
+# Then open http://localhost:5173 and sign in as admin/admin (simulated CollectionSpace).
+x-bmu-env: &bmu-env
+  BMU_CSPACE_URL: ${BMU_CSPACE_URL:-http://fakecspace:8180}
+  BMU_SESSION_KEY_B64: ${BMU_SESSION_KEY_B64:?set BMU_SESSION_KEY_B64 in .env}
+  BMU_JOB_KEY_B64: ${BMU_JOB_KEY_B64:?set BMU_JOB_KEY_B64 in .env}
+  BMU_DYNAMODB_ENDPOINT: http://dynamodb:8000
+  BMU_S3_ENDPOINT: http://minio:9000
+  BMU_S3_PUBLIC_ENDPOINT: http://localhost:9000   # the browser uploads here
+  BMU_CREATE_TABLES: "true"
+  BMU_COOKIE_SECURE: "false"                       # local http only
+  AWS_ACCESS_KEY_ID: minioadmin
+  AWS_SECRET_ACCESS_KEY: minioadmin
+  AWS_DEFAULT_REGION: us-west-2
+
+services:
+  dynamodb:
+    image: amazon/dynamodb-local:latest
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"]
+    ports: ["8001:8000"]
+
+  minio:
+    image: minio/minio:latest
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports: ["9000:9000", "9001:9001"]
+
+  fakecspace:
+    build: ./backend
+    command: ["uvicorn", "fakecspace.app:app", "--host", "0.0.0.0", "--port", "8180"]
+    ports: ["8180:8180"]
+
+  web:
+    build: ./backend
+    environment: *bmu-env
+    depends_on: [dynamodb, minio, fakecspace]
+    ports: ["8000:8000"]
+
+  worker:
+    build: ./backend
+    command: ["python", "-m", "bmu.worker"]
+    environment: *bmu-env
+    depends_on: [web]
+    restart: unless-stopped
+
+  frontend:
+    image: node:22-alpine
+    working_dir: /app
+    command: ["sh", "-c", "npm ci && npm run dev -- --host 0.0.0.0"]
+    environment:
+      VITE_API_TARGET: http://web:8000
+    volumes: ["./frontend:/app", "/app/node_modules"]
+    ports: ["5173:5173"]
+    depends_on: [web]

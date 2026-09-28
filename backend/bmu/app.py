@@ -1,0 +1,369 @@
+"""BMU web API (FastAPI). The Vue app calls these endpoints; the worker runs scheduled jobs."""
+from __future__ import annotations
+
+import hashlib
+import re
+import secrets
+import uuid
+from pathlib import Path
+from typing import Any, Callable
+
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+
+from .config import Settings, get_settings
+from .crypto import Crypto, make_crypto
+from .cspace import CSpaceClient, CSpaceError
+from .rows import apply_edit, check_rows, is_locked, new_row, worst
+from .storage import Storage, now
+from .tenant import Tenant, load_tenant
+
+COOKIE = "bmu_session"
+CSRF_HEADER = "x-bmu"
+# Draft: a new job. NeedsAttention/Failed: "Reschedule" reruns only the unfinished steps.
+RESCHEDULABLE = ("Draft", "NeedsAttention", "Failed")
+
+ClientFactory = Callable[[str, str], CSpaceClient]
+
+
+class Services:
+    """Everything a request needs; replaced in tests."""
+
+    def __init__(self, settings: Settings, storage: Storage, crypto: Crypto, client_factory: ClientFactory):
+        self.settings = settings
+        self.storage = storage
+        self.crypto = crypto
+        self.client_factory = client_factory
+        self.tenant: Tenant = load_tenant(settings.tenant)
+
+
+def create_app(services: Services | None = None) -> FastAPI:
+    app = FastAPI(title="New BMU (prototype)", docs_url="/api/docs", openapi_url="/api/openapi.json")
+    if services is None:
+        s = get_settings()
+        storage = Storage(s)
+        if s.create_tables:
+            storage.create_tables()
+        services = Services(s, storage, make_crypto(s),
+                            lambda u, p: CSpaceClient(s.cspace_url, u, p, timeout=s.cspace_timeout_seconds))
+    app.state.svc = services
+
+    @app.middleware("http")
+    async def csrf_guard(request: Request, call_next):
+        # Cookie-authenticated API: state-changing requests must carry a custom header, which a
+        # cross-site form can't send (the session cookie is also SameSite=Strict).
+        if request.url.path.startswith("/api/") and request.method not in ("GET", "HEAD", "OPTIONS"):
+            if request.headers.get(CSRF_HEADER) != "1":
+                return JSONResponse({"detail": "Missing X-BMU header"}, status_code=403)
+        resp = await call_next(request)
+        resp.headers.setdefault("Cache-Control", "no-store")
+        return resp
+
+    _routes(app)
+
+    static = services.settings.static_dir
+    if static and Path(static).is_dir():
+        app.mount("/assets", StaticFiles(directory=Path(static) / "assets"), name="assets")
+
+        @app.get("/{path:path}", include_in_schema=False)
+        def spa(path: str):
+            f = Path(static) / path
+            return FileResponse(f if path and f.is_file() else Path(static) / "index.html")
+
+    return app
+
+
+# ---- dependencies ------------------------------------------------------------------------
+def svc(request: Request) -> Services:
+    return request.app.state.svc
+
+
+def _hash(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+class Session(BaseModel):
+    key: str
+    user: str
+    tenant: str
+    perms: dict[str, bool]
+    password_token: str
+
+    def client(self, s: Services) -> CSpaceClient:
+        pw = s.crypto.decrypt("session", self.password_token, {"user": self.user, "session": self.key})
+        return s.client_factory(self.user, pw)
+
+
+def current_session(request: Request, s: Services = Depends(svc)) -> Session:
+    token = request.cookies.get(COOKIE)
+    item = s.storage.get_session(_hash(token)) if token else None
+    if not item:
+        raise HTTPException(401, "Please sign in with your CollectionSpace account.")
+    return Session(key=item["PK"], user=item["user"], tenant=item["tenant"], perms=item["perms"],
+                   password_token=item["password"])
+
+
+def _job_or_404(s: Services, sess: Session, job_id: str) -> dict:
+    job = s.storage.get_job(job_id)
+    if not job or job["tenant"] != sess.tenant:
+        raise HTTPException(404, "No such job")
+    return job
+
+
+def _editable(job: dict) -> None:
+    if job["status"] != "Draft":
+        raise HTTPException(409, f"The job is {job['status']}; only jobs being prepared can be changed.")
+
+
+def _cspace_http(e: CSpaceError) -> HTTPException:
+    if e.code == "auth":
+        return HTTPException(401, "CollectionSpace didn't accept your sign-in. Please sign in again.")
+    if e.code in ("unavailable", "server"):
+        return HTTPException(503, "CollectionSpace isn't responding. Try again in a few minutes.")
+    return HTTPException(502, f"CollectionSpace request failed ({e.code}).")
+
+
+# ---- request bodies ----------------------------------------------------------------------
+class LoginBody(BaseModel):
+    username: str = Field(min_length=1, max_length=200)
+    password: str = Field(min_length=1, max_length=500)
+
+
+class NewJob(BaseModel):
+    name: str = Field(default="", max_length=200)
+
+
+class JobPatch(BaseModel):
+    name: str = Field(max_length=200)
+
+
+class FileSpec(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    size: int = Field(ge=1)
+    type: str = Field(default="", max_length=200)
+
+
+class AddFiles(BaseModel):
+    files: list[FileSpec] = Field(min_length=1)
+
+
+_SAFE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _routes(app: FastAPI) -> None:
+    @app.get("/api/health")
+    def health():
+        return {"ok": True}
+
+    # ---- sign-in (Basic Auth checked against CollectionSpace) ----------------------------
+    @app.post("/api/login")
+    def login(body: LoginBody, response: Response, s: Services = Depends(svc)):
+        client = s.client_factory(body.username, body.password)
+        try:
+            perms = client.account_permissions()
+        except CSpaceError as e:
+            if e.code in ("auth", "forbidden"):
+                raise HTTPException(401, "CollectionSpace didn't accept that username and password.")
+            raise _cspace_http(e)
+        finally:
+            client.close()
+        token = secrets.token_urlsafe(32)
+        key = _hash(token)
+        expires = now() + s.settings.session_hours * 3600
+        s.storage.put_session(key, {
+            "user": body.username, "tenant": s.tenant.key, "perms": perms.summary, "expires": int(expires),
+            "password": s.crypto.encrypt("session", body.password, {"user": body.username, "session": key}),
+        })
+        response.set_cookie(COOKIE, token, httponly=True, secure=s.settings.cookie_secure, samesite="strict",
+                            max_age=int(s.settings.session_hours * 3600), path="/")
+        return {"user": body.username, "tenant": s.tenant.public_summary(), "perms": perms.summary}
+
+    @app.post("/api/logout")
+    def logout(response: Response, request: Request, s: Services = Depends(svc)):
+        token = request.cookies.get(COOKIE)
+        if token:
+            s.storage.delete_session(_hash(token))
+        response.delete_cookie(COOKIE, path="/")
+        return {"ok": True}
+
+    @app.get("/api/me")
+    def me(sess: Session = Depends(current_session), s: Services = Depends(svc)):
+        return {"user": sess.user, "tenant": s.tenant.public_summary(), "perms": sess.perms}
+
+    # ---- authority autocomplete (existing terms only) ------------------------------------
+    @app.get("/api/authorities")
+    def authorities(field: str, q: str, sess: Session = Depends(current_session), s: Services = Depends(svc)):
+        if len(q.strip()) < 3:
+            return {"terms": []}
+        kinds = s.tenant.authority_fields.get(field)
+        if not kinds:
+            raise HTTPException(400, "Not an authority field")
+        client = sess.client(s)
+        try:
+            terms = []
+            for kind in kinds:
+                a = s.tenant.authorities[kind]
+                for t in client.search_terms(a["service"], a["vocabulary"], q.strip()):
+                    terms.append({**t, "source": kind})
+            return {"terms": terms}
+        except CSpaceError as e:
+            raise _cspace_http(e)
+        finally:
+            client.close()
+
+    # ---- jobs --------------------------------------------------------------------------------
+    @app.get("/api/jobs")
+    def list_jobs(sess: Session = Depends(current_session), s: Services = Depends(svc)):
+        return {"jobs": s.storage.list_jobs(sess.tenant)}
+
+    @app.post("/api/jobs")
+    def create_job(body: NewJob, sess: Session = Depends(current_session), s: Services = Depends(svc)):
+        return s.storage.create_job(sess.tenant, sess.user, body.name.strip())
+
+    @app.get("/api/jobs/{job_id}")
+    def get_job(job_id: str, sess: Session = Depends(current_session), s: Services = Depends(svc)):
+        job = _job_or_404(s, sess, job_id)
+        return {"job": job, "rows": s.storage.get_rows(job_id)}
+
+    @app.patch("/api/jobs/{job_id}")
+    def rename_job(job_id: str, body: JobPatch, sess: Session = Depends(current_session), s: Services = Depends(svc)):
+        _editable(_job_or_404(s, sess, job_id))
+        s.storage.update_job(job_id, {"name": body.name.strip()}, expect_status="Draft")
+        return s.storage.get_job(job_id)
+
+    @app.delete("/api/jobs/{job_id}")
+    def delete_job(job_id: str, sess: Session = Depends(current_session), s: Services = Depends(svc)):
+        job = _job_or_404(s, sess, job_id)
+        rows = s.storage.get_rows(job_id)
+        if job["status"] == "Running" or any(is_locked(r) for r in rows):
+            raise HTTPException(409, "This job created records in CollectionSpace or is running, so it can't be deleted.")
+        for r in rows:
+            if r.get("s3Key"):
+                s.storage.delete_object(r["s3Key"])
+            s.storage.delete_row(job_id, r["n"])
+        s.storage.delete_credential(job_id)
+        s.storage.jobs.delete_item(Key={"PK": f"JOB#{job_id}", "SK": "META"})
+        s.storage.audit(sess.tenant, "Job deleted", sess.user, job_id, f"Deleted “{job['name']}” ({len(rows)} documents); it had created nothing in CollectionSpace.")
+        return {"ok": True}
+
+    # ---- files: presigned direct upload to S3 -------------------------------------------------
+    @app.post("/api/jobs/{job_id}/files")
+    def add_files(job_id: str, body: AddFiles, sess: Session = Depends(current_session), s: Services = Depends(svc)):
+        job = _job_or_404(s, sess, job_id)
+        _editable(job)
+        if job["rowCount"] + len(body.files) > s.settings.max_rows:
+            raise HTTPException(413, f"A job holds at most {s.settings.max_rows} documents.")
+        too_big = [f.name for f in body.files if f.size > s.settings.max_file_bytes]
+        if too_big:
+            raise HTTPException(413, f"Too large: {', '.join(too_big[:5])}")
+        new = []
+        for f in body.files:
+            row = new_row(s.tenant, f.name, f.size, f.type)
+            row["s3Key"] = f"jobs/{job_id}/{uuid.uuid4().hex}/{_SAFE.sub('_', f.name)[:120]}"
+            new.append(row)
+        rows = s.storage.add_rows(job_id, new)
+        return {"rows": [{**r, "uploadForm": s.storage.presign_upload(r["s3Key"], f.size)}
+                         for r, f in zip(rows, body.files)]}
+
+    @app.post("/api/jobs/{job_id}/rows/{n}/uploaded")
+    def uploaded(job_id: str, n: int, sess: Session = Depends(current_session), s: Services = Depends(svc)):
+        _editable(_job_or_404(s, sess, job_id))
+        row = s.storage.get_row(job_id, n) or _404()
+        head = s.storage.head_object(row["s3Key"])
+        if head and head["ContentLength"] == row["size"]:
+            row["upload"] = {"s": "done", "version": head.get("VersionId") or ""}
+        else:
+            row["upload"] = {"s": "failed", "reason": "missing" if not head else "size mismatch"}
+        s.storage.put_row(job_id, row)
+        return row
+
+    @app.post("/api/jobs/{job_id}/rows/{n}/upload-failed")
+    def upload_failed(job_id: str, n: int, sess: Session = Depends(current_session), s: Services = Depends(svc)):
+        _editable(_job_or_404(s, sess, job_id))
+        row = s.storage.get_row(job_id, n) or _404()
+        row["upload"] = {"s": "failed", "reason": "browser"}
+        s.storage.put_row(job_id, row)
+        return row
+
+    # ---- rows -----------------------------------------------------------------------------------
+    @app.patch("/api/jobs/{job_id}/rows/{n}")
+    def edit_row(job_id: str, n: int, changes: dict[str, Any], sess: Session = Depends(current_session),
+                 s: Services = Depends(svc)):
+        _editable(_job_or_404(s, sess, job_id))
+        row = s.storage.get_row(job_id, n) or _404()
+        try:
+            apply_edit(s.tenant, row, changes)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        s.storage.put_row(job_id, row)
+        return row
+
+    @app.delete("/api/jobs/{job_id}/rows/{n}")
+    def delete_row(job_id: str, n: int, sess: Session = Depends(current_session), s: Services = Depends(svc)):
+        _editable(_job_or_404(s, sess, job_id))
+        row = s.storage.get_row(job_id, n) or _404()
+        if is_locked(row):
+            raise HTTPException(409, "This document already created records in CollectionSpace, so it can't be deleted.")
+        if row.get("s3Key"):
+            s.storage.delete_object(row["s3Key"])
+        s.storage.delete_row(job_id, n)
+        return {"ok": True}
+
+    # ---- checks and scheduling --------------------------------------------------------------------
+    @app.post("/api/jobs/{job_id}/check")
+    def check(job_id: str, sess: Session = Depends(current_session), s: Services = Depends(svc)):
+        _job_or_404(s, sess, job_id)
+        return _run_checks(s, sess, job_id)
+
+    @app.post("/api/jobs/{job_id}/schedule")
+    def schedule(job_id: str, sess: Session = Depends(current_session), s: Services = Depends(svc)):
+        job = _job_or_404(s, sess, job_id)
+        if job["status"] not in RESCHEDULABLE:
+            raise HTTPException(409, f"The job is {job['status']} and can't be scheduled.")
+        result = _run_checks(s, sess, job_id)
+        work = [r for r in result["rows"] if r.get("include") and (r.get("result") or {}).get("state") != "Done"]
+        if not work:
+            raise HTTPException(409, "Nothing to run: every document is done or disabled.")
+        blocked = [r["n"] for r in work if worst(r) == "block"]
+        if blocked:
+            raise HTTPException(409, {"message": f"{len(blocked)} documents need fixing first.", "rows": blocked})
+        # Hand the job its own copy of the password, encrypted with the job key; the worker deletes it after the run.
+        pw = s.crypto.decrypt("session", sess.password_token, {"user": sess.user, "session": sess.key})
+        expires = now() + s.settings.credential_hours * 3600
+        s.storage.put_credential(job_id, sess.user,
+                                 s.crypto.encrypt("job", pw, {"user": sess.user, "job": job_id}), expires)
+        if not s.storage.update_job(job_id, {"status": "Queued", "queuedAt": now(), "scheduledBy": sess.user,
+                                             "credentialExpires": int(expires), "progress": {"total": len(work), "done": 0, "failed": 0}},
+                                    expect_status=list(RESCHEDULABLE)):
+            s.storage.delete_credential(job_id)
+            raise HTTPException(409, "The job changed while scheduling; reload and try again.")
+        s.storage.audit(sess.tenant, "Scheduled", sess.user, job_id, f"Scheduled “{job['name']}” with {len(work)} documents.")
+        return s.storage.get_job(job_id)
+
+
+def _run_checks(s: Services, sess: Session, job_id: str) -> dict:
+    rows = s.storage.get_rows(job_id)
+    client = sess.client(s)
+    try:
+        check_rows(s.tenant, rows, client, sess.perms)
+    except CSpaceError as e:
+        raise _cspace_http(e)
+    finally:
+        client.close()
+    for r in rows:
+        s.storage.put_row(job_id, r)
+    counts = {"block": 0, "warn": 0}
+    for r in rows:
+        w = worst(r)
+        if w in counts and r.get("include"):
+            counts[w] += 1
+    return {"rows": rows, "counts": counts}
+
+
+def _404():
+    raise HTTPException(404, "No such document")
+
+
+app = None  # created by bmu.main
