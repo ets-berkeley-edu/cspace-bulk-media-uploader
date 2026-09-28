@@ -85,12 +85,12 @@ function text(field: keyof Row, e: Event) {
         </div>
         <div v-if="handling?.object !== 'none'" class="field" :class="{ edited: objLabel.edited }">
           <label><span>Object number <em class="num-state">{{ objLabel.text }}</em></span>
-            <input type="text" :value="row.obj" :disabled="ro" @change="text('obj', $event)" /></label>
+            <input type="text" :value="row.obj" :disabled="ro" aria-label="Object number" @change="text('obj', $event)" /></label>
           <button v-if="objLabel.reset !== undefined && !ro" class="link field-note" type="button" @click="emit('edit', { obj: objLabel.reset })">Use parsed value</button>
         </div>
         <div class="field" :class="{ edited: idnLabel.edited }">
           <label><span>Identification number <em class="num-state">{{ idnLabel.text }}</em></span>
-            <input type="text" :value="row.idnum" :disabled="ro" @change="text('idnum', $event)" /></label>
+            <input type="text" :value="row.idnum" :disabled="ro" aria-label="Identification number" @change="text('idnum', $event)" /></label>
           <button v-if="idnLabel.reset !== undefined && !ro" class="link field-note" type="button" @click="emit('edit', { idnum: idnLabel.reset })">Use parsed value</button>
         </div>
         <DateInput :model-value="row.date" :parsed="row.lookups?.date" :disabled="ro" @update:model-value="emit('edit', { date: $event })" />
