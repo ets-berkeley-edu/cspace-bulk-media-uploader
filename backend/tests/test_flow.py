@@ -324,3 +324,14 @@ def test_scheduling_fetches_permissions_again(api, login, add_uploaded, fake, se
     assert any("can't create Object records" in t for t in _checks(row, "block"))
     assert api.get("/api/me").json()["perms"]["objects"] is False
     assert services.storage.get_credential(job) is None
+
+
+def test_a_date_collectionspace_cannot_interpret_blocks(api, login, add_uploaded):
+    login()
+    job = new_job(api)
+    n = add_uploaded(job, ["15-1234_a.jpg"])[0]["n"]
+    row = api.patch(f"/api/jobs/{job}/rows/{n}", json={"date": "sometime last spring"}).json()["row"]
+    assert any("can't interpret the date" in t for t in _checks(row, "block"))
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 409
+    row = api.patch(f"/api/jobs/{job}/rows/{n}", json={"date": "2024-05-14"}).json()["row"]
+    assert not _checks(row, "block")

@@ -172,7 +172,8 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
                 out.append({"level": "warn", "text": f"A Media record with ID {idn} already exists in CollectionSpace "
                                                      f"(CSID {', '.join(existing[:5])}{' …' if len(existing) > 5 else ''})."})
         if r.get("date") and not _DATE.match(r["date"]):
-            out.append({"level": "warn", "text": f"CollectionSpace can't interpret the date “{r['date']}”; it will be saved as text only."})
+            # Design (Structured dates): a date CollectionSpace can't interpret blocks, stricter than its own UI.
+            out.append({"level": "block", "text": f"CollectionSpace can't interpret the date “{r['date']}”. Correct it or clear it."})
         r["checks"] = out
 
 
