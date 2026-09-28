@@ -134,6 +134,10 @@ class Storage:
             return None
         return _clean(item)
 
+    def update_session_perms(self, key: str, perms: dict) -> None:
+        self.sessions.update_item(Key={"PK": key}, UpdateExpression="SET perms = :p",
+                                  ExpressionAttributeValues={":p": perms}, ConditionExpression="attribute_exists(PK)")
+
     def delete_session(self, key: str) -> None:
         self.sessions.delete_item(Key={"PK": key})
 

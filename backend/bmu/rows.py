@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+import time
+from typing import Any, Callable
 
 from .cspace import CSpaceClient, CSpaceError
 from .tenant import Tenant, parse_filename
@@ -76,19 +77,45 @@ def is_locked(row: dict) -> bool:
 _DATE = re.compile(r"^\d{4}(-\d{2}(-\d{2})?)?$")
 
 
-def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: dict[str, bool]) -> None:
-    """Set each row's checks: [{level: block|warn|info, text}]. "block" rows must be fixed before scheduling."""
-    obj_cache: dict[str, list[str]] = {}
-    media_cache: dict[str, list[str]] = {}
+# The design's supported file types, the same for every tenant: images, audio, video and 3D models.
+SUPPORTED_EXTENSIONS = {"jpg", "jpeg", "tif", "tiff", "png", "wav", "mp3", "aac", "mp4", "x3d"}
+SUPPORTED_HINT = "JPEG, TIFF, PNG, WAV, MP3, AAC, MP4 or X3D"
+
+# How long a row's CollectionSpace lookup (object or Media search) is reused while editing. Scheduling always
+# looks everything up again.
+LOOKUP_TTL_SECONDS = 600
+
+
+def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: dict[str, bool],
+               targets: set[int] | None = None, refresh: bool = False) -> None:
+    """Set each row's checks: [{level: block|warn|info, text}]. "block" rows must be fixed before scheduling.
+
+    The editor calls this for the rows that just changed (targets) and re-evaluates every row, because some
+    checks depend on other rows (duplicate identification numbers in the job). CollectionSpace lookups are
+    kept on the row under "lookups" and reused while the searched value is unchanged: only target rows
+    whose lookup is missing, for a different value or older than LOOKUP_TTL_SECONDS query CollectionSpace.
+    targets=None means every row may query; refresh=True ignores stored lookups (used at scheduling).
+    """
+    now = time.time()
+    batch: dict[tuple[str, str], list[str]] = {}  # one search per value per call
     seen_ids: dict[str, int] = {}
     for r in rows:
         if r.get("include") and not is_locked(r) and r.get("idnum"):
             seen_ids[r["idnum"]] = seen_ids.get(r["idnum"], 0) + 1
 
-    def objects(num: str) -> list[str]:
-        if num not in obj_cache:
-            obj_cache[num] = client.find_objects(num)
-        return obj_cache[num]
+    def lookup(r: dict, kind: str, value: str, search: Callable[[str], list[str]]) -> list[str] | None:
+        """CSIDs found for value, from the row's stored lookup or a new search; None when not known yet."""
+        stored = (r.get("lookups") or {}).get(kind)
+        same = stored is not None and stored.get("value") == value
+        may_query = targets is None or r["n"] in targets
+        if same and not refresh and (not may_query or now - stored["at"] < LOOKUP_TTL_SECONDS):
+            return list(stored["csids"])
+        if not may_query:
+            return None
+        if (kind, value) not in batch:
+            batch[(kind, value)] = search(value)
+        r.setdefault("lookups", {})[kind] = {"value": value, "csids": batch[(kind, value)], "at": int(now)}
+        return list(batch[(kind, value)])
 
     for r in rows:
         out: list[dict[str, str]] = []
@@ -100,9 +127,14 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
             continue
         h = tenant.handling_by_id(r["handling"])
         up = (r.get("upload") or {}).get("s")
-        if up != "done":
-            out.append({"level": "block", "text": "The file hasn't finished uploading." if up != "failed"
-                        else "The upload failed. Remove the document or add the file again."})
+        if up == "failed":
+            out.append({"level": "block", "text": "The upload failed. Remove the document or add the file again."})
+        elif up != "done":
+            out.append({"level": "block", "text": "The file hasn't finished uploading."})
+        ext = r["file"].rsplit(".", 1)[-1].lower() if "." in r["file"] else ""
+        if ext not in SUPPORTED_EXTENSIONS:
+            out.append({"level": "block", "text": f"The BMU doesn't accept .{ext or '(no extension)'} files. "
+                                                  f"Supported types: {SUPPORTED_HINT}."})
         if not perms.get("media"):
             out.append({"level": "block", "text": "Your CollectionSpace account can't create Media records."})
         if h.object != "none" and not perms.get("relations"):
@@ -115,7 +147,7 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
                 out.append({"level": "block", "text": "No object number. The filename doesn't follow the rule: " + tenant.filename_hint + "."})
             else:
                 try:
-                    found = objects(num)
+                    found = lookup(r, "object", num, client.find_objects)
                 except CSpaceError as e:
                     found = None
                     out.append({"level": "warn", "text": f"Couldn't check object {num} in CollectionSpace ({e.code})."})
@@ -133,14 +165,15 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
             if seen_ids.get(idn, 0) > 1:
                 out.append({"level": "warn", "text": f"Another document in this job also has ID {idn}."})
             try:
-                if idn not in media_cache:
-                    media_cache[idn] = client.find_media(idn)
-                if media_cache[idn]:
-                    out.append({"level": "warn", "text": f"A Media record with ID {idn} already exists in CollectionSpace."})
+                existing = lookup(r, "media", idn, client.find_media)
             except CSpaceError:
-                pass
+                existing = None
+            if existing:
+                out.append({"level": "warn", "text": f"A Media record with ID {idn} already exists in CollectionSpace "
+                                                     f"(CSID {', '.join(existing[:5])}{' …' if len(existing) > 5 else ''})."})
         if r.get("date") and not _DATE.match(r["date"]):
-            out.append({"level": "warn", "text": f"CollectionSpace can't interpret the date “{r['date']}”; it will be saved as text only."})
+            # Design (Structured dates): a date CollectionSpace can't interpret blocks, stricter than its own UI.
+            out.append({"level": "block", "text": f"CollectionSpace can't interpret the date “{r['date']}”. Correct it or clear it."})
         r["checks"] = out
 
 

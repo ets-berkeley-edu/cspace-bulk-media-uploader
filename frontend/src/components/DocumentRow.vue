@@ -1,30 +1,22 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import type { Row, TenantInfo } from "../types";
+import type { Perms, Row, TenantInfo } from "../types";
 import { formatBytes } from "../lib/files";
+import { handlingBlocked, rowStatus, worstLevel } from "../lib/status";
 import AuthorityInput from "./AuthorityInput.vue";
 
-const props = defineProps<{ row: Row; tenant: TenantInfo; preview?: string; expanded: boolean; readonly: boolean }>();
+const props = defineProps<{
+  row: Row; tenant: TenantInfo; perms: Perms; preview?: string; expanded: boolean; readonly: boolean; checking?: boolean;
+}>();
 const emit = defineEmits<{ edit: [changes: Partial<Row>]; remove: []; toggle: [] }>();
 
 const locked = computed(() => Object.values(props.row.result?.steps ?? {}).some((s) => !!s.csid));
 const ro = computed(() => props.readonly || locked.value);
 const handling = computed(() => props.tenant.handling.find((h) => h.id === props.row.handling));
 
-const status = computed(() => {
-  const r = props.row;
-  if (r.upload.s === "uploading") return { text: `Uploading ${r.upload.pct ?? 0}%`, cls: "b-accent" };
-  if (r.upload.s === "pending") return { text: "Waiting to upload", cls: "b-muted" };
-  if (r.upload.s === "failed") return { text: "Upload failed", cls: "b-danger" };
-  if (!r.include) return { text: "Disabled", cls: "b-muted" };
-  if (r.result?.state === "Done") return { text: "Done", cls: "b-ok" };
-  if (r.result?.state === "Partial" || r.result?.state === "Failed") return { text: r.result.state, cls: "b-danger" };
-  const levels = new Set(r.checks.map((c) => c.level));
-  if (levels.has("block")) return { text: "Needs fixing", cls: "b-danger" };
-  if (levels.has("warn")) return { text: "Check warnings", cls: "b-warn" };
-  if (r.checks.length || r.result) return { text: "Ready", cls: "b-ok" };
-  return { text: "Uploaded", cls: "b-ok" };
-});
+const status = computed(() => rowStatus(props.row, props.tenant, props.checking));
+const hasWarnings = computed(() => props.row.include && worstLevel(props.row) === "warn");
+const PREFIX: Record<string, string> = { block: "Must fix: ", warn: "Warning: ", info: "" };
 
 function text(field: keyof Row, e: Event) {
   const v = (e.target as HTMLInputElement).value;
@@ -42,7 +34,8 @@ function text(field: keyof Row, e: Event) {
     </td>
     <td>
       <select :value="row.handling" :disabled="ro || !row.include" aria-label="Handling" @change="emit('edit', { handling: ($event.target as HTMLSelectElement).value })">
-        <option v-for="h in tenant.handling" :key="h.id" :value="h.id">{{ h.label }}</option>
+        <option v-for="h in tenant.handling" :key="h.id" :value="h.id" :disabled="!!handlingBlocked(h, perms) && h.id !== row.handling"
+                :title="handlingBlocked(h, perms)">{{ h.label }}{{ handlingBlocked(h, perms) ? " (no permission)" : "" }}</option>
       </select>
     </td>
     <td style="text-align:center">
@@ -50,6 +43,7 @@ function text(field: keyof Row, e: Event) {
              @change="emit('edit', { restricted: ($event.target as HTMLInputElement).checked })" />
     </td>
     <td><span class="badge" :class="status.cls">{{ status.text }}</span>
+      <span v-if="hasWarnings && status.cls !== 'b-danger'" class="badge b-warn" title="This document has warnings"> !</span>
       <div v-if="row.upload.s === 'uploading'" class="progress"><span class="up" :style="{ width: (row.upload.pct ?? 0) + '%' }"></span></div>
     </td>
     <td class="keep">
@@ -81,7 +75,7 @@ function text(field: keyof Row, e: Event) {
           <textarea rows="2" :value="row.description" :disabled="ro" @change="text('description', $event)"></textarea></label>
       </div>
       <div class="sub">Filename rule: {{ tenant.filenameHint }}</div>
-      <div v-for="(c, i) in row.checks" :key="i" class="msg" :class="`msg-${c.level}`">{{ c.text }}</div>
+      <div v-for="(c, i) in row.checks" :key="i" class="msg" :class="`msg-${c.level}`"><strong>{{ PREFIX[c.level] }}</strong>{{ c.text }}</div>
       <div v-if="row.result?.error" class="msg msg-block">
         {{ row.result.error.detail }} ({{ row.result.error.code }}, step {{ row.result.error.step }})
       </div>

@@ -33,6 +33,7 @@ def _perms_for(user: str) -> dict[str, str]:
     p = {r: base for r in RESOURCES}
     if user == "limited":
         p["collectionobjects"] = "RL"
+    p.update(store.perm_overrides.get(user, {}))
     return p
 
 
@@ -56,6 +57,8 @@ class Store:
         self.blobs: dict[str, dict] = {}
         self.relations: dict[str, dict] = {}
         self.fail_next: dict[str, int] = {}  # e.g. {"media": 503} or {"media_blob": 500}: fail the next call once
+        self.perm_overrides: dict[str, dict[str, str]] = {}  # e.g. {"admin": {"collectionobjects": "RL"}}: roles changed
+        self.searches: list[tuple[str, str | None]] = []  # (service, searched value), to test lookup caching
         for num in ["15-1234", "12-5678", "15-1240", "1-2345"]:
             self.objects[str(uuid.uuid4())] = {"objectNumber": num, "deleted": False}
         # two objects share a number, to exercise "matches several objects"
@@ -134,6 +137,7 @@ def _search(request: Request, table: dict, field: str, service: str):
         return d
     m = _AS.match(request.query_params.get("as", ""))
     value = m.group(2).replace('\\"', '"') if m and m.group(1) == field else None
+    store.searches.append((service, value))
     items = "".join(
         f"<list-item><csid>{c}</csid><{field}>{escape(rec[field])}</{field}></list-item>"
         for c, rec in table.items() if not rec.get("deleted") and (value is None or rec.get(field) == value)

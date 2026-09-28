@@ -183,7 +183,7 @@ def test_upload_size_mismatch_marks_failed(api, login, services):
     r = api.post(f"/api/jobs/{job}/files", json={"files": [{"name": "15-1234_z.jpg", "size": 100, "type": "image/jpeg"}]})
     row = r.json()["rows"][0]
     services.storage.s3.put_object(Bucket=services.settings.s3_bucket, Key=row["s3Key"], Body=b"short")
-    assert api.post(f"/api/jobs/{job}/rows/{row['n']}/uploaded").json()["upload"]["s"] == "failed"
+    assert api.post(f"/api/jobs/{job}/rows/{row['n']}/uploaded").json()["row"]["upload"]["s"] == "failed"
 
 
 def test_failed_upload_still_relates_and_rerun_reuses_media(api, login, add_uploaded, worker, services, fake):
@@ -239,3 +239,99 @@ def test_media_failure_skips_upload_and_relations(api, login, add_uploaded, work
     assert st["steps"]["upload"] == {"s": "skipped", "after": "media"}
     assert st["steps"]["createObject"]["s"] == "done"  # the Object step doesn't depend on Media
     assert len(fake.blobs) == 0
+
+
+# ---- checks while editing (design: Validation while editing) -------------------------------------
+def _checks(row, level=None):
+    return [c["text"] for c in row["checks"] if level is None or c["level"] == level]
+
+
+def test_rows_are_checked_as_soon_as_their_upload_is_confirmed(api, login, services):
+    login()
+    job = new_job(api)
+    row = api.post(f"/api/jobs/{job}/files", json={"files": [{"name": "20-0501.jpg", "size": 3, "type": "image/jpeg"}]}).json()["rows"][0]
+    services.storage.s3.put_object(Bucket=services.settings.s3_bucket, Key=row["s3Key"], Body=b"abc")
+    checked = api.post(f"/api/jobs/{job}/rows/{row['n']}/uploaded").json()["row"]
+    assert any("No object 20-0501" in t for t in _checks(checked, "block"))
+
+
+def test_editing_a_row_rechecks_it(api, login, add_uploaded):
+    login()
+    job = new_job(api)
+    n = add_uploaded(job, ["15-1234_a.jpg"])[0]["n"]
+    row = api.patch(f"/api/jobs/{job}/rows/{n}", json={"obj": "77-7777"}).json()["row"]
+    assert any("No object 77-7777" in t for t in _checks(row, "block"))
+    row = api.patch(f"/api/jobs/{job}/rows/{n}", json={"obj": "15-1234"}).json()["row"]
+    assert not _checks(row, "block")
+
+
+def test_a_duplicate_id_updates_the_other_row_too(api, login, add_uploaded):
+    login()
+    job = new_job(api)
+    a, b = add_uploaded(job, ["1-2345_1.jpg", "12-5678_1.jpg"])
+    r = api.patch(f"/api/jobs/{job}/rows/{b['n']}", json={"idnum": a["idnum"]}).json()
+    assert any("Another document in this job" in t for t in _checks(r["row"], "warn"))
+    other = {x["n"]: x for x in r["others"]}[a["n"]]
+    assert any("Another document in this job" in t for t in _checks(other, "warn"))
+    # deleting one row clears the warning on the other
+    others = api.delete(f"/api/jobs/{job}/rows/{b['n']}").json()["others"]
+    assert [x["n"] for x in others] == [a["n"]] and not any("Another document" in t for t in _checks(others[0]))
+
+
+def test_lookups_are_reused_until_the_searched_value_changes(api, login, add_uploaded, fake):
+    login()
+    job = new_job(api)
+    n = add_uploaded(job, ["15-1234_a.jpg"])[0]["n"]
+    fake.searches.clear()
+    api.patch(f"/api/jobs/{job}/rows/{n}", json={"description": "no new lookups"})
+    assert fake.searches == []
+    api.patch(f"/api/jobs/{job}/rows/{n}", json={"obj": "1-2345"})
+    assert ("collectionobjects", "1-2345") in fake.searches
+    # a batch check of a few rows asks CollectionSpace once per distinct value
+    add_uploaded(job, ["12-5678_1.jpg", "12-5678_2.jpg"])
+    fake.searches.clear()
+    api.post(f"/api/jobs/{job}/check", json={"rows": [2, 3]})
+    assert fake.searches.count(("collectionobjects", "12-5678")) <= 1
+
+
+def test_existing_media_warning_names_the_csid(api, login, add_uploaded, fake):
+    login()
+    job = new_job(api)
+    n = add_uploaded(job, ["15-1234_a.jpg"])[0]["n"]
+    row = api.patch(f"/api/jobs/{job}/rows/{n}", json={"idnum": "15-1234"}).json()["row"]
+    csid = next(c for c, m in fake.media.items() if m["identificationNumber"] == "15-1234")
+    assert any(csid in t for t in _checks(row, "warn"))
+
+
+def test_unsupported_file_type_blocks(api, login, add_uploaded):
+    login()
+    job = new_job(api)
+    row = add_uploaded(job, ["15-1234_a.docx"])[0]
+    chk = api.post(f"/api/jobs/{job}/check").json()["rows"][0]
+    assert any("doesn't accept .docx" in t for t in _checks(chk, "block"))
+
+
+def test_scheduling_fetches_permissions_again(api, login, add_uploaded, fake, services):
+    """Design: roles can change during a session, so scheduling re-fetches permissions and re-checks the job."""
+    login()
+    job = new_job(api)
+    n = add_uploaded(job, ["30-0001.jpg"])[0]["n"]
+    api.patch(f"/api/jobs/{job}/rows/{n}", json={"handling": "create"})
+    fake.perm_overrides["admin"] = {"collectionobjects": "RL"}  # admin loses create on objects
+    r = api.post(f"/api/jobs/{job}/schedule")
+    assert r.status_code == 409
+    row = api.get(f"/api/jobs/{job}").json()["rows"][0]
+    assert any("can't create Object records" in t for t in _checks(row, "block"))
+    assert api.get("/api/me").json()["perms"]["objects"] is False
+    assert services.storage.get_credential(job) is None
+
+
+def test_a_date_collectionspace_cannot_interpret_blocks(api, login, add_uploaded):
+    login()
+    job = new_job(api)
+    n = add_uploaded(job, ["15-1234_a.jpg"])[0]["n"]
+    row = api.patch(f"/api/jobs/{job}/rows/{n}", json={"date": "sometime last spring"}).json()["row"]
+    assert any("can't interpret the date" in t for t in _checks(row, "block"))
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 409
+    row = api.patch(f"/api/jobs/{job}/rows/{n}", json={"date": "2024-05-14"}).json()["row"]
+    assert not _checks(row, "block")
