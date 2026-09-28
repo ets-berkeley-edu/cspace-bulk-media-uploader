@@ -141,3 +141,6 @@ code { font-size: 11px; }
 .repeating select { flex: 1; min-width: 0; }
 .repeating .x-btn { width: 28px; padding: 0; }
 .repeating .link { align-self: flex-start; }
+
+.field-note { display: block; font-size: 11px; color: var(--text-muted); margin-top: 2px; min-height: 1em; }
+.field-note.bad { color: var(--text-danger); }

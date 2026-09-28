@@ -233,6 +233,21 @@ def _routes(app: FastAPI) -> None:
         finally:
             client.close()
 
+    # ---- dates: CollectionSpace's own parser, for the preview under the Date field ------------
+    @app.get("/api/dates/parse")
+    def parse_date(text: str, sess: Session = Depends(current_session), s: Services = Depends(svc)):
+        text = text.strip()
+        if not text:
+            return {"ok": True, "group": {}}
+        client = sess.client(s)
+        try:
+            group = client.parse_date(text[:200])
+        except CSpaceError as e:
+            raise _cspace_http(e)
+        finally:
+            client.close()
+        return {"ok": group is not None, "group": group or {}}
+
     # ---- vocabularies (languages): every term, for the repeating Language picker ---------------
     @app.get("/api/vocabularies/{name}")
     def vocabulary(name: str, sess: Session = Depends(current_session), s: Services = Depends(svc)):
@@ -434,7 +449,8 @@ def _refresh_permissions(s: Services, sess: Session) -> Session:
 def _recheck(s: Services, sess: Session, job_id: str, targets: set[int] | None, refresh: bool = False) -> dict:
     """Re-run the checks on every row (see check_rows) and save the rows whose checks or lookups changed."""
     rows = s.storage.get_rows(job_id)
-    before = {r["n"]: (r.get("checks"), r.get("lookups")) for r in rows}
+    # a real copy: check_rows updates each row's lookups in place
+    before = {r["n"]: copy.deepcopy((r.get("checks"), r.get("lookups"))) for r in rows}
     client = sess.client(s)
     try:
         partial = check_rows(s.tenant, rows, client, sess.perms, targets=targets, refresh=refresh)

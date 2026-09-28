@@ -120,7 +120,6 @@ def is_locked(row: dict) -> bool:
     return any(st.get("csid") for name, st in (res.get("steps") or {}).items() if name != "findObject")
 
 
-_DATE = re.compile(r"^\d{4}(-\d{2}(-\d{2})?)?$")
 
 
 # The design's supported file types, the same for every tenant: images, audio, video and 3D models.
@@ -150,6 +149,20 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
     for r in rows:
         if r.get("include") and not is_locked(r) and r.get("idnum"):
             seen_ids[r["idnum"]] = seen_ids.get(r["idnum"], 0) + 1
+
+    def parsed_date(r: dict, text: str) -> dict | None:
+        """{"ok": bool, "group": {...}} from CollectionSpace's date parser, kept like a lookup; None if not
+        known yet (not a target row)."""
+        stored = (r.get("lookups") or {}).get("date")
+        if stored is not None and stored.get("value") == text and not refresh:
+            return stored
+        if not (targets is None or r["n"] in targets):
+            incomplete.add(r["n"])
+            return None
+        group = client.parse_date(text)
+        entry = {"value": text, "ok": group is not None, "group": group or {}, "at": int(now)}
+        r.setdefault("lookups", {})["date"] = entry
+        return entry
 
     def lookup(r: dict, kind: str, value: str, search: Callable[[str], list[str]]) -> list[str] | None:
         """CSIDs found for value, from the row's stored lookup or a new search; None when not known yet."""
@@ -220,9 +233,18 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
             if existing:
                 out.append({"level": "warn", "text": f"A Media record with ID {idn} already exists in CollectionSpace "
                                                      f"(CSID {', '.join(existing[:5])}{' …' if len(existing) > 5 else ''})."})
-        if r.get("date") and not _DATE.match(r["date"]):
-            # Design (Structured dates): a date CollectionSpace can't interpret blocks, stricter than its own UI.
-            out.append({"level": "block", "text": f"CollectionSpace can't interpret the date “{r['date']}”. Correct it or clear it."})
+        if r.get("date"):
+            # Design (Structured dates): parsed by CollectionSpace's own parser; a date it can't interpret
+            # blocks, which is stricter than its own UI.
+            try:
+                pd = parsed_date(r, r["date"])
+            except CSpaceError as e:
+                pd = None
+                out.append({"level": "block", "text": f"Couldn't check the date with CollectionSpace ({e.code}). It is checked again when you schedule."})
+            if pd is not None and not pd["ok"]:
+                out.append({"level": "block", "text": f"CollectionSpace can't interpret the date “{r['date']}”. Correct it or clear it."})
+        elif (r.get("lookups") or {}).get("date"):
+            r["lookups"].pop("date")
         r["checks"] = out
     return incomplete
 

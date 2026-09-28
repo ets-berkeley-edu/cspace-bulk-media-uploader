@@ -28,7 +28,6 @@ def _xml(doc: Element) -> bytes:
     return b'<?xml version="1.0" encoding="UTF-8"?>\n' + tostring(doc, encoding="utf-8", xml_declaration=False)
 
 
-_ISO = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
 
 
 def _as_list(v) -> list:
@@ -55,16 +54,14 @@ def media_xml(tenant: Tenant, row: dict) -> bytes:
     _add(common, "contributor", row.get("contributor"))
     _add(common, "rightsHolder", row.get("rightsHolder"))
     if row.get("date"):
+        # The structured date group from CollectionSpace's parser (design: Structured dates), as the UI saves it.
         grp = SubElement(SubElement(common, "dateGroupList"), "dateGroup")
         _add(grp, "dateDisplayDate", row["date"])
-        m = _ISO.match(row["date"])
-        if m:  # a single exact day: fill the structured earliest date too
-            y, mo, d = m.groups()
-            _add(grp, "dateEarliestSingleYear", str(int(y)))
-            _add(grp, "dateEarliestSingleMonth", str(int(mo)))
-            _add(grp, "dateEarliestSingleDay", str(int(d)))
-            _add(grp, "dateEarliestScalarValue", f"{y}-{mo}-{d}")
-            _add(grp, "dateLatestScalarValue", f"{y}-{mo}-{d}")
+        parsed = (row.get("lookups") or {}).get("date") or {}
+        if parsed.get("value") == row["date"]:
+            for k, v in (parsed.get("group") or {}).items():
+                if k != "dateDisplayDate":
+                    _add(grp, k, v)
     langs = [x for x in _as_list(row.get("language")) if x] or [tenant.language_default]
     ll = SubElement(common, "languageList")
     for lang in langs:

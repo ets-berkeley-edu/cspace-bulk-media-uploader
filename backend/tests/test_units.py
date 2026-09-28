@@ -59,7 +59,9 @@ def test_locked_row_cannot_change():
 def test_media_xml_restricted_refnames_and_escaping():
     r = new_row(T, "15-1234_a.jpg", 10, "image/jpeg")
     ref = "urn:cspace:pahma.cspace.berkeley.edu:personauthorities:name(person):item:name(7475)'Leslie Freund'"
-    r.update(restricted=True, creator=ref, description="Bowl & <lid>", date="2025-06-14", type="image")
+    r.update(restricted=True, creator=ref, description="Bowl & <lid>", date="2025-06-14", type=["image"],
+             lookups={"date": {"value": "2025-06-14", "ok": True,  # as parsed by CollectionSpace's structureddates
+                               "group": {"dateEarliestSingleYear": "2025", "dateEarliestScalarValue": "2025-06-14T00:00:00.000Z"}}})
     xml = media_xml(T, r)
     assert text(xml, "approvedForWeb") == ["false"]
     assert text(xml, "creator") == [ref]
@@ -100,8 +102,9 @@ def test_kms_crypto(aws):
     ks = kms.create_key()["KeyMetadata"]["KeyId"]
     kj = kms.create_key()["KeyMetadata"]["KeyId"]
     c = KmsCrypto(kms, {"session": ks, "job": kj})
-    tok = c.encrypt("job", "pw", {"user": "u", "job": "9"})
-    assert "pw" not in tok and c.decrypt("job", tok, {"user": "u", "job": "9"}) == "pw"
+    secret = "correct-horse-battery-staple"  # long enough never to appear in the token by chance
+    tok = c.encrypt("job", secret, {"user": "u", "job": "9"})
+    assert secret not in tok and c.decrypt("job", tok, {"user": "u", "job": "9"}) == secret
 
 
 def test_step_plan_follows_design():

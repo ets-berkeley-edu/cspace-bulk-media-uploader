@@ -4,6 +4,7 @@ import type { Option, Perms, Row, TenantInfo } from "../types";
 import { formatBytes } from "../lib/files";
 import { handlingBlocked, rowStatus, worstLevel } from "../lib/status";
 import AuthorityInput from "./AuthorityInput.vue";
+import DateInput from "./DateInput.vue";
 import RepeatingSelect from "./RepeatingSelect.vue";
 
 const props = defineProps<{
@@ -63,8 +64,7 @@ function text(field: keyof Row, e: Event) {
           <input type="text" :value="row.obj" :disabled="ro || handling?.object === 'none'" @change="text('obj', $event)" /></label>
         <label class="field"><span>Identification number</span>
           <input type="text" :value="row.idnum" :disabled="ro" @change="text('idnum', $event)" /></label>
-        <label class="field"><span>Date</span>
-          <input type="text" :value="row.date" placeholder="YYYY-MM-DD" :disabled="ro" @change="text('date', $event)" /></label>
+        <DateInput :model-value="row.date" :parsed="row.lookups?.date" :disabled="ro" @update:model-value="emit('edit', { date: $event })" />
         <RepeatingSelect label="Media type" word="type" :model-value="row.type" :options="tenant.mediaTypes" :disabled="ro"
                          @update:model-value="emit('edit', { type: $event })" />
         <RepeatingSelect label="Language" word="language" :model-value="row.language ?? []" :options="languages ?? []" :disabled="ro"
