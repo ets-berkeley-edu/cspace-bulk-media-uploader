@@ -214,7 +214,8 @@ def find_relations(request: Request):
     if (d := _check(request, "relations", "R")):
         return d
     q = request.query_params
-    items = "".join(f"<list-item><csid>{c}</csid></list-item>" for c, r in store.relations.items()
+    # Real CollectionSpace names relation results <relation-list-item>, unlike other lists' <list-item>.
+    items = "".join(f"<relation-list-item><csid>{c}</csid></relation-list-item>" for c, r in store.relations.items()
                     if r["subjectCsid"] == q.get("sbj") and r["objectCsid"] == q.get("obj"))
     return _xml(f'<ns2:relations-common-list xmlns:ns2="http://collectionspace.org/services/relation">{items}</ns2:relations-common-list>')
 
@@ -236,6 +237,9 @@ async def create_relation(request: Request):
     body = await request.body()
     csid = str(uuid.uuid4())
     store.relations[csid] = {k: _field(body, k) for k in ("subjectCsid", "subjectDocumentType", "objectCsid", "objectDocumentType")}
+    # "relations_lost": the relation is saved but the response is lost (e.g. a gateway timeout)
+    if (fail := store.fail_next.pop("relations_lost", None)):
+        return Response(status_code=fail)
     return _created(request, "relations", csid)
 
 
