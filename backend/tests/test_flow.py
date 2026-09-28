@@ -549,3 +549,14 @@ def test_clearing_the_date_clears_its_parse(api, login, add_uploaded):
     api.patch(f"/api/jobs/{job}/rows/{n}", json={"date": "nonsense"})
     row = api.patch(f"/api/jobs/{job}/rows/{n}", json={"date": ""}).json()["row"]
     assert "date" not in row["lookups"] and not _checks(row, "block")
+
+
+def test_a_new_lookup_on_a_row_that_already_has_lookups_is_saved(api, login, add_uploaded, services):
+    """Seen in a browser run: the date's parse was added to the row's existing lookups in place, compared
+    equal to the "before" copy, and was never saved, so the run sent no structured date."""
+    login()
+    job = new_job(api)
+    n = add_uploaded(job, ["15-1234_1.jpg"])[0]["n"]
+    assert services.storage.get_row(job, n)["lookups"].get("object")  # already has lookups
+    api.patch(f"/api/jobs/{job}/rows/{n}", json={"date": "circa 1850"})
+    assert services.storage.get_row(job, n)["lookups"]["date"]["ok"] is True

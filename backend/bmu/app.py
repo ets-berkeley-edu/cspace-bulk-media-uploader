@@ -449,7 +449,8 @@ def _refresh_permissions(s: Services, sess: Session) -> Session:
 def _recheck(s: Services, sess: Session, job_id: str, targets: set[int] | None, refresh: bool = False) -> dict:
     """Re-run the checks on every row (see check_rows) and save the rows whose checks or lookups changed."""
     rows = s.storage.get_rows(job_id)
-    before = {r["n"]: (r.get("checks"), r.get("lookups")) for r in rows}
+    # a real copy: check_rows updates each row's lookups in place
+    before = {r["n"]: copy.deepcopy((r.get("checks"), r.get("lookups"))) for r in rows}
     client = sess.client(s)
     try:
         partial = check_rows(s.tenant, rows, client, sess.perms, targets=targets, refresh=refresh)
