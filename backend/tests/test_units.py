@@ -111,3 +111,19 @@ def test_step_plan_follows_design():
                                 ("relMediaObject", ["media", "findObject"]), ("relObjectMedia", ["media", "findObject"])]
     r["handling"] = "mediaonly"
     assert plan_steps(T, r) == [("media", []), ("upload", ["media"])]
+
+
+def test_create_tables_waits_for_local_services(monkeypatch):
+    """docker compose starts the web app and worker with DynamoDB Local/S3: retry until they answer."""
+    from botocore.exceptions import EndpointConnectionError
+    from bmu.storage import Storage
+
+    calls = []
+    def flaky(self):
+        calls.append(1)
+        if len(calls) < 3:
+            raise EndpointConnectionError(endpoint_url="http://dynamodb:8000")
+    monkeypatch.setattr(Storage, "_create_tables", flaky)
+    monkeypatch.setattr("bmu.storage.time.sleep", lambda s: None)
+    Storage.create_tables(object.__new__(Storage))
+    assert len(calls) == 3

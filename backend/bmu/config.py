@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     cspace_timeout_seconds: float = 300.0
     tenant: str = "pahma"
 
-    # AWS (or local stand-ins: DynamoDB Local / moto, MinIO)
+    # AWS (or local stand-ins: DynamoDB Local, moto)
     aws_region: str = "us-west-2"
     dynamodb_endpoint: str | None = None
     s3_endpoint: str | None = None
