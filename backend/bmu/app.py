@@ -1,6 +1,7 @@
 """BMU web API (FastAPI). The Vue app calls these endpoints; the worker runs scheduled jobs."""
 from __future__ import annotations
 
+import copy
 import hashlib
 import re
 import secrets
@@ -16,8 +17,8 @@ from pydantic import BaseModel, Field
 from .config import Settings, get_settings
 from .crypto import Crypto, make_crypto
 from .cspace import CSpaceClient, CSpaceError
-from .rows import apply_edit, check_rows, is_locked, new_row, worst
-from .storage import Storage, now
+from .rows import PROBLEM_TEXT, apply_edit, check_rows, edit_problem, is_locked, new_row, worst
+from .storage import RowChanged, Storage, now
 from .tenant import Tenant, load_tenant
 
 COOKIE = "bmu_session"
@@ -60,6 +61,11 @@ def create_app(services: Services | None = None) -> FastAPI:
         resp = await call_next(request)
         resp.headers.setdefault("Cache-Control", "no-store")
         return resp
+
+    @app.exception_handler(RowChanged)
+    async def row_changed(request: Request, exc: RowChanged):
+        return JSONResponse({"detail": f"Document {exc.n} changed while you were working on it (for example its upload "
+                                       "finished). Nothing was saved; try again."}, status_code=409)
 
     _routes(app)
 
@@ -147,6 +153,11 @@ class FileSpec(BaseModel):
 
 class AddFiles(BaseModel):
     files: list[FileSpec] = Field(min_length=1)
+
+
+class BulkEdit(BaseModel):
+    rows: list[int] = Field(min_length=1, max_length=1000)
+    changes: dict[str, Any] = Field(min_length=1)
 
 
 class CheckRequest(BaseModel):
@@ -304,6 +315,35 @@ def _routes(app: FastAPI) -> None:
         s.storage.put_row(job_id, row)
         return _recheck_after_change(s, sess, job_id, n)
 
+    @app.post("/api/jobs/{job_id}/rows/bulk")
+    def bulk_edit(job_id: str, body: BulkEdit, sess: Session = Depends(current_session), s: Services = Depends(svc)):
+        """The bulk-change panel: the same changes to many rows. Never applied partially: if any target row
+        can't take a change it would actually change, nothing is saved."""
+        _editable(_job_or_404(s, sess, job_id))
+        by_n = {r["n"]: r for r in s.storage.get_rows(job_id)}
+        missing = [n for n in body.rows if n not in by_n]
+        if missing:
+            raise HTTPException(404, f"No such documents: {', '.join(map(str, missing[:10]))}")
+        targets = [by_n[n] for n in dict.fromkeys(body.rows)]
+        problems = {r["n"]: p for r in targets if (p := edit_problem(r, body.changes))}
+        if problems:
+            n, p = next(iter(problems.items()))
+            raise HTTPException(409, {"message": f"{len(problems)} of the {len(targets)} documents can't take this change "
+                                                 f"(document {n}: {PROBLEM_TEXT[p]}) Nothing was changed.",
+                                      "rows": list(problems)})
+        originals = copy.deepcopy(targets)
+        edited = []
+        for r in targets:
+            try:
+                apply_edit(s.tenant, r, body.changes)
+            except ValueError as e:
+                raise HTTPException(422, f"{e} Nothing was changed.")
+            edited.append(r)
+        s.storage.put_rows_all_or_none(job_id, edited, originals)
+        rc = _recheck(s, sess, job_id, targets={r["n"] for r in edited})
+        changed = {r["n"] for r in edited} | {r["n"] for r in rc["changed"]}
+        return {"rows": [r for r in rc["rows"] if r["n"] in changed]}
+
     @app.delete("/api/jobs/{job_id}/rows/{n}")
     def delete_row(job_id: str, n: int, sess: Session = Depends(current_session), s: Services = Depends(svc)):
         _editable(_job_or_404(s, sess, job_id))
@@ -373,15 +413,18 @@ def _recheck(s: Services, sess: Session, job_id: str, targets: set[int] | None, 
     before = {r["n"]: (r.get("checks"), r.get("lookups")) for r in rows}
     client = sess.client(s)
     try:
-        check_rows(s.tenant, rows, client, sess.perms, targets=targets, refresh=refresh)
+        partial = check_rows(s.tenant, rows, client, sess.perms, targets=targets, refresh=refresh)
     except CSpaceError as e:
         raise _cspace_http(e)
     finally:
         client.close()
     changed = []
     for r in rows:
-        if before[r["n"]] != (r.get("checks"), r.get("lookups")):
-            s.storage.put_row(job_id, r)
+        if r["n"] in partial:  # checked without its lookups: keep what it had
+            r["checks"], r["lookups"] = before[r["n"]]
+            continue
+        # Saved only if the row is unchanged since it was read; if not, whoever changed it re-checks it.
+        if before[r["n"]] != (r.get("checks"), r.get("lookups")) and s.storage.save_checks(job_id, r):
             changed.append(r)
     counts = {"block": 0, "warn": 0}
     for r in rows:

@@ -54,6 +54,8 @@ export interface RowResult {
 
 export interface Row {
   n: number;
+  /** Version of the row's data, bumped by every save; an older copy is never shown over a newer one. */
+  v?: number;
   file: string;
   size: number;
   contentType: string;

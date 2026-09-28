@@ -33,13 +33,42 @@ def default_idnum(tenant: Tenant, row: dict) -> str:
     return row["img"] if h and h.id_rule == "image" else row["obj"]
 
 
+def edit_problem(row: dict, changes: dict[str, Any]) -> str | None:
+    """Why this row can't take these changes, or None. Changes that match the row's current values are no
+    change, so they never count against it (design: bulk-change panel)."""
+    real = {k: v for k, v in changes.items() if row.get(k) != v}
+    if not real:
+        return None
+    if (row.get("result") or {}).get("state") == "Done":
+        return "done"
+    if set(real) == {"include"}:
+        return None  # any row with work left can be disabled or enabled, a Partial one too
+    if not row.get("include", True):
+        return "disabled"
+    if is_locked(row):
+        return "created"
+    if "handling" in real and object_step_ran(row):
+        return "handling"
+    return None
+
+
+PROBLEM_TEXT = {
+    "done": "This document is done; there is nothing left to change.",
+    "disabled": "This document is disabled. Enable it first.",
+    "created": "This document already created records in CollectionSpace and can't be changed.",
+    "handling": "The last run already found or created this document's object, so its handling can't change.",
+}
+
+
 def apply_edit(tenant: Tenant, row: dict, changes: dict[str, Any]) -> dict:
     """Apply user edits to a row that hasn't created anything in CollectionSpace yet."""
-    if is_locked(row):
-        raise ValueError("This document already created records in CollectionSpace and can't be changed.")
     unknown = set(changes) - EDITABLE
     if unknown:
         raise ValueError(f"Unknown fields: {', '.join(sorted(unknown))}")
+    problem = edit_problem(row, changes)
+    if problem:
+        raise ValueError(PROBLEM_TEXT[problem])
+    changes = {k: v for k, v in changes.items() if row.get(k) != v}
     touched = set(row.get("touched", []))
     for k, v in changes.items():
         if k == "handling":
@@ -68,6 +97,12 @@ def apply_edit(tenant: Tenant, row: dict, changes: dict[str, Any]) -> dict:
     return row
 
 
+def object_step_ran(row: dict) -> bool:
+    """A Failed row whose object step already ran keeps its object, so its handling can't change."""
+    steps = (row.get("result") or {}).get("steps") or {}
+    return any((steps.get(k) or {}).get("s") == "done" for k in ("findObject", "createObject"))
+
+
 def is_locked(row: dict) -> bool:
     """True once the row has created anything in CollectionSpace (finding an existing object doesn't count)."""
     res = row.get("result") or {}
@@ -87,7 +122,7 @@ LOOKUP_TTL_SECONDS = 600
 
 
 def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: dict[str, bool],
-               targets: set[int] | None = None, refresh: bool = False) -> None:
+               targets: set[int] | None = None, refresh: bool = False) -> set[int]:
     """Set each row's checks: [{level: block|warn|info, text}]. "block" rows must be fixed before scheduling.
 
     The editor calls this for the rows that just changed (targets) and re-evaluates every row, because some
@@ -95,9 +130,11 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
     kept on the row under "lookups" and reused while the searched value is unchanged: only target rows
     whose lookup is missing, for a different value or older than LOOKUP_TTL_SECONDS query CollectionSpace.
     targets=None means every row may query; refresh=True ignores stored lookups (used at scheduling).
+    Returns the rows whose lookups weren't known, so their checks are partial and must not be saved.
     """
     now = time.time()
     batch: dict[tuple[str, str], list[str]] = {}  # one search per value per call
+    incomplete: set[int] = set()  # rows whose lookups weren't known: their checks here are partial
     seen_ids: dict[str, int] = {}
     for r in rows:
         if r.get("include") and not is_locked(r) and r.get("idnum"):
@@ -111,6 +148,7 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
         if same and not refresh and (not may_query or now - stored["at"] < LOOKUP_TTL_SECONDS):
             return list(stored["csids"])
         if not may_query:
+            incomplete.add(r["n"])
             return None
         if (kind, value) not in batch:
             batch[(kind, value)] = search(value)
@@ -175,6 +213,7 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
             # Design (Structured dates): a date CollectionSpace can't interpret blocks, stricter than its own UI.
             out.append({"level": "block", "text": f"CollectionSpace can't interpret the date “{r['date']}”. Correct it or clear it."})
         r["checks"] = out
+    return incomplete
 
 
 def worst(row: dict) -> str:

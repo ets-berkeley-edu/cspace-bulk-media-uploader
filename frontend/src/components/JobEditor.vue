@@ -4,6 +4,8 @@ import { api, ApiError } from "../api";
 import { canPreview, readExifDate, uploadToS3 } from "../lib/files";
 import { jobCounts, worstLevel } from "../lib/status";
 import type { Job, Me, Row, RowChange } from "../types";
+import type { BulkChanges } from "../lib/bulk";
+import BulkPanel from "./BulkPanel.vue";
 import DocumentRow from "./DocumentRow.vue";
 
 const props = defineProps<{ me: Me; jobId: string | null }>();
@@ -17,6 +19,9 @@ const previews = reactive(new Map<number, string>());
 const message = ref<{ cls: string; text: string } | null>(null);
 const busy = ref(false);
 const checking = reactive(new Set<number>()); // rows waiting for a CollectionSpace check
+const selected = reactive(new Set<number>());
+const bulkPanel = ref<InstanceType<typeof BulkPanel> | null>(null);
+const allSelected = computed(() => rows.value.length > 0 && rows.value.every((r) => selected.has(r.n)));
 const drag = ref(false);
 const fileInput = ref<HTMLInputElement | null>(null);
 
@@ -36,6 +41,7 @@ async function load(id: string | null) {
   previews.forEach((u) => URL.revokeObjectURL(u));
   previews.clear();
   expanded.clear();
+  selected.clear();
   message.value = null;
   if (!id) {
     job.value = null;
@@ -96,6 +102,7 @@ async function rename() {
 function replace(row: Row) {
   const i = rows.value.findIndex((r) => r.n === row.n);
   if (i < 0) return;
+  if ((row.v ?? 0) < (rows.value[i].v ?? 0)) return; // a stale copy, e.g. a slow check that started earlier
   const local = rows.value[i].upload;
   rows.value[i] = { ...row, upload: ["uploading", "verifying"].includes(local.s) && row.upload.s === "pending" ? local : row.upload };
 }
@@ -158,9 +165,35 @@ async function remove(row: Row) {
   if (!job.value) return;
   const r = await api.deleteRow(job.value.id, row.n);
   rows.value = rows.value.filter((x) => x.n !== row.n);
+  selected.delete(row.n);
   r.others.forEach((o) => replace(o));
   const u = previews.get(row.n);
   if (u) URL.revokeObjectURL(u);
+}
+
+function select(n: number, on: boolean) {
+  if (on) selected.add(n);
+  else selected.delete(n);
+}
+function selectAll(on: boolean) {
+  selected.clear();
+  if (on) rows.value.forEach((r) => selected.add(r.n));
+}
+
+/** The bulk-change panel: the server applies every change to every target, or refuses and changes nothing. */
+async function bulk(targets: number[], changes: BulkChanges | Partial<Row>, resetPanel: boolean) {
+  if (!job.value || !targets.length) return;
+  busy.value = true;
+  message.value = null;
+  try {
+    const r = await api.bulk(job.value.id, targets, changes);
+    r.rows.forEach((row) => replace(row));
+    if (resetPanel) bulkPanel.value?.reset();
+  } catch (e) {
+    message.value = { cls: "msg-block", text: (e as Error).message };
+  } finally {
+    busy.value = false;
+  }
 }
 
 /** "Show documents with problems": expand just the rows that need fixing or have warnings. */
@@ -219,20 +252,29 @@ function toggle(n: number) {
       {{ counts.uploaded }} of {{ counts.work }} uploaded<template v-if="counts.uploading"> · {{ counts.uploading }} uploading</template><template v-if="counts.uploadFailed"> · {{ counts.uploadFailed }} failed</template>
     </div>
 
+    <div class="editor-split">
+    <BulkPanel ref="bulkPanel" :rows="rows" :selected="selected" :tenant="me.tenant" :perms="me.perms" :readonly="!editable" :busy="busy"
+               @apply="(t, c) => bulk(t, c, true)" @include="(t, on) => bulk(t, { include: on }, false)" />
+    <div class="grid-main">
     <div class="table-wrap">
       <table>
         <thead><tr>
-          <th style="width:64px"><span class="sr-only"></span></th><th style="width:28px"></th><th>Document</th>
+          <th style="width:64px"><span class="sr-only">Preview</span></th>
+          <th style="width:28px"><input type="checkbox" :checked="allSelected" :disabled="!rows.length" aria-label="Select all documents"
+            @change="selectAll(($event.target as HTMLInputElement).checked)" /></th>
+          <th style="width:28px"></th><th>Document</th>
           <th style="width:220px">Handling</th><th style="width:90px">{{ me.tenant.publish.header }}</th>
           <th style="width:140px">Status</th><th style="width:90px"></th>
         </tr></thead>
         <tbody>
-          <tr v-if="!rows.length"><td colspan="7" class="muted" style="text-align:center;padding:18px">No documents yet. Drop files in the box above, or browse, to add them to this job.</td></tr>
+          <tr v-if="!rows.length"><td colspan="8" class="muted" style="text-align:center;padding:18px">No documents yet. Drop files in the box above, or browse, to add them to this job.</td></tr>
           <DocumentRow v-for="r in rows" :key="r.n" :row="r" :tenant="me.tenant" :perms="me.perms" :checking="checking.has(r.n)" :preview="previews.get(r.n)"
-                       :expanded="expanded.has(r.n)" :readonly="readonly || !editable"
-                       @toggle="toggle(r.n)" @edit="edit(r, $event)" @remove="remove(r)" />
+                       :expanded="expanded.has(r.n)" :readonly="readonly || !editable" :selected="selected.has(r.n)"
+                       @toggle="toggle(r.n)" @edit="edit(r, $event)" @remove="remove(r)" @select="select(r.n, $event)" />
         </tbody>
       </table>
+    </div>
+    </div>
     </div>
 
     <div class="schedule-bar">

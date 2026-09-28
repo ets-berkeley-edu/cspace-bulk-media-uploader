@@ -335,3 +335,131 @@ def test_a_date_collectionspace_cannot_interpret_blocks(api, login, add_uploaded
     assert api.post(f"/api/jobs/{job}/schedule").status_code == 409
     row = api.patch(f"/api/jobs/{job}/rows/{n}", json={"date": "2024-05-14"}).json()["row"]
     assert not _checks(row, "block")
+
+
+# ---- bulk-change panel (design: User interface, Bulk-change panel) -------------------------------
+def test_bulk_change_applies_to_every_target_and_rechecks(api, login, add_uploaded):
+    login()
+    job = new_job(api)
+    rows = add_uploaded(job, ["30-0001.jpg", "30-0002.jpg", "15-1234_a.jpg"])
+    ref = "urn:cspace:pahma.cspace.berkeley.edu:personauthorities:name(person):item:name(7475)'Leslie Freund'"
+    r = api.post(f"/api/jobs/{job}/rows/bulk", json={"rows": [rows[0]["n"], rows[1]["n"]],
+                                                     "changes": {"handling": "create", "restricted": True, "creator": ref}})
+    assert r.status_code == 200, r.text
+    changed = {x["n"]: x for x in r.json()["rows"]}
+    for n in (rows[0]["n"], rows[1]["n"]):
+        assert changed[n]["handling"] == "create" and changed[n]["restricted"] and changed[n]["creator"] == ref
+        assert not _checks(changed[n], "block")  # rechecked: objects are created, so nothing to fix
+    assert rows[2]["n"] not in changed or changed[rows[2]["n"]]["handling"] == "link"
+
+
+def test_bulk_change_is_never_applied_partially(api, login, add_uploaded, services):
+    login()
+    job = new_job(api)
+    a, b = add_uploaded(job, ["15-1234_a.jpg", "1-2345_1.jpg"])
+    row = services.storage.get_row(job, b["n"])
+    row["result"] = {"state": "Partial", "steps": {"media": {"s": "done", "csid": "m1"}}}
+    services.storage.put_row(job, row)
+    r = api.post(f"/api/jobs/{job}/rows/bulk", json={"rows": [a["n"], b["n"]], "changes": {"restricted": True}})
+    assert r.status_code == 409 and r.json()["detail"]["rows"] == [b["n"]]
+    assert services.storage.get_row(job, a["n"])["restricted"] is False  # nothing was changed
+    # a value the locked row already has is no change for it, so it doesn't block
+    r = api.post(f"/api/jobs/{job}/rows/bulk", json={"rows": [a["n"], b["n"]], "changes": {"restricted": False, "type": "image"}})
+    assert r.status_code == 409  # type would change the locked row
+    r = api.post(f"/api/jobs/{job}/rows/bulk", json={"rows": [a["n"], b["n"]], "changes": {"restricted": False}})
+    assert r.status_code == 200
+
+
+def test_disable_and_enable_selected_work_on_partial_rows(api, login, add_uploaded, services):
+    login()
+    job = new_job(api)
+    a, b = add_uploaded(job, ["15-1234_a.jpg", "1-2345_1.jpg"])
+    row = services.storage.get_row(job, b["n"])
+    row["result"] = {"state": "Partial", "steps": {"media": {"s": "done", "csid": "m1"}}}
+    services.storage.put_row(job, row)
+    r = api.post(f"/api/jobs/{job}/rows/bulk", json={"rows": [a["n"], b["n"]], "changes": {"include": False}})
+    assert r.status_code == 200 and all(not x["include"] for x in r.json()["rows"] if x["n"] in (a["n"], b["n"]))
+    # a disabled row takes no other changes
+    assert api.patch(f"/api/jobs/{job}/rows/{a['n']}", json={"restricted": True}).status_code == 422
+
+
+def test_failed_row_whose_object_step_ran_keeps_its_handling(api, login, add_uploaded, services):
+    login()
+    job = new_job(api)
+    a = add_uploaded(job, ["15-1234_a.jpg"])[0]
+    row = services.storage.get_row(job, a["n"])
+    row["result"] = {"state": "Failed", "steps": {"media": {"s": "failed"}, "findObject": {"s": "done", "csid": "o1"}}}
+    services.storage.put_row(job, row)
+    r = api.post(f"/api/jobs/{job}/rows/bulk", json={"rows": [a["n"]], "changes": {"handling": "create"}})
+    assert r.status_code == 409
+    assert api.post(f"/api/jobs/{job}/rows/bulk", json={"rows": [a["n"]], "changes": {"restricted": True}}).status_code == 200
+
+
+def test_a_stale_check_never_overwrites_a_newer_upload_confirmation(api, login, services):
+    """Seen in a browser run: a batch check read the rows, the upload of one was confirmed, then the check
+    saved its stale copy and the row was stuck on "pending". Rows are versioned now."""
+    from bmu.rows import check_rows
+    from conftest import factory
+    login()
+    job = new_job(api)
+    row = api.post(f"/api/jobs/{job}/files", json={"files": [{"name": "15-1234_a.jpg", "size": 3, "type": "image/jpeg"}]}).json()["rows"][0]
+    stale = services.storage.get_rows(job)  # the batch check reads the rows...
+    services.storage.s3.put_object(Bucket=services.settings.s3_bucket, Key=row["s3Key"], Body=b"abc")
+    assert api.post(f"/api/jobs/{job}/rows/{row['n']}/uploaded").json()["row"]["upload"]["s"] == "done"
+    check_rows(services.tenant, stale, factory("admin", "admin"), {"media": True, "relations": True, "objects": True})
+    assert services.storage.save_checks(job, stale[0]) is False  # ...and its stale result is not saved
+    assert services.storage.get_row(job, row["n"])["upload"]["s"] == "done"
+
+
+def test_a_stale_row_edit_is_refused(api, login, add_uploaded, services):
+    from bmu.storage import RowChanged
+    login()
+    job = new_job(api)
+    n = add_uploaded(job, ["15-1234_a.jpg"])[0]["n"]
+    a, b = services.storage.get_row(job, n), services.storage.get_row(job, n)
+    a["description"] = "first"
+    services.storage.put_row(job, a)
+    b["description"] = "second"
+    try:
+        services.storage.put_row(job, b)
+        raise AssertionError("a stale copy was saved")
+    except RowChanged:
+        pass
+    assert services.storage.get_row(job, n)["description"] == "first"
+
+
+def test_bulk_save_puts_rows_back_if_one_changed_meanwhile(api, login, add_uploaded, services):
+    from bmu.storage import RowChanged
+    login()
+    job = new_job(api)
+    a, b = (services.storage.get_row(job, r["n"]) for r in add_uploaded(job, ["15-1234_a.jpg", "1-2345_1.jpg"]))
+    import copy
+    originals = copy.deepcopy([a, b])
+    other = services.storage.get_row(job, b["n"]); other["description"] = "someone else"; services.storage.put_row(job, other)
+    a["restricted"] = b["restricted"] = True
+    try:
+        services.storage.put_rows_all_or_none(job, [a, b], originals)
+        raise AssertionError("expected RowChanged")
+    except RowChanged:
+        pass
+    assert services.storage.get_row(job, a["n"])["restricted"] is False  # put back
+    assert services.storage.get_row(job, b["n"])["description"] == "someone else"
+
+
+def test_rechecking_one_row_never_saves_partial_checks_for_another(api, login, services):
+    """Seen in a browser run: two uploads confirmed together; one row's re-check evaluated the other row
+    without its lookups and saved that, wiping its checks."""
+    login()
+    job = new_job(api)
+    a, b = api.post(f"/api/jobs/{job}/files", json={"files": [{"name": n, "size": 3, "type": "image/jpeg"} for n in ["20-0501.jpg", "20-0502.jpg"]]}).json()["rows"]
+    for r in (a, b):
+        services.storage.s3.put_object(Bucket=services.settings.s3_bucket, Key=r["s3Key"], Body=b"abc")
+    api.post(f"/api/jobs/{job}/rows/{b['n']}/uploaded")          # b checked: its object isn't found
+    # the moment of the race: b's checks are saved, but a's re-check reads b without its lookups
+    row = services.storage.get_row(job, b["n"])
+    assert any("No object 20-0502" in c["text"] for c in row["checks"])
+    row.pop("lookups")
+    services.storage.put_row(job, row)
+    api.post(f"/api/jobs/{job}/rows/{a['n']}/uploaded")          # a's re-check also re-evaluates b
+    row = services.storage.get_row(job, b["n"])
+    assert any("No object 20-0502" in c["text"] for c in row["checks"])  # not wiped by a partial check
