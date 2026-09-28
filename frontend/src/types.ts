@@ -16,6 +16,7 @@ export interface TenantInfo {
   handling: Handling[];
   publish: { field: string; header: string; invert?: boolean; default?: boolean };
   filenameHint: string;
+  filenamePattern: string; // Python regular expression with named parts (obj)
   mediaTypes: Option[];
   languageDefault: string;
   authorityFields: Record<string, string[]>;
@@ -62,6 +63,7 @@ export interface Row {
   /** Version of the row's data, bumped by every save; an older copy is never shown over a newer one. */
   v?: number;
   file: string;
+  fileOriginal?: string;
   size: number;
   contentType: string;
   handling: string;

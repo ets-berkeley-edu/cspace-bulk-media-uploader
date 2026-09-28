@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from .config import Settings, get_settings
 from .crypto import Crypto, make_crypto
 from .cspace import CSpaceClient, CSpaceError
-from .rows import PROBLEM_TEXT, apply_edit, check_rows, edit_problem, is_locked, new_row, worst
+from .rows import PROBLEM_TEXT, apply_edit, check_rows, clean_filename, edit_problem, is_locked, new_row, worst
 from .storage import RowChanged, Storage, now
 from .tenant import Tenant, load_tenant
 
@@ -169,7 +169,6 @@ class CheckRequest(BaseModel):
     rows: list[int] | None = None  # the rows to look up in CollectionSpace; None: any row whose lookup is stale
 
 
-_SAFE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 def _routes(app: FastAPI) -> None:
@@ -312,10 +311,14 @@ def _routes(app: FastAPI) -> None:
         too_big = [f.name for f in body.files if f.size > s.settings.max_file_bytes]
         if too_big:
             raise HTTPException(413, f"Too large: {', '.join(too_big[:5])}")
+        try:  # design: filenames are cleaned once, on the server, when the browser first reports them
+            names = [clean_filename(f.name) for f in body.files]
+        except ValueError as e:
+            raise HTTPException(422, str(e))
         new = []
-        for f in body.files:
-            row = new_row(s.tenant, f.name, f.size, f.type)
-            row["s3Key"] = f"jobs/{job_id}/{uuid.uuid4().hex}/{_SAFE.sub('_', f.name)[:120]}"
+        for f, name in zip(body.files, names):
+            row = new_row(s.tenant, name, f.size, f.type)
+            row["s3Key"] = f"jobs/{job_id}/{uuid.uuid4().hex}"  # design: staged files keep random keys, no names
             new.append(row)
         rows = s.storage.add_rows(job_id, new)
         return {"rows": [{**r, "uploadForm": s.storage.presign_upload(r["s3Key"], f.size)}
@@ -347,8 +350,9 @@ def _routes(app: FastAPI) -> None:
                  s: Services = Depends(svc)):
         _editable(_job_or_404(s, sess, job_id))
         row = s.storage.get_row(job_id, n) or _404()
+        others = [r["file"] for r in s.storage.get_rows(job_id) if r["n"] != n] if "file" in changes else []
         try:
-            apply_edit(s.tenant, row, changes)
+            apply_edit(s.tenant, row, changes, others)
         except ValueError as e:
             raise HTTPException(422, str(e))
         s.storage.put_row(job_id, row)
@@ -359,6 +363,8 @@ def _routes(app: FastAPI) -> None:
         """The bulk-change panel: the same changes to many rows. Never applied partially: if any target row
         can't take a change it would actually change, nothing is saved."""
         _editable(_job_or_404(s, sess, job_id))
+        if "file" in body.changes:
+            raise HTTPException(422, "Documents are renamed one at a time.")
         by_n = {r["n"]: r for r in s.storage.get_rows(job_id)}
         missing = [n for n in body.rows if n not in by_n]
         if missing:

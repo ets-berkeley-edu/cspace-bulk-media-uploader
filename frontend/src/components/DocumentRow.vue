@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
 import type { Option, Perms, Row, TenantInfo } from "../types";
 import { formatBytes } from "../lib/files";
+import { filenameProblems, idLabel, objectLabel } from "../lib/filenames";
 import { handlingBlocked, rowStatus, worstLevel } from "../lib/status";
 import AuthorityInput from "./AuthorityInput.vue";
 import DateInput from "./DateInput.vue";
@@ -9,7 +10,7 @@ import RepeatingSelect from "./RepeatingSelect.vue";
 
 const props = defineProps<{
   row: Row; tenant: TenantInfo; perms: Perms; preview?: string; expanded: boolean; readonly: boolean; checking?: boolean;
-  selected?: boolean; languages?: Option[];
+  selected?: boolean; languages?: Option[]; otherNames?: string[];
 }>();
 const emit = defineEmits<{ edit: [changes: Partial<Row>]; remove: []; toggle: []; select: [on: boolean] }>();
 
@@ -20,6 +21,20 @@ const handling = computed(() => props.tenant.handling.find((h) => h.id === props
 const status = computed(() => rowStatus(props.row, props.tenant, props.checking));
 const hasWarnings = computed(() => props.row.include && worstLevel(props.row) === "warn");
 const PREFIX: Record<string, string> = { block: "Must fix: ", warn: "Warning: ", info: "" };
+
+// Filename: checked as you type; applied (re-parsed and re-checked on the server) only once it passes.
+const original = computed(() => props.row.fileOriginal || props.row.file);
+const renamed = computed(() => props.row.file !== original.value);
+const nameDraft = ref(props.row.file);
+watch(() => props.row.file, (f) => { nameDraft.value = f; });
+const nameErrors = computed(() => nameDraft.value === props.row.file ? []
+  : filenameProblems(props.tenant, nameDraft.value.trim(), original.value, props.otherNames ?? []));
+function applyName() {
+  const v = nameDraft.value.trim();
+  if (v !== props.row.file && !nameErrors.value.length) emit("edit", { file: v });
+}
+const objLabel = computed(() => objectLabel(props.row));
+const idnLabel = computed(() => idLabel(props.row, props.tenant));
 
 function text(field: keyof Row, e: Event) {
   const v = (e.target as HTMLInputElement).value;
@@ -34,7 +49,7 @@ function text(field: keyof Row, e: Event) {
       @change="emit('select', ($event.target as HTMLInputElement).checked)" /></td>
     <td class="keep"><button class="chevron" :class="{ open: expanded }" :aria-expanded="expanded" aria-label="Show details" @click="emit('toggle')">▸</button></td>
     <td>
-      <div>{{ row.file }}</div>
+      <div>{{ row.file }}<span v-if="renamed" class="badge b-accent" style="margin-left:6px" :title="`Original: ${original}`">Renamed</span></div>
       <div class="sub">{{ formatBytes(row.size) }}<template v-if="handling?.object !== 'none'"> · object {{ row.obj || "—" }}</template></div>
     </td>
     <td>
@@ -60,10 +75,24 @@ function text(field: keyof Row, e: Event) {
     <td colspan="8">
       <div v-if="locked" class="msg msg-info">This document already created records in CollectionSpace, so it can't be changed here.</div>
       <div class="grid">
-        <label class="field"><span>Object number <template v-if="row.obj === row.objParsed">(parsed)</template></span>
-          <input type="text" :value="row.obj" :disabled="ro || handling?.object === 'none'" @change="text('obj', $event)" /></label>
-        <label class="field"><span>Identification number</span>
-          <input type="text" :value="row.idnum" :disabled="ro" @change="text('idnum', $event)" /></label>
+        <div class="field wide" :class="{ edited: renamed }">
+          <label><span>Filename <em class="num-state">{{ renamed ? `(renamed — original ${original})` : "(original)" }}</em></span>
+            <input v-model="nameDraft" type="text" spellcheck="false" :disabled="ro" aria-label="Filename"
+                   @blur="applyName" @keydown.enter.prevent="applyName" /></label>
+          <div v-for="(e, i) in nameErrors" :key="i" class="msg msg-block">{{ e }}</div>
+          <span class="field-note">{{ tenant.filenameHint }}
+            <template v-if="renamed && !ro"> · <button class="link" type="button" @click="emit('edit', { file: original })">Use original filename</button></template></span>
+        </div>
+        <div v-if="handling?.object !== 'none'" class="field" :class="{ edited: objLabel.edited }">
+          <label><span>Object number <em class="num-state">{{ objLabel.text }}</em></span>
+            <input type="text" :value="row.obj" :disabled="ro" @change="text('obj', $event)" /></label>
+          <button v-if="objLabel.reset !== undefined && !ro" class="link field-note" type="button" @click="emit('edit', { obj: objLabel.reset })">Use parsed value</button>
+        </div>
+        <div class="field" :class="{ edited: idnLabel.edited }">
+          <label><span>Identification number <em class="num-state">{{ idnLabel.text }}</em></span>
+            <input type="text" :value="row.idnum" :disabled="ro" @change="text('idnum', $event)" /></label>
+          <button v-if="idnLabel.reset !== undefined && !ro" class="link field-note" type="button" @click="emit('edit', { idnum: idnLabel.reset })">Use parsed value</button>
+        </div>
         <DateInput :model-value="row.date" :parsed="row.lookups?.date" :disabled="ro" @update:model-value="emit('edit', { date: $event })" />
         <RepeatingSelect label="Media type" word="type" :model-value="row.type" :options="tenant.mediaTypes" :disabled="ro"
                          @update:model-value="emit('edit', { type: $event })" />
@@ -77,7 +106,6 @@ function text(field: keyof Row, e: Event) {
         <label class="field wide"><span>Description</span>
           <textarea rows="2" :value="row.description" :disabled="ro" @change="text('description', $event)"></textarea></label>
       </div>
-      <div class="sub">Filename rule: {{ tenant.filenameHint }}</div>
       <div v-for="(c, i) in row.checks" :key="i" class="msg" :class="`msg-${c.level}`"><strong>{{ PREFIX[c.level] }}</strong>{{ c.text }}</div>
       <div v-if="row.result?.error" class="msg msg-block">
         {{ row.result.error.detail }} ({{ row.result.error.code }}, step {{ row.result.error.step }})

@@ -19,6 +19,60 @@ AUTHORITY_FIELDS = {"creator", "contributor", "rightsHolder"}
 ROW_STATES = ("Not started", "In progress", "Done", "Partial", "Failed")
 
 
+# ---- filenames (design: Media record fields, Filenames; User interface, Editable numbers and names) ------
+MAX_FILENAME = 100
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+_SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _split(name: str) -> tuple[str, str]:
+    k = name.rfind(".")
+    return (name[:k], name[k + 1:]) if k > 0 else (name, "")
+
+
+def clean_filename(name: str) -> str:
+    """The name a file is known by everywhere (title, Blob name, filename rules), cleaned once on the server
+    when the browser first reports it: any path stripped, control characters removed, length capped with the
+    extension kept. Raises ValueError for names that can't be made safe."""
+    base = _CONTROL.sub("", re.split(r"[\\/]", name)[-1]).strip()
+    if not base or base in (".", "..") or ".." in base or base.startswith("."):
+        raise ValueError(f"The filename “{name}” can't be used. Rename the file and add it again.")
+    if len(base) > MAX_FILENAME:
+        stem, ext = _split(base)
+        base = stem[:MAX_FILENAME - len(ext) - 1] + "." + ext if ext else base[:MAX_FILENAME]
+    return base
+
+
+def filename_problems(tenant: Tenant, name: str, original: str, other_names: list[str]) -> list[str]:
+    """Why a new name for a document can't be used (as in the UI mockup); empty when it can."""
+    errs: list[str] = []
+    orig_ext = _split(original)[1].lower()
+    if not name:
+        return ["Enter a filename."]
+    if len(name) > MAX_FILENAME:
+        errs.append(f"Use {MAX_FILENAME} characters or fewer.")
+    if "/" in name or "\\" in name:
+        errs.append("Remove slashes; a filename can't include a folder.")
+    if ".." in name:
+        errs.append("Remove the double dot (..).")
+    if name.startswith("."):
+        errs.append("A filename can't start with a dot.")
+    if re.search(r"\s", name):
+        errs.append("Remove spaces; use _ or - instead.")
+    if not _SAFE_NAME.match(re.sub(r"[\s/\\]", "", name) or "x"):
+        errs.append("Use only letters, numbers, dots, hyphens and underscores.")
+    stem, ext = _split(name)
+    if not ext:
+        errs.append(f"Keep the file extension (.{orig_ext}).")
+    elif ext.lower() != orig_ext:
+        errs.append(f"Keep the extension .{orig_ext}; renaming can't change the file type.")
+    if any(o.lower() == name.lower() for o in other_names):
+        errs.append("Another document in this job already has this name.")
+    if not errs and not tenant.filename_pattern.match(stem):
+        errs.append(f"Doesn't match {tenant.name}'s filename pattern: {tenant.filename_hint}.")
+    return errs
+
+
 def new_row(tenant: Tenant, filename: str, size: int, content_type: str) -> dict[str, Any]:
     p = parse_filename(tenant, filename)
     row: dict[str, Any] = {
@@ -64,8 +118,12 @@ PROBLEM_TEXT = {
 }
 
 
-def apply_edit(tenant: Tenant, row: dict, changes: dict[str, Any]) -> dict:
-    """Apply user edits to a row that hasn't created anything in CollectionSpace yet."""
+def apply_edit(tenant: Tenant, row: dict, changes: dict[str, Any], other_names: list[str] | None = None) -> dict:
+    """Apply user edits to a row that hasn't created anything in CollectionSpace yet.
+
+    A new filename must pass the filename rules (other_names: the job's other documents' names). The object
+    number and identification number follow what they're derived from (the filename, the handling, the
+    object number) for as long as they still hold their derived values; once edited, they keep the edit."""
     unknown = set(changes) - EDITABLE
     if unknown:
         raise ValueError(f"Unknown fields: {', '.join(sorted(unknown))}")
@@ -73,6 +131,11 @@ def apply_edit(tenant: Tenant, row: dict, changes: dict[str, Any]) -> dict:
     if problem:
         raise ValueError(PROBLEM_TEXT[problem])
     changes = {k: v for k, v in changes.items() if row.get(k) != v}
+    if "file" in changes:
+        errs = filename_problems(tenant, str(changes["file"]).strip(), row.get("fileOriginal") or row["file"], other_names or [])
+        if errs:
+            raise ValueError(" ".join(errs))
+    old_obj_parsed, old_id_default = row.get("objParsed", ""), default_idnum(tenant, row)
     touched = set(row.get("touched", []))
     for k, v in changes.items():
         if k == "handling":
@@ -97,13 +160,13 @@ def apply_edit(tenant: Tenant, row: dict, changes: dict[str, Any]) -> dict:
             v = v.strip()
         row[k] = v
         touched.add(k)
-    if "file" in changes:
+    if "file" in changes:  # re-parse the new name; the object number follows it unless it was edited
         p = parse_filename(tenant, row["file"])
         row.update(objParsed=p["obj"], img=p["img"], parseOk=p["ok"])
-        if "obj" not in touched:
+        if "obj" not in changes and row.get("obj") == old_obj_parsed:
             row["obj"] = p["obj"]
-    if "idnum" not in touched and ("handling" in changes or "file" in changes or "obj" in changes):
-        row["idnum"] = default_idnum(tenant, row)
+    if "idnum" not in changes and row.get("idnum") == old_id_default:
+        row["idnum"] = default_idnum(tenant, row)  # it still held its derived value, so it follows
     row["touched"] = sorted(touched)
     return row
 
@@ -206,7 +269,10 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
         if h.object != "none":
             num = (r.get("obj") or "").strip()
             if not num:
-                out.append({"level": "block", "text": "No object number. The filename doesn't follow the rule: " + tenant.filename_hint + "."})
+                media_only = any(x.object == "none" for x in tenant.handling)
+                out.append({"level": "block", "text": f"No object number: the filename doesn't match {tenant.name}'s filename pattern "
+                            f"({tenant.filename_hint}). Rename the file, enter the object number"
+                            + (", or choose a media-only handling." if media_only else ".")})
             else:
                 try:
                     found = lookup(r, "object", num, client.find_objects)
