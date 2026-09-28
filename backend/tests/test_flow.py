@@ -444,3 +444,22 @@ def test_bulk_save_puts_rows_back_if_one_changed_meanwhile(api, login, add_uploa
         pass
     assert services.storage.get_row(job, a["n"])["restricted"] is False  # put back
     assert services.storage.get_row(job, b["n"])["description"] == "someone else"
+
+
+def test_rechecking_one_row_never_saves_partial_checks_for_another(api, login, services):
+    """Seen in a browser run: two uploads confirmed together; one row's re-check evaluated the other row
+    without its lookups and saved that, wiping its checks."""
+    login()
+    job = new_job(api)
+    a, b = api.post(f"/api/jobs/{job}/files", json={"files": [{"name": n, "size": 3, "type": "image/jpeg"} for n in ["20-0501.jpg", "20-0502.jpg"]]}).json()["rows"]
+    for r in (a, b):
+        services.storage.s3.put_object(Bucket=services.settings.s3_bucket, Key=r["s3Key"], Body=b"abc")
+    api.post(f"/api/jobs/{job}/rows/{b['n']}/uploaded")          # b checked: its object isn't found
+    # the moment of the race: b's checks are saved, but a's re-check reads b without its lookups
+    row = services.storage.get_row(job, b["n"])
+    assert any("No object 20-0502" in c["text"] for c in row["checks"])
+    row.pop("lookups")
+    services.storage.put_row(job, row)
+    api.post(f"/api/jobs/{job}/rows/{a['n']}/uploaded")          # a's re-check also re-evaluates b
+    row = services.storage.get_row(job, b["n"])
+    assert any("No object 20-0502" in c["text"] for c in row["checks"])  # not wiped by a partial check

@@ -413,13 +413,16 @@ def _recheck(s: Services, sess: Session, job_id: str, targets: set[int] | None, 
     before = {r["n"]: (r.get("checks"), r.get("lookups")) for r in rows}
     client = sess.client(s)
     try:
-        check_rows(s.tenant, rows, client, sess.perms, targets=targets, refresh=refresh)
+        partial = check_rows(s.tenant, rows, client, sess.perms, targets=targets, refresh=refresh)
     except CSpaceError as e:
         raise _cspace_http(e)
     finally:
         client.close()
     changed = []
     for r in rows:
+        if r["n"] in partial:  # checked without its lookups: keep what it had
+            r["checks"], r["lookups"] = before[r["n"]]
+            continue
         # Saved only if the row is unchanged since it was read; if not, whoever changed it re-checks it.
         if before[r["n"]] != (r.get("checks"), r.get("lookups")) and s.storage.save_checks(job_id, r):
             changed.append(r)

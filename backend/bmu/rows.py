@@ -122,7 +122,7 @@ LOOKUP_TTL_SECONDS = 600
 
 
 def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: dict[str, bool],
-               targets: set[int] | None = None, refresh: bool = False) -> None:
+               targets: set[int] | None = None, refresh: bool = False) -> set[int]:
     """Set each row's checks: [{level: block|warn|info, text}]. "block" rows must be fixed before scheduling.
 
     The editor calls this for the rows that just changed (targets) and re-evaluates every row, because some
@@ -130,9 +130,11 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
     kept on the row under "lookups" and reused while the searched value is unchanged: only target rows
     whose lookup is missing, for a different value or older than LOOKUP_TTL_SECONDS query CollectionSpace.
     targets=None means every row may query; refresh=True ignores stored lookups (used at scheduling).
+    Returns the rows whose lookups weren't known, so their checks are partial and must not be saved.
     """
     now = time.time()
     batch: dict[tuple[str, str], list[str]] = {}  # one search per value per call
+    incomplete: set[int] = set()  # rows whose lookups weren't known: their checks here are partial
     seen_ids: dict[str, int] = {}
     for r in rows:
         if r.get("include") and not is_locked(r) and r.get("idnum"):
@@ -146,6 +148,7 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
         if same and not refresh and (not may_query or now - stored["at"] < LOOKUP_TTL_SECONDS):
             return list(stored["csids"])
         if not may_query:
+            incomplete.add(r["n"])
             return None
         if (kind, value) not in batch:
             batch[(kind, value)] = search(value)
@@ -210,6 +213,7 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
             # Design (Structured dates): a date CollectionSpace can't interpret blocks, stricter than its own UI.
             out.append({"level": "block", "text": f"CollectionSpace can't interpret the date “{r['date']}”. Correct it or clear it."})
         r["checks"] = out
+    return incomplete
 
 
 def worst(row: dict) -> str:
