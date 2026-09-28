@@ -68,7 +68,8 @@ class Permissions:
     @property
     def summary(self) -> dict[str, bool]:
         return {
-            "media": self.can("media", "C") and self.can("blobs", "C"),
+            # The file goes through media/{csid}/blob, so only media permissions apply (no blobs permission).
+            "media": self.can("media", "C"),
             "relations": self.can("relations", "C"),
             "objects": self.can("collectionobjects", "C"),
             "readObjects": self.can("collectionobjects", "R"),
@@ -151,11 +152,17 @@ class CSpaceClient:
         return out
 
     # -- creates (the BMU never updates or deletes) ---------------------------------------
-    def create_blob(self, filename: str, stream: IO[bytes], content_type: str) -> str:
-        """Upload a file as a Blob (multipart POST /blobs, as the legacy BMU does). Streams the body."""
+    def upload_file(self, media_csid: str, filename: str, stream: IO[bytes], content_type: str) -> str:
+        """Attach the file to an existing Media record: multipart PUT media/{csid}/blob.
+
+        CollectionSpace creates the Blob record, stores the file and sets the Media record's blobCsid
+        in one call. The body is streamed. Returns the new Blob CSID when the response names it, else "".
+        VERIFY on QA: the multipart field name ("file") and the response (status, Location, blobCsid).
+        """
         files = {"file": (filename, stream, content_type or "application/octet-stream")}
-        r = self._request("POST", "blobs", files=files, data={"submit": "OK"})
-        return _csid_from(r)
+        r = self._request("PUT", f"media/{media_csid}/blob", files=files)
+        loc = r.headers.get("location", "")
+        return loc.rstrip("/").rsplit("/", 1)[-1] if loc else ""
 
     def create_media(self, xml: bytes) -> str:
         return self._post_xml("media", xml)
@@ -165,6 +172,17 @@ class CSpaceClient:
 
     def create_relation(self, xml: bytes) -> str:
         return self._post_xml("relations", xml)
+
+    def media_blob_csid(self, media_csid: str) -> str:
+        """The blobCsid CollectionSpace set on a Media record (after PUT media/{csid}/blob)."""
+        r = self._request("GET", f"media/{media_csid}")
+        return _text(SafeET.fromstring(r.content), "blobCsid")
+
+    def find_relations(self, subject_csid: str, object_csid: str, predicate: str = "affects") -> list[str]:
+        """CSIDs of existing relations from subject to object, so a rerun never creates a duplicate.
+        VERIFY on QA: the relations list query parameters (sbj, obj, prd)."""
+        r = self._request("GET", "relations", params={"sbj": subject_csid, "obj": object_csid, "prd": predicate, "wf_deleted": "false"})
+        return [csid for csid, _ in _list_items(r.content, "csid") if csid]
 
 
 def _quote(s: str) -> str:

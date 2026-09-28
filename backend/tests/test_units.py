@@ -60,16 +60,16 @@ def test_media_xml_restricted_refnames_and_escaping():
     r = new_row(T, "15-1234_a.jpg", 10, "image/jpeg")
     ref = "urn:cspace:pahma.cspace.berkeley.edu:personauthorities:name(person):item:name(7475)'Leslie Freund'"
     r.update(restricted=True, creator=ref, description="Bowl & <lid>", date="2025-06-14", type="image")
-    xml = media_xml(T, r, "blob-1")
+    xml = media_xml(T, r)
     assert text(xml, "approvedForWeb") == ["false"]
     assert text(xml, "creator") == [ref]
     assert text(xml, "description") == ["Bowl & <lid>"]
-    assert text(xml, "blobCsid") == ["blob-1"]
+    assert text(xml, "blobCsid") == []  # the file is attached later with PUT media/{csid}/blob
     assert text(xml, "identificationNumber") == ["15-1234"]
     assert text(xml, "dateEarliestSingleYear") == ["2025"]
     assert text(xml, "language") == [T.language_default]
     r["restricted"] = False
-    assert text(media_xml(T, r, "b"), "approvedForWeb") == ["true"]
+    assert text(media_xml(T, r), "approvedForWeb") == ["true"]
     assert text(object_xml("15-9"), "objectNumber") == ["15-9"]
     assert text(relation_xml("m", "Media", "o", "CollectionObject"), "subjectDocumentType") == ["Media"]
 
@@ -81,6 +81,8 @@ def test_permissions_both_formats():
     p = Permissions.from_xml(xml)
     assert p.can("media", "C") and p.can("blobs", "C") and not p.can("relations", "C")
     assert p.summary["media"] and not p.summary["relations"]
+    # only media permissions are needed to attach the file (PUT media/{csid}/blob)
+    assert Permissions({"media": {"C", "U"}}).summary["media"]
 
 
 def test_local_crypto_binds_context():
@@ -100,3 +102,12 @@ def test_kms_crypto(aws):
     c = KmsCrypto(kms, {"session": ks, "job": kj})
     tok = c.encrypt("job", "pw", {"user": "u", "job": "9"})
     assert "pw" not in tok and c.decrypt("job", tok, {"user": "u", "job": "9"}) == "pw"
+
+
+def test_step_plan_follows_design():
+    from bmu.worker import plan_steps
+    r = new_row(T, "15-1234_a.jpg", 10, "image/jpeg")
+    assert plan_steps(T, r) == [("media", []), ("findObject", []), ("upload", ["media"]),
+                                ("relMediaObject", ["media", "findObject"]), ("relObjectMedia", ["media", "findObject"])]
+    r["handling"] = "mediaonly"
+    assert plan_steps(T, r) == [("media", []), ("upload", ["media"])]

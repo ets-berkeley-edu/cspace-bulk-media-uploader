@@ -1,7 +1,7 @@
 """A small simulated CollectionSpace services API for development and tests.
 
-It implements only what the BMU calls: accountperms, object/media search, authority term search,
-and creating blobs, media, objects and relations. State is in memory. It is not CollectionSpace:
+It implements only what the BMU calls: accountperms, object/media/relation search, authority term
+search, creating Media, Objects and Relations, and attaching a file with PUT media/{csid}/blob. State is in memory. It is not CollectionSpace:
 behavior against the real server must be confirmed on the Lyrasis QA tenant.
 
 Run: uvicorn fakecspace.app:app --port 8180
@@ -25,7 +25,7 @@ USERS = {
     "limited": ("limited", "CRUDL"),
     "reader": ("reader", "RL"),
 }
-RESOURCES = ["media", "blobs", "relations", "collectionobjects", "personauthorities", "orgauthorities", "vocabularies"]
+RESOURCES = ["media", "relations", "collectionobjects", "personauthorities", "orgauthorities", "vocabularies"]
 
 
 def _perms_for(user: str) -> dict[str, str]:
@@ -55,7 +55,7 @@ class Store:
         self.media: dict[str, dict] = {}
         self.blobs: dict[str, dict] = {}
         self.relations: dict[str, dict] = {}
-        self.fail_next: dict[str, int] = {}  # e.g. {"media": 503} to simulate a server error once
+        self.fail_next: dict[str, int] = {}  # e.g. {"media": 503} or {"media_blob": 500}: fail the next call once
         for num in ["15-1234", "12-5678", "15-1240", "1-2345"]:
             self.objects[str(uuid.uuid4())] = {"objectNumber": num, "deleted": False}
         # two objects share a number, to exercise "matches several objects"
@@ -167,27 +167,56 @@ def search_terms(service: str, vocab: str, request: Request):
     return _xml(f'<ns2:abstract-common-list xmlns:ns2="http://collectionspace.org/services/jaxb">{items}</ns2:abstract-common-list>')
 
 
-@app.post("/cspace-services/blobs")
-async def create_blob(request: Request, file: UploadFile):
-    if (d := _check(request, "blobs", "C")):
-        return d
-    size = 0
-    while chunk := await file.read(1024 * 1024):
-        size += len(chunk)
-    csid = str(uuid.uuid4())
-    store.blobs[csid] = {"name": file.filename, "size": size, "type": file.content_type}
-    return _created(request, "blobs", csid)
-
-
 @app.post("/cspace-services/media")
 async def create_media(request: Request):
     if (d := _check(request, "media", "C")):
         return d
     body = await request.body()
     csid = str(uuid.uuid4())
-    store.media[csid] = {"identificationNumber": _field(body, "identificationNumber"),
-                         "blobCsid": _field(body, "blobCsid"), "xml": body.decode()}
+    if _field(body, "blobCsid"):
+        return Response(status_code=400)  # the BMU must not send blobCsid; the file is attached with PUT .../blob
+    store.media[csid] = {"identificationNumber": _field(body, "identificationNumber"), "blobCsid": "", "xml": body.decode()}
     return _created(request, "media", csid)
+
+
+@app.put("/cspace-services/media/{csid}/blob")
+async def media_blob(csid: str, request: Request, file: UploadFile):
+    """Attach a file to a Media record: creates the Blob record and sets the Media record's blobCsid."""
+    if (d := _check(request, "media", "U")):
+        return d
+    if (fail := store.fail_next.pop("media_blob", None)):
+        return Response(status_code=fail)
+    if csid not in store.media:
+        return Response(status_code=404)
+    size = 0
+    while chunk := await file.read(1024 * 1024):
+        size += len(chunk)
+    blob = str(uuid.uuid4())
+    store.blobs[blob] = {"name": file.filename, "size": size, "type": file.content_type, "media": csid}
+    store.media[csid]["blobCsid"] = blob
+    return _created(request, "blobs", blob)
+
+
+@app.get("/cspace-services/media/{csid}")
+def get_media(csid: str, request: Request):
+    if (d := _check(request, "media", "R")):
+        return d
+    m = store.media.get(csid)
+    if not m:
+        return Response(status_code=404)
+    return _xml(f'<document name="media"><ns2:media_common xmlns:ns2="http://collectionspace.org/services/media">'
+                f"<identificationNumber>{escape(m.get('identificationNumber', ''))}</identificationNumber>"
+                f"<blobCsid>{m.get('blobCsid', '')}</blobCsid></ns2:media_common></document>")
+
+
+@app.get("/cspace-services/relations")
+def find_relations(request: Request):
+    if (d := _check(request, "relations", "R")):
+        return d
+    q = request.query_params
+    items = "".join(f"<list-item><csid>{c}</csid></list-item>" for c, r in store.relations.items()
+                    if r["subjectCsid"] == q.get("sbj") and r["objectCsid"] == q.get("obj"))
+    return _xml(f'<ns2:relations-common-list xmlns:ns2="http://collectionspace.org/services/relation">{items}</ns2:relations-common-list>')
 
 
 @app.post("/cspace-services/collectionobjects")

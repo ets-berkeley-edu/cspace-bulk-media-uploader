@@ -35,19 +35,29 @@ class JobStop(Exception):
 
 
 def _step(row: dict, name: str) -> dict:
-    res = row.setdefault("result", None) or {}
+    res = row.get("result") or {}
     row["result"] = res
     steps = res.setdefault("steps", {})
     return steps.setdefault(name, {"s": "not run"})
 
 
-def plan_steps(tenant: Tenant, row: dict) -> list[str]:
+def plan_steps(tenant: Tenant, row: dict) -> list[tuple[str, list[str]]]:
+    """A row's steps in order, each with the steps it depends on (design: "Steps within a row").
+
+    Create Media record      depends on nothing
+    Find or create Object    depends on nothing
+    Upload file (PUT media/{csid}/blob, which creates the Blob record)   depends on Media
+    Create Relations, both directions                                    depend on Media and Object
+    """
     h = tenant.handling_by_id(row["handling"])
-    if h.object == "existing":
-        return ["findObject", "blob", "media", "relMediaObject", "relObjectMedia"]
-    if h.object == "create":
-        return ["blob", "media", "createObject", "relMediaObject", "relObjectMedia"]
-    return ["blob", "media"]
+    obj = {"existing": "findObject", "create": "createObject"}.get(h.object)
+    steps: list[tuple[str, list[str]]] = [("media", [])]
+    if obj:
+        steps.append((obj, []))
+    steps.append(("upload", ["media"]))
+    if obj:
+        steps += [("relMediaObject", ["media", obj]), ("relObjectMedia", ["media", obj])]
+    return steps
 
 
 class Worker:
@@ -158,53 +168,72 @@ class Worker:
 
     # ---- one row ------------------------------------------------------------------------------
     def run_row(self, client: CSpaceClient, job_id: str, row: dict, run_no: int, created: list[dict]) -> str:
-        """Run a row's remaining steps. Returns an error code, or "" when the row is done."""
+        """Run a row's unfinished steps. Returns the first error code, or "" when the row is done.
+
+        Each step ends as done (with its CSID), failed (with a reason) or skipped (naming the step it
+        depended on). A step whose own dependencies are done still runs after another step failed:
+        e.g. a failed upload doesn't stop the Relations. Only a job-level error (401, inactive account)
+        stops the row at once. Each result is written to the row right after its call.
+        """
         res = row.get("result") or {}
         res.update(state="In progress", error=None, run=run_no)
         row["result"] = res
         self.storage.put_row(job_id, row)
-        steps = plan_steps(self.tenant, row)
-        error = ""
-        for name in steps:
+        first_error = ""
+        for name, deps in plan_steps(self.tenant, row):
             st = _step(row, name)
             if st.get("s") == "done":
+                continue  # a rerun never repeats a done step
+            blocked = next((d for d in deps if _step(row, d).get("s") != "done"), None)
+            if blocked:
+                st.clear()
+                st.update(s="skipped", after=blocked)
+                self.storage.put_row(job_id, row)
                 continue
             try:
                 csid = self._do(client, name, row)
+                st.clear()
                 st.update(s="done", csid=csid, run=run_no)
-                if name != "findObject":
+                if name not in ("findObject",) and csid:
                     created.append({"row": row["n"], "file": row["file"], "step": name, "csid": csid})
-            except CSpaceError as e:
-                st.update(s="failed")
-                error = e.code
-                res["error"] = {"code": e.code, "detail": e.detail, "step": name}
-                break
-            except _RowError as e:
-                st.update(s="failed")
-                error = e.code
-                res["error"] = {"code": e.code, "detail": e.detail, "step": name}
-                break
+                if name == "upload":
+                    self._delete_staged(row)
+            except (CSpaceError, _RowError) as e:
+                st.clear()
+                st.update(s="failed", code=e.code, detail=e.detail, run=run_no)
+                if not first_error:
+                    first_error = e.code
+                    res["error"] = {"code": e.code, "detail": e.detail, "step": name}
+                if e.code in JOB_LEVEL:
+                    self.storage.put_row(job_id, row)
+                    break
             finally:
                 self.storage.put_row(job_id, row)
-        if error:
-            for name in steps[steps.index(res["error"]["step"]) + 1:]:
-                if _step(row, name).get("s") != "done":
-                    _step(row, name)["s"] = "not run"
-            media_done = _step(row, "media").get("s") == "done"
-            res["state"] = "Partial" if media_done else "Failed"
-        else:
+        steps = res["steps"]
+        if all(st.get("s") == "done" for st in steps.values()):
             res["state"] = "Done"
             res["error"] = None
-            # the staged file is no longer needed once it is in CollectionSpace
-            try:
-                self.storage.delete_object(row["s3Key"])
-            except ClientError:
-                log.warning("could not delete staged file for row %s", row["n"])
+        elif steps.get("media", {}).get("s") == "done":
+            res["state"] = "Partial"
+        else:
+            res["state"] = "Failed"
+        if res["state"] != "Done" and not res.get("error"):
+            skipped = next(n for n, st in steps.items() if st.get("s") != "done")
+            res["error"] = {"code": "skipped", "detail": f"Step {skipped} didn't run", "step": skipped}
         self.storage.put_row(job_id, row)
-        return error
+        return first_error
+
+    def _delete_staged(self, row: dict) -> None:
+        # the staged file is no longer needed once it is in CollectionSpace
+        try:
+            self.storage.delete_object(row["s3Key"])
+        except ClientError:
+            log.warning("could not delete staged file for row %s", row["n"])
 
     def _do(self, client: CSpaceClient, name: str, row: dict) -> str:
         steps = row["result"]["steps"]
+        if name == "media":
+            return client.create_media(media_xml(self.tenant, row))
         if name == "findObject":
             found = client.find_objects(row["obj"])
             if not found:
@@ -216,24 +245,29 @@ class Worker:
             if client.find_objects(row["obj"]):
                 raise _RowError("objexists", f"Object {row['obj']} already exists")
             return client.create_object(object_xml(row["obj"]))
-        if name == "blob":
+        media = steps["media"]["csid"]
+        if name == "upload":
+            # An upload retry targets the existing Media record.
             try:
                 body = self.storage.open_object(row["s3Key"], (row.get("upload") or {}).get("version") or None)
             except ClientError as e:
                 raise _RowError("upload", "The staged file is missing; add the file again") from e
             try:
-                return client.create_blob(row["file"], body, row.get("contentType") or "application/octet-stream")
+                blob = client.upload_file(media, row["file"], body, row.get("contentType") or "application/octet-stream")
             finally:
                 body.close()
-        if name == "media":
-            return client.create_media(media_xml(self.tenant, row, steps["blob"]["csid"]))
+            return blob or client.media_blob_csid(media)
         obj = (steps.get("findObject") or steps.get("createObject"))["csid"]
-        media = steps["media"]["csid"]
         if name == "relMediaObject":
-            return client.create_relation(relation_xml(media, "Media", obj, "CollectionObject"))
-        if name == "relObjectMedia":
-            return client.create_relation(relation_xml(obj, "CollectionObject", media, "Media"))
-        raise ValueError(name)
+            subj, subj_type, tgt, tgt_type = media, "Media", obj, "CollectionObject"
+        elif name == "relObjectMedia":
+            subj, subj_type, tgt, tgt_type = obj, "CollectionObject", media, "Media"
+        else:
+            raise ValueError(name)
+        existing = client.find_relations(subj, tgt)  # never create a duplicate relation on a rerun
+        if existing:
+            return existing[0]
+        return client.create_relation(relation_xml(subj, subj_type, tgt, tgt_type))
 
 
 class _RowError(Exception):

@@ -66,6 +66,11 @@ def test_full_run_path(api, login, add_uploaded, worker, services, fake):
     assert len(created_obj) == 1
     media = fake.media[rows["15-1240_1.jpg"]["result"]["steps"]["media"]["csid"]]
     assert "<approvedForWeb>false</approvedForWeb>" in media["xml"] and ref in media["xml"]
+    # Media first, then PUT media/{csid}/blob: the Blob belongs to the Media record and blobCsid was set by CollectionSpace
+    assert "blobCsid" not in media["xml"]
+    steps = rows["15-1240_1.jpg"]["result"]["steps"]
+    assert media["blobCsid"] == steps["upload"]["csid"] and fake.blobs[steps["upload"]["csid"]]["media"] == steps["media"]["csid"]
+    assert list(steps) == ["media", "findObject", "upload", "relMediaObject", "relObjectMedia"]
     # staged files are deleted once in CollectionSpace
     assert services.storage.head_object(rows["15-1234_a.jpg"]["s3Key"]) is None
     audit = services.storage.list_audit("pahma")
@@ -157,3 +162,58 @@ def test_upload_size_mismatch_marks_failed(api, login, services):
     row = r.json()["rows"][0]
     services.storage.s3.put_object(Bucket=services.settings.s3_bucket, Key=row["s3Key"], Body=b"short")
     assert api.post(f"/api/jobs/{job}/rows/{row['n']}/uploaded").json()["upload"]["s"] == "failed"
+
+
+def test_failed_upload_still_relates_and_rerun_reuses_media(api, login, add_uploaded, worker, services, fake):
+    """Design: "Upload fails: Relations are still created"; an upload retry targets the existing Media CSID."""
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_f.jpg"])
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    fake.fail_next["media_blob"] = 500
+    worker.tick()
+    row = api.get(f"/api/jobs/{job}").json()["rows"][0]
+    st = row["result"]["steps"]
+    assert row["result"]["state"] == "Partial"
+    assert st["upload"]["s"] == "failed" and st["relMediaObject"]["s"] == "done" and st["relObjectMedia"]["s"] == "done"
+    media = st["media"]["csid"]
+    assert fake.media[media]["blobCsid"] == "" and len(fake.relations) == 2
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    worker.tick()
+    row = api.get(f"/api/jobs/{job}").json()["rows"][0]
+    assert row["result"]["state"] == "Done" and row["result"]["steps"]["media"]["csid"] == media
+    assert fake.media[media]["blobCsid"] == row["result"]["steps"]["upload"]["csid"]
+    assert len(fake.relations) == 2  # not recreated
+
+
+def test_object_not_found_still_uploads_and_skips_relations(api, login, add_uploaded, worker, services, fake):
+    """Design: "Object not found: the file is still uploaded; Relations are skipped" (e.g. deleted after checks)."""
+    login()
+    job = new_job(api)
+    rows = add_uploaded(job, ["15-1234_g.jpg"])
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    for o in fake.objects.values():  # the object disappears after scheduling
+        if o["objectNumber"] == "15-1234":
+            o["deleted"] = True
+    worker.tick()
+    st = api.get(f"/api/jobs/{job}").json()["rows"][0]["result"]
+    assert st["state"] == "Partial" and st["error"]["code"] == "objnotfound"
+    assert st["steps"]["upload"]["s"] == "done"
+    assert st["steps"]["relMediaObject"] == {"s": "skipped", "after": "findObject"}
+    assert len(fake.relations) == 0
+
+
+def test_media_failure_skips_upload_and_relations(api, login, add_uploaded, worker, fake):
+    """Design: "Media create fails: the upload and Relations are skipped" -> row Failed."""
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["20-0777.jpg"])
+    api.patch(f"/api/jobs/{job}/rows/1", json={"handling": "create"})
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    fake.fail_next["media"] = 500
+    worker.tick()
+    st = api.get(f"/api/jobs/{job}").json()["rows"][0]["result"]
+    assert st["state"] == "Failed"
+    assert st["steps"]["upload"] == {"s": "skipped", "after": "media"}
+    assert st["steps"]["createObject"]["s"] == "done"  # the Object step doesn't depend on Media
+    assert len(fake.blobs) == 0

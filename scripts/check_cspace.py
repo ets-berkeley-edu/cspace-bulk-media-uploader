@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Check the BMU's CollectionSpace calls against a real server (e.g. the Lyrasis QA tenant).
 
-Read-only by default. With --create it runs one real document through the worker's steps
-(blob, Media, skeletal Object, two Relations) using a tiny generated image; those records stay.
+Read-only by default. With --create it runs one real document through the worker's steps, in the
+design's order (Media record, then the file with PUT media/{csid}/blob, a skeletal Object and both
+Relations) using a tiny generated image; those records stay.
 
   export CSPACE_URL=https://pahma.qa.collectionspace.org CSPACE_USER=... CSPACE_PASSWORD=...
   python scripts/check_cspace.py --object 1-2345 --term smith [--create]
@@ -51,7 +52,7 @@ def main():
     if perms:
         print("     summary:", perms.summary)
         print("     resources:", {k: "".join(sorted(v)) for k, v in sorted(perms.resources.items()) if k in (
-            "media", "blobs", "relations", "collectionobjects", "personauthorities", "orgauthorities")})
+            "media", "relations", "collectionobjects", "personauthorities", "orgauthorities")})
     step(f"find object {a.object}", lambda: c.find_objects(a.object))
     step(f"find media id {a.object}", lambda: c.find_media(a.object))
     for kind, cfg in t.authorities.items():
@@ -62,12 +63,17 @@ def main():
     num = f"BMU-TEST-{int(time.time())}"
     row = new_row(t, f"{num}.png", len(PNG), "image/png")
     row["restricted"] = True
-    blob = step("create blob (POST /blobs)", lambda: c.create_blob(row["file"], io.BytesIO(PNG), "image/png"))
-    media = blob and step("create Media", lambda: c.create_media(media_xml(t, row, blob)))
-    obj = media and step(f"create Object {num}", lambda: c.create_object(object_xml(num)))
-    if obj:
+    # Same order as the worker (design): Media first, then the file with PUT media/{csid}/blob.
+    media = step("create Media (no blobCsid)", lambda: c.create_media(media_xml(t, row)))
+    if media:
+        blob = step("attach file (PUT media/{csid}/blob)", lambda: c.upload_file(media, row["file"], io.BytesIO(PNG), "image/png"))
+        step("read back the Media record's blobCsid", lambda: c.media_blob_csid(media))
+    obj = step(f"create Object {num}", lambda: c.create_object(object_xml(num)))
+    if media and obj:
+        step("existing relations Media -> Object (expect none)", lambda: c.find_relations(media, obj))
         step("relate Media -> Object", lambda: c.create_relation(relation_xml(media, "Media", obj, "CollectionObject")))
         step("relate Object -> Media", lambda: c.create_relation(relation_xml(obj, "CollectionObject", media, "Media")))
+        step("existing relations Media -> Object (expect one)", lambda: c.find_relations(media, obj))
         step(f"find object {num} again", lambda: c.find_objects(num))
     print(f"Created test records for {num}; they stay in CollectionSpace.")
 

@@ -13,9 +13,11 @@ This first iteration covers the **core run path for PAHMA**:
   Restricted, identification number, date, media type, creator/contributor/rights holder (autocomplete of
   existing authority terms; values are refNames), description and copyright.
 - Check against CollectionSpace (object found, not ambiguous, permissions, duplicate IDs) and Schedule.
-- A worker runs the job one row at a time: upload the file (Blob), create the Media record, create the
-  skeletal Object if asked, and relate Media and Object both ways. Every step records its CSID, so a rerun
-  (Reschedule) skips what's done and never creates a record twice.
+- A worker runs the job one row at a time, following the design's steps: create the Media record, find (or
+  create the skeletal) Object, attach the file with a multipart `PUT media/{csid}/blob` (CollectionSpace
+  creates the Blob record and sets `blobCsid`), and relate Media and Object both ways. Each step records its
+  CSID; a step whose dependencies failed is skipped. A rerun (Reschedule) runs only unfinished steps,
+  retries an upload against the existing Media record, and checks for existing Relations first.
 - Credentials: the password is encrypted at rest (a session key while signed in, a separate job key while a
   job waits or runs, for at most 72 hours) and deleted when the run ends, whatever the outcome.
 - One job per tenant at a time (a lock with a heartbeat), and an audit entry for each run.
@@ -65,8 +67,8 @@ cd frontend && npm ci && npm test && npm run typecheck && npm run build
 
 ## Checking against the real CollectionSpace
 
-Several calls are marked `VERIFY` in `backend/bmu/cspace/client.py` (advanced search syntax, the
-`accountperms` format, authority search). Run the check script from a machine that can reach the server:
+Several calls are marked `VERIFY` in `backend/bmu/cspace/client.py` (`PUT media/{csid}/blob`'s multipart
+field name and response, advanced search syntax, the `accountperms` format, authority search, relation search). Run the check script from a machine that can reach the server:
 
 ```sh
 pip install -e backend

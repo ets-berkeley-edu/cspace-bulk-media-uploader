@@ -31,11 +31,14 @@ def _xml(doc: Element) -> bytes:
 _ISO = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
 
 
-def media_xml(tenant: Tenant, row: dict, blob_csid: str) -> bytes:
-    """Media record for a row. Authority fields are refNames; the UI only shows display names."""
+def media_xml(tenant: Tenant, row: dict) -> bytes:
+    """Media record for a row. Authority fields are refNames; the UI only shows display names.
+
+    blobCsid is not sent: the file is attached afterwards with PUT media/{csid}/blob, which creates
+    the Blob record and sets blobCsid itself.
+    """
     doc = _doc("media")
     common = _part(doc, "media_common", NS_MEDIA)
-    _add(common, "blobCsid", blob_csid)
     _add(common, "identificationNumber", row.get("idnum"))
     _add(common, "title", row.get("file"))
     if row.get("type"):

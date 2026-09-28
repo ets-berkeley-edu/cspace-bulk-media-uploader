@@ -50,11 +50,16 @@ async function load(id: string | null) {
 watch(() => props.jobId, (id) => (id && id === job.value?.id ? undefined : load(id).catch((e) => (message.value = { cls: "msg-block", text: e.message }))), { immediate: true });
 onBeforeUnmount(() => previews.forEach((u) => URL.revokeObjectURL(u)));
 
+// One job per editor, even if naming it and dropping files race each other.
+let creating: Promise<Job> | null = null;
 async function ensureJob(): Promise<Job> {
   if (job.value) return job.value;
-  job.value = await api.createJob(name.value.trim());
-  emit("opened", job.value.id);
-  return job.value;
+  creating ??= api.createJob(name.value.trim()).then((j) => {
+    job.value = j;
+    emit("opened", j.id);
+    return j;
+  });
+  return creating;
 }
 
 async function rename() {

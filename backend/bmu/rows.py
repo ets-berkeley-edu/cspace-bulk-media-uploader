@@ -68,8 +68,9 @@ def apply_edit(tenant: Tenant, row: dict, changes: dict[str, Any]) -> dict:
 
 
 def is_locked(row: dict) -> bool:
+    """True once the row has created anything in CollectionSpace (finding an existing object doesn't count)."""
     res = row.get("result") or {}
-    return any(st.get("csid") for st in (res.get("steps") or {}).values())
+    return any(st.get("csid") for name, st in (res.get("steps") or {}).items() if name != "findObject")
 
 
 _DATE = re.compile(r"^\d{4}(-\d{2}(-\d{2})?)?$")

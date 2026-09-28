@@ -21,9 +21,10 @@ const STATUS: Record<string, { text: string; cls: string }> = {
   Failed: { text: "Failed", cls: "b-danger" },
 };
 const STEP_LABEL: Record<string, string> = {
-  findObject: "Find object", createObject: "Create object", blob: "Upload file", media: "Create Media record",
-  relMediaObject: "Relate Media → Object", relObjectMedia: "Relate Object → Media",
+  media: "Create Media record", findObject: "Find object", createObject: "Create object",
+  upload: "Upload file (creates the Blob)", relMediaObject: "Relate Media → Object", relObjectMedia: "Relate Object → Media",
 };
+const MARK: Record<string, string> = { done: "✓", failed: "✗", skipped: "–" };
 
 const sorted = computed(() => [...jobs.value].sort((a, b) => b.updated - a.updated));
 
@@ -88,8 +89,10 @@ const pct = (j: Job, k: "done" | "failed") => (j.progress?.total ? (100 * (j.pro
                         <div v-if="r.result?.error" class="sub" style="color:var(--text-danger)">{{ r.result.error.detail }}</div></td>
                       <td class="steps">
                         <div v-for="(st, k) in r.result?.steps ?? {}" :key="k">
-                          {{ st.s === "done" ? "✓" : st.s === "failed" ? "✗" : "·" }} {{ STEP_LABEL[k] ?? k }}
+                          {{ MARK[st.s] ?? "·" }} {{ STEP_LABEL[k] ?? k }}
                           <code v-if="st.csid">{{ st.csid }}</code>
+                          <span v-else-if="st.s === 'skipped'" class="sub">(skipped: needs {{ STEP_LABEL[st.after ?? ""] ?? st.after }})</span>
+                          <span v-else-if="st.s === 'failed'" class="sub">({{ st.code }})</span>
                         </div>
                       </td>
                     </tr>

@@ -37,9 +37,12 @@ export interface Check {
 }
 
 export interface Step {
-  s: "done" | "failed" | "not run";
+  s: "done" | "failed" | "skipped" | "not run";
   csid?: string;
   run?: number;
+  after?: string; // skipped: the step it depended on
+  code?: string; // failed: the failure code
+  detail?: string;
 }
 
 export interface RowResult {
