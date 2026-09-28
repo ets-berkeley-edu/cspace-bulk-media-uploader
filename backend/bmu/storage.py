@@ -45,6 +45,14 @@ def _dyn(v: Any) -> Any:
     return v
 
 
+class RowChanged(Exception):
+    """A row was saved by someone else after it was read."""
+
+    def __init__(self, n: int):
+        super().__init__(f"Document {n} changed in the meantime.")
+        self.n = n
+
+
 def now() -> float:
     return time.time()
 
@@ -209,8 +217,56 @@ class Storage:
         item = self.jobs.get_item(Key={"PK": f"JOB#{job_id}", "SK": f"ROW#{n:05d}"}).get("Item")
         return _strip(_clean(item)) if item else None
 
-    def put_row(self, job_id: str, row: dict) -> None:
-        self.jobs.put_item(Item=_dyn({"PK": f"JOB#{job_id}", "SK": f"ROW#{row['n']:05d}", **row}))
+    def put_row(self, job_id: str, row: dict, guard: bool = True) -> None:
+        """Save a row's data and bump its version "v". Guarded: only if nobody saved it since it was read
+        (RowChanged otherwise), so a stale copy never overwrites newer data. The worker, the only writer
+        while a job runs, saves unguarded."""
+        old = int(row.get("v", 0))
+        row["v"] = old + 1
+        kw: dict[str, Any] = {}
+        if guard:
+            kw["ConditionExpression"] = Attr("v").not_exists() if old == 0 else Attr("v").eq(old)
+        try:
+            self.jobs.put_item(Item=_dyn({"PK": f"JOB#{job_id}", "SK": f"ROW#{row['n']:05d}", **row}), **kw)
+        except ClientError as e:
+            row["v"] = old
+            if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                raise RowChanged(row["n"]) from None
+            raise
+
+    def put_rows_all_or_none(self, job_id: str, rows: list[dict], originals: list[dict]) -> None:
+        """Save several edited rows, each guarded like put_row. If one changed since it was read, the rows
+        already saved are put back as they were (originals, read with the rows) and RowChanged is raised,
+        so a bulk change is never left half applied."""
+        done: list[tuple[dict, dict]] = []
+        try:
+            for row, orig in zip(rows, originals):
+                self.put_row(job_id, row)
+                done.append((row, orig))
+        except RowChanged:
+            for row, orig in reversed(done):
+                back = {**orig, "v": row["v"]}  # guarded on the version just written
+                try:
+                    self.put_row(job_id, back)
+                except RowChanged:
+                    pass  # changed again in the meantime: the newer save stands
+            raise
+
+    def save_checks(self, job_id: str, row: dict) -> bool:
+        """Save a row's checks and lookups only if its data hasn't changed since they were computed (same
+        "v"); otherwise a newer save has re-checked it already. Doesn't bump the version."""
+        old = int(row.get("v", 0))
+        try:
+            self.jobs.update_item(
+                Key={"PK": f"JOB#{job_id}", "SK": f"ROW#{row['n']:05d}"},
+                UpdateExpression="SET checks = :c, lookups = :l",
+                ConditionExpression=(Attr("PK").exists() & Attr("v").not_exists()) if old == 0 else Attr("v").eq(old),
+                ExpressionAttributeValues=_dyn({":c": row.get("checks", []), ":l": row.get("lookups", {})}))
+            return True
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                return False
+            raise
 
     def delete_row(self, job_id: str, n: int) -> None:
         self.jobs.delete_item(Key={"PK": f"JOB#{job_id}", "SK": f"ROW#{n:05d}"})

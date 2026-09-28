@@ -393,3 +393,54 @@ def test_failed_row_whose_object_step_ran_keeps_its_handling(api, login, add_upl
     r = api.post(f"/api/jobs/{job}/rows/bulk", json={"rows": [a["n"]], "changes": {"handling": "create"}})
     assert r.status_code == 409
     assert api.post(f"/api/jobs/{job}/rows/bulk", json={"rows": [a["n"]], "changes": {"restricted": True}}).status_code == 200
+
+
+def test_a_stale_check_never_overwrites_a_newer_upload_confirmation(api, login, services):
+    """Seen in a browser run: a batch check read the rows, the upload of one was confirmed, then the check
+    saved its stale copy and the row was stuck on "pending". Rows are versioned now."""
+    from bmu.rows import check_rows
+    from conftest import factory
+    login()
+    job = new_job(api)
+    row = api.post(f"/api/jobs/{job}/files", json={"files": [{"name": "15-1234_a.jpg", "size": 3, "type": "image/jpeg"}]}).json()["rows"][0]
+    stale = services.storage.get_rows(job)  # the batch check reads the rows...
+    services.storage.s3.put_object(Bucket=services.settings.s3_bucket, Key=row["s3Key"], Body=b"abc")
+    assert api.post(f"/api/jobs/{job}/rows/{row['n']}/uploaded").json()["row"]["upload"]["s"] == "done"
+    check_rows(services.tenant, stale, factory("admin", "admin"), {"media": True, "relations": True, "objects": True})
+    assert services.storage.save_checks(job, stale[0]) is False  # ...and its stale result is not saved
+    assert services.storage.get_row(job, row["n"])["upload"]["s"] == "done"
+
+
+def test_a_stale_row_edit_is_refused(api, login, add_uploaded, services):
+    from bmu.storage import RowChanged
+    login()
+    job = new_job(api)
+    n = add_uploaded(job, ["15-1234_a.jpg"])[0]["n"]
+    a, b = services.storage.get_row(job, n), services.storage.get_row(job, n)
+    a["description"] = "first"
+    services.storage.put_row(job, a)
+    b["description"] = "second"
+    try:
+        services.storage.put_row(job, b)
+        raise AssertionError("a stale copy was saved")
+    except RowChanged:
+        pass
+    assert services.storage.get_row(job, n)["description"] == "first"
+
+
+def test_bulk_save_puts_rows_back_if_one_changed_meanwhile(api, login, add_uploaded, services):
+    from bmu.storage import RowChanged
+    login()
+    job = new_job(api)
+    a, b = (services.storage.get_row(job, r["n"]) for r in add_uploaded(job, ["15-1234_a.jpg", "1-2345_1.jpg"]))
+    import copy
+    originals = copy.deepcopy([a, b])
+    other = services.storage.get_row(job, b["n"]); other["description"] = "someone else"; services.storage.put_row(job, other)
+    a["restricted"] = b["restricted"] = True
+    try:
+        services.storage.put_rows_all_or_none(job, [a, b], originals)
+        raise AssertionError("expected RowChanged")
+    except RowChanged:
+        pass
+    assert services.storage.get_row(job, a["n"])["restricted"] is False  # put back
+    assert services.storage.get_row(job, b["n"])["description"] == "someone else"

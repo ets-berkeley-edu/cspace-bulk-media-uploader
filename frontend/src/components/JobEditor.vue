@@ -102,6 +102,7 @@ async function rename() {
 function replace(row: Row) {
   const i = rows.value.findIndex((r) => r.n === row.n);
   if (i < 0) return;
+  if ((row.v ?? 0) < (rows.value[i].v ?? 0)) return; // a stale copy, e.g. a slow check that started earlier
   const local = rows.value[i].upload;
   rows.value[i] = { ...row, upload: ["uploading", "verifying"].includes(local.s) && row.upload.s === "pending" ? local : row.upload };
 }

@@ -1,6 +1,7 @@
 """BMU web API (FastAPI). The Vue app calls these endpoints; the worker runs scheduled jobs."""
 from __future__ import annotations
 
+import copy
 import hashlib
 import re
 import secrets
@@ -17,7 +18,7 @@ from .config import Settings, get_settings
 from .crypto import Crypto, make_crypto
 from .cspace import CSpaceClient, CSpaceError
 from .rows import PROBLEM_TEXT, apply_edit, check_rows, edit_problem, is_locked, new_row, worst
-from .storage import Storage, now
+from .storage import RowChanged, Storage, now
 from .tenant import Tenant, load_tenant
 
 COOKIE = "bmu_session"
@@ -60,6 +61,11 @@ def create_app(services: Services | None = None) -> FastAPI:
         resp = await call_next(request)
         resp.headers.setdefault("Cache-Control", "no-store")
         return resp
+
+    @app.exception_handler(RowChanged)
+    async def row_changed(request: Request, exc: RowChanged):
+        return JSONResponse({"detail": f"Document {exc.n} changed while you were working on it (for example its upload "
+                                       "finished). Nothing was saved; try again."}, status_code=409)
 
     _routes(app)
 
@@ -325,6 +331,7 @@ def _routes(app: FastAPI) -> None:
             raise HTTPException(409, {"message": f"{len(problems)} of the {len(targets)} documents can't take this change "
                                                  f"(document {n}: {PROBLEM_TEXT[p]}) Nothing was changed.",
                                       "rows": list(problems)})
+        originals = copy.deepcopy(targets)
         edited = []
         for r in targets:
             try:
@@ -332,8 +339,7 @@ def _routes(app: FastAPI) -> None:
             except ValueError as e:
                 raise HTTPException(422, f"{e} Nothing was changed.")
             edited.append(r)
-        for r in edited:
-            s.storage.put_row(job_id, r)
+        s.storage.put_rows_all_or_none(job_id, edited, originals)
         rc = _recheck(s, sess, job_id, targets={r["n"] for r in edited})
         changed = {r["n"] for r in edited} | {r["n"] for r in rc["changed"]}
         return {"rows": [r for r in rc["rows"] if r["n"] in changed]}
@@ -414,8 +420,8 @@ def _recheck(s: Services, sess: Session, job_id: str, targets: set[int] | None, 
         client.close()
     changed = []
     for r in rows:
-        if before[r["n"]] != (r.get("checks"), r.get("lookups")):
-            s.storage.put_row(job_id, r)
+        # Saved only if the row is unchanged since it was read; if not, whoever changed it re-checks it.
+        if before[r["n"]] != (r.get("checks"), r.get("lookups")) and s.storage.save_checks(job_id, r):
             changed.append(r)
     counts = {"block": 0, "warn": 0}
     for r in rows:

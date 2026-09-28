@@ -178,7 +178,7 @@ class Worker:
         res = row.get("result") or {}
         res.update(state="In progress", error=None, run=run_no)
         row["result"] = res
-        self.storage.put_row(job_id, row)
+        self.storage.put_row(job_id, row, guard=False)
         first_error = ""
         for name, deps in plan_steps(self.tenant, row):
             st = _step(row, name)
@@ -188,7 +188,7 @@ class Worker:
             if blocked:
                 st.clear()
                 st.update(s="skipped", after=blocked)
-                self.storage.put_row(job_id, row)
+                self.storage.put_row(job_id, row, guard=False)
                 continue
             try:
                 csid = self._do(client, name, row)
@@ -205,10 +205,10 @@ class Worker:
                     first_error = e.code
                     res["error"] = {"code": e.code, "detail": e.detail, "step": name}
                 if e.code in JOB_LEVEL:
-                    self.storage.put_row(job_id, row)
+                    self.storage.put_row(job_id, row, guard=False)
                     break
             finally:
-                self.storage.put_row(job_id, row)
+                self.storage.put_row(job_id, row, guard=False)
         steps = res["steps"]
         if all(st.get("s") == "done" for st in steps.values()):
             res["state"] = "Done"
@@ -220,7 +220,7 @@ class Worker:
         if res["state"] != "Done" and not res.get("error"):
             skipped = next(n for n, st in steps.items() if st.get("s") != "done")
             res["error"] = {"code": "skipped", "detail": f"Step {skipped} didn't run", "step": skipped}
-        self.storage.put_row(job_id, row)
+        self.storage.put_row(job_id, row, guard=False)
         return first_error
 
     def _delete_staged(self, row: dict) -> None:
