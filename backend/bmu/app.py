@@ -233,6 +233,21 @@ def _routes(app: FastAPI) -> None:
         finally:
             client.close()
 
+    # ---- dates: CollectionSpace's own parser, for the preview under the Date field ------------
+    @app.get("/api/dates/parse")
+    def parse_date(text: str, sess: Session = Depends(current_session), s: Services = Depends(svc)):
+        text = text.strip()
+        if not text:
+            return {"ok": True, "group": {}}
+        client = sess.client(s)
+        try:
+            group = client.parse_date(text[:200])
+        except CSpaceError as e:
+            raise _cspace_http(e)
+        finally:
+            client.close()
+        return {"ok": group is not None, "group": group or {}}
+
     # ---- vocabularies (languages): every term, for the repeating Language picker ---------------
     @app.get("/api/vocabularies/{name}")
     def vocabulary(name: str, sess: Session = Depends(current_session), s: Services = Depends(svc)):

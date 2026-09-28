@@ -41,7 +41,8 @@ def _repeating(c: CSpaceClient, media: str) -> dict:
     from defusedxml import ElementTree as ET
     root = ET.fromstring(c._request("GET", f"media/{media}").content)
     vals = lambda tag: [e.text for e in root.iter() if e.tag.rsplit("}", 1)[-1] == tag]
-    return {"type": vals("type"), "language": vals("language")}
+    date = {e.tag.rsplit("}", 1)[-1]: e.text for g in root.iter() if g.tag.rsplit("}", 1)[-1] == "dateGroup" for e in g if e.text}
+    return {"type": vals("type"), "language": vals("language"), "date": date}
 
 
 def main():
@@ -68,6 +69,9 @@ def main():
     langs = step("languages vocabulary (count, first 5)", lambda: (lambda ts: (len(ts), [x["displayName"] for x in ts[:5]]))(c.vocabulary_items("languages")))
     step("tenant's default language is in it", lambda: t.language_default in {x["refName"] for x in c.vocabulary_items("languages")}
          or f"NOT FOUND: {t.language_default}")
+    for d in ("circa 1850", "1920s", "March 3, 1911"):
+        step(f"parse date '{d}' (structureddates)", lambda d=d: c.parse_date(d))
+    step("parse date 'the twenties' (expect None)", lambda: c.parse_date("the twenties"))
     if not a.create:
         print("Read-only checks done. Add --create to test creating records.")
         return
@@ -78,12 +82,15 @@ def main():
     row["type"] = [o.value for o in t.media_types[:2]]
     others = [x["refName"] for x in c.vocabulary_items("languages") if x["refName"] != t.language_default][:1]
     row["language"] = [t.language_default] + others
+    # a structured date, parsed by CollectionSpace (design: Structured dates)
+    row["date"] = "circa 1850"
+    row["lookups"] = {"date": {"value": row["date"], "ok": True, "group": c.parse_date(row["date"]) or {}}}
     # Same order as the worker (design): Media first, then the file with PUT media/{csid}/blob.
     media = step("create Media (no blobCsid)", lambda: c.create_media(media_xml(t, row)))
     if media:
         blob = step("attach file (PUT media/{csid}/blob)", lambda: c.upload_file(media, row["file"], io.BytesIO(PNG), "image/png"))
         step("read back the Media record's blobCsid", lambda: c.media_blob_csid(media))
-        step(f"read back types {row['type']} and {len(row['language'])} languages", lambda: _repeating(c, media))
+        step(f"read back types {row['type']}, {len(row['language'])} languages and the date", lambda: _repeating(c, media))
     obj = step(f"create Object {num}", lambda: c.create_object(object_xml(num)))
     if media and obj:
         step("existing relations Media -> Object (expect none)", lambda: c.find_relations(media, obj))

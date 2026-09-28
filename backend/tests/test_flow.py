@@ -521,3 +521,31 @@ def test_rows_saved_with_a_single_media_type_are_upgraded(api, login, add_upload
     row["type"] = "image"  # as saved before media type was repeating
     services.storage.put_row(job, row)
     assert services.storage.get_row(job, n)["type"] == ["image"]
+
+
+# ---- structured dates (design: Structured dates) ---------------------------------------------------
+def test_dates_are_parsed_by_collectionspace_and_saved_structured(api, login, add_uploaded, worker, fake):
+    login()
+    assert api.get("/api/dates/parse", params={"text": "circa 1850"}).json()["group"]["dateEarliestSingleCertainty"] == "approximate"
+    assert api.get("/api/dates/parse", params={"text": "sometime"}).json() == {"ok": False, "group": {}}
+    job = new_job(api)
+    n = add_uploaded(job, ["15-1234_a.jpg"])[0]["n"]
+    row = api.patch(f"/api/jobs/{job}/rows/{n}", json={"date": "1920s"}).json()["row"]
+    assert not _checks(row, "block") and row["lookups"]["date"]["group"]["dateLatestYear"] == "1929"
+    row = api.patch(f"/api/jobs/{job}/rows/{n}", json={"date": "the twenties"}).json()["row"]
+    assert any("can't interpret the date" in t for t in _checks(row, "block"))
+    api.patch(f"/api/jobs/{job}/rows/{n}", json={"date": "circa 1850"})
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    worker.tick()
+    xml = next(m["xml"] for m in fake.media.values() if "xml" in m)
+    assert "<dateDisplayDate>circa 1850</dateDisplayDate>" in xml
+    assert "<dateEarliestSingleYear>1850</dateEarliestSingleYear>" in xml and "approximate" in xml
+
+
+def test_clearing_the_date_clears_its_parse(api, login, add_uploaded):
+    login()
+    job = new_job(api)
+    n = add_uploaded(job, ["15-1234_a.jpg"])[0]["n"]
+    api.patch(f"/api/jobs/{job}/rows/{n}", json={"date": "nonsense"})
+    row = api.patch(f"/api/jobs/{job}/rows/{n}", json={"date": ""}).json()["row"]
+    assert "date" not in row["lookups"] and not _checks(row, "block")

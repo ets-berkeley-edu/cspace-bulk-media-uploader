@@ -51,6 +51,9 @@ export const api = {
   check: (id: string, rows?: number[]) =>
     request<{ rows: Row[]; counts: { block: number; warn: number } }>("POST", `/api/jobs/${id}/check`, rows ? { rows } : {}),
   schedule: (id: string) => request<Job>("POST", `/api/jobs/${id}/schedule`),
+  /** CollectionSpace's date parser (structureddates), for the preview under the Date field. */
+  parseDate: (text: string) =>
+    request<{ ok: boolean; group: Record<string, string> }>("GET", `/api/dates/parse?text=${encodeURIComponent(text)}`),
   vocabulary: (name: string) => request<{ terms: Term[] }>("GET", `/api/vocabularies/${name}`),
   terms: (field: string, q: string) =>
     request<{ terms: Term[] }>("GET", `/api/authorities?field=${encodeURIComponent(field)}&q=${encodeURIComponent(q)}`),

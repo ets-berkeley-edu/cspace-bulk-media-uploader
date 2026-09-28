@@ -157,6 +157,25 @@ class CSpaceClient:
                 out.append({"refName": ref, "displayName": name})
         return out
 
+    def parse_date(self, text: str) -> dict[str, str] | None:
+        """Parse a display date with CollectionSpace's own parser (GET structureddates?displayDate=), as the
+        CollectionSpace UI does. Returns the structured date group's fields (earliest and latest parts,
+        era, certainty, qualifiers and the scalar values used for searching), or None if CollectionSpace
+        can't interpret the text. VERIFY on QA: the response's element names (check_cspace.py prints them)."""
+        try:
+            r = self._request("GET", "structureddates", params={"displayDate": text})
+        except CSpaceError as e:
+            if e.status == 400:
+                return None
+            raise
+        root = SafeET.fromstring(r.content)
+        fields = {}
+        for el in root.iter():
+            name = _local(el.tag)
+            if (name.startswith("date") or name == "scalarValuesComputed") and len(el) == 0 and (el.text or "").strip():
+                fields[name] = el.text.strip()
+        return fields if any(k.startswith("dateEarliest") for k in fields) else None
+
     def vocabulary_items(self, vocabulary: str, limit: int = 1000) -> list[dict[str, str]]:
         """Every term of a vocabulary (e.g. languages), as refName and display name."""
         r = self._request("GET", f"vocabularies/urn:cspace:name({vocabulary})/items",

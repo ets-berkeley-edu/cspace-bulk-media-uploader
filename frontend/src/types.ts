@@ -83,7 +83,7 @@ export interface Row {
   upload: { s: "pending" | "uploading" | "verifying" | "done" | "failed"; pct?: number; reason?: string };
   checks: Check[];
   /** The last CollectionSpace searches for this row (object number, identification number). */
-  lookups?: { object?: Lookup; media?: Lookup };
+  lookups?: { object?: Lookup; media?: Lookup; date?: { value: string; ok: boolean; group: Record<string, string> } };
   result: RowResult | null;
   s3Key?: string;
   uploadForm?: { url: string; fields: Record<string, string> };

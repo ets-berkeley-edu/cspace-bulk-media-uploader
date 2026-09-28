@@ -187,6 +187,56 @@ def search_terms(service: str, vocab: str, request: Request):
     return _xml(f'<ns2:abstract-common-list xmlns:ns2="http://collectionspace.org/services/jaxb">{items}</ns2:abstract-common-list>')
 
 
+_MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october",
+           "november", "december"]
+
+
+def _fake_parse_date(text: str) -> dict | None:
+    """A small stand-in for CollectionSpace's date parser (it understands far more). Returns the group or None."""
+    import calendar
+    t, cert = text.strip(), ""
+    if m := re.match(r"^(?:circa|ca\.?|c\.)\s*(.+)$", t, re.I):
+        cert, t = "approximate", m.group(1)
+    def day(y, mo, d):
+        return (y, mo, d) if 1 <= mo <= 12 and 1 <= d <= calendar.monthrange(y, mo)[1] else None
+    e = l = None
+    if m := re.match(r"^(\d{4})-(\d{2})-(\d{2})$", t):
+        e = l = day(*map(int, m.groups()))
+    elif m := re.match(r"^(\d{4})-(\d{2})$", t):
+        y, mo = map(int, m.groups())
+        if 1 <= mo <= 12:
+            e, l = (y, mo, 1), (y, mo, calendar.monthrange(y, mo)[1])
+    elif m := re.match(r"^(\d{4})$", t):
+        y = int(m.group(1)); e, l = (y, 1, 1), (y, 12, 31)
+    elif (m := re.match(r"^(\d{3}0)s$", t)):
+        y = int(m.group(1)); e, l = (y, 1, 1), (y + 9, 12, 31)
+    elif (m := re.match(r"^(\d{4})\s*(?:-|–|to)\s*(\d{4})$", t, re.I)) and int(m.group(2)) >= int(m.group(1)):
+        e, l = (int(m.group(1)), 1, 1), (int(m.group(2)), 12, 31)
+    elif (m := re.match(r"^([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})$", t)) and m.group(1).lower() in _MONTHS:
+        e = l = day(int(m.group(3)), _MONTHS.index(m.group(1).lower()) + 1, int(m.group(2)))
+    if not e or not l:
+        return None
+    era = f"urn:cspace:{DOMAIN}:vocabularies:name(dateera):item:name(ce)'CE'"
+    g = {"dateDisplayDate": text, "dateEarliestSingleYear": e[0], "dateEarliestSingleMonth": e[1], "dateEarliestSingleDay": e[2],
+         "dateEarliestSingleEra": era, "dateLatestYear": l[0], "dateLatestMonth": l[1], "dateLatestDay": l[2], "dateLatestEra": era,
+         "dateEarliestScalarValue": f"{e[0]:04d}-{e[1]:02d}-{e[2]:02d}T00:00:00.000Z",
+         "dateLatestScalarValue": f"{l[0]:04d}-{l[1]:02d}-{l[2]:02d}T00:00:00.000Z", "scalarValuesComputed": "true"}
+    if cert:
+        g["dateEarliestSingleCertainty"] = g["dateLatestCertainty"] = cert
+    return g
+
+
+@app.get("/cspace-services/structureddates")
+def structured_dates(request: Request):
+    if not _user(request):
+        return _deny()
+    g = _fake_parse_date(request.query_params.get("displayDate", ""))
+    if g is None:
+        return Response(status_code=400)
+    fields = "".join(f"<{k}>{escape(str(v))}</{k}>" for k, v in g.items())
+    return _xml(f'<ns2:structureddate_common xmlns:ns2="http://collectionspace.org/services/structureddate">{fields}</ns2:structureddate_common>')
+
+
 @app.post("/cspace-services/media")
 async def create_media(request: Request):
     if (d := _check(request, "media", "C")):
