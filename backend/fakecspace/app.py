@@ -155,8 +155,24 @@ def search_media(request: Request):
     return _search(request, store.media, "identificationNumber", "media")
 
 
+# A few terms of the languages vocabulary (the real one is much longer).
+LANGUAGES = {"eng": "English", "spa": "Spanish", "fre": "French", "ger": "German", "chi": "Chinese", "jpn": "Japanese",
+             "haw": "Hawaiian", "nav": "Navajo"}
+
+
+def _language_ref(code: str) -> str:
+    return f"urn:cspace:{DOMAIN}:vocabularies:name(languages):item:name({code})'{LANGUAGES[code]}'"
+
+
 @app.get("/cspace-services/{service}/urn:cspace:name({vocab})/items")
 def search_terms(service: str, vocab: str, request: Request):
+    if service == "vocabularies" and vocab == "languages":
+        if (d := _check(request, "vocabularies", "R")):
+            return d
+        items = "".join(f"<list-item><csid>{uuid.uuid5(uuid.NAMESPACE_URL, c)}</csid><shortIdentifier>{c}</shortIdentifier>"
+                        f"<displayName>{escape(n)}</displayName><refName>{escape(_language_ref(c))}</refName></list-item>"
+                        for c, n in LANGUAGES.items())
+        return _xml(f'<ns2:abstract-common-list xmlns:ns2="http://collectionspace.org/services/jaxb">{items}</ns2:abstract-common-list>')
     if service not in ("personauthorities", "orgauthorities"):
         return Response(status_code=404)
     if (d := _check(request, service, "R")):
@@ -208,6 +224,10 @@ def get_media(csid: str, request: Request):
     m = store.media.get(csid)
     if not m:
         return Response(status_code=404)
+    if m.get("xml"):  # the record as saved, with the blobCsid CollectionSpace set, like the real server
+        body = re.sub(r"<\?xml[^>]*\?>", "", m["xml"])
+        body = re.sub(r"(</[\w:]*media_common>)", f"<blobCsid>{m.get('blobCsid', '')}</blobCsid>\\1", body, count=1)
+        return _xml(body)
     return _xml(f'<document name="media"><ns2:media_common xmlns:ns2="http://collectionspace.org/services/media">'
                 f"<identificationNumber>{escape(m.get('identificationNumber', ''))}</identificationNumber>"
                 f"<blobCsid>{m.get('blobCsid', '')}</blobCsid></ns2:media_common></document>")

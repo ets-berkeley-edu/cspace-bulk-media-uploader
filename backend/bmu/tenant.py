@@ -21,6 +21,13 @@ class Handling:
 
 
 @dataclass(frozen=True)
+class Option:
+    """An option-list value and its display label, as in the tenant's UI configuration."""
+    value: str
+    label: str
+
+
+@dataclass(frozen=True)
 class Tenant:
     key: str
     name: str
@@ -30,10 +37,14 @@ class Tenant:
     publish: dict[str, Any]
     filename_hint: str
     filename_pattern: re.Pattern[str]
-    media_types: tuple[str, ...]
+    media_types: tuple[Option, ...]
     language_default: str
     authorities: dict[str, dict[str, str]]
     authority_fields: dict[str, list[str]] = field(default_factory=dict)
+
+    @property
+    def media_type_values(self) -> set[str]:
+        return {o.value for o in self.media_types}
 
     def handling_by_id(self, hid: str) -> Handling | None:
         return next((h for h in self.handling if h.id == hid), None)
@@ -45,7 +56,7 @@ class Tenant:
             "handling": [h.__dict__ for h in self.handling],
             "publish": self.publish,
             "filenameHint": self.filename_hint,
-            "mediaTypes": list(self.media_types),
+            "mediaTypes": [o.__dict__ for o in self.media_types],
             "languageDefault": self.language_default,
             "authorityFields": self.authority_fields,
         }
@@ -64,7 +75,8 @@ def load_tenant(key: str) -> Tenant:
         publish=raw["publish"],
         filename_hint=raw["filename"]["hint"],
         filename_pattern=re.compile(raw["filename"]["pattern"]),
-        media_types=tuple(raw["media_types"]),
+        media_types=tuple(Option(m, m) if isinstance(m, str) else Option(m["value"], m.get("label", m["value"]))
+                          for m in raw["media_types"]),
         language_default=raw["language"]["default"],
         authorities=raw["authorities"],
         authority_fields=raw.get("authority_fields", {}),

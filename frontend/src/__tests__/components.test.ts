@@ -40,7 +40,7 @@ describe("AuthorityInput", () => {
 });
 
 const tenant: TenantInfo = {
-  key: "pahma", name: "PAHMA", filenameHint: "hint", mediaTypes: ["image"], languageDefault: "", authorityFields: {},
+  key: "pahma", name: "PAHMA", filenameHint: "hint", mediaTypes: [{ value: "image", label: "image" }, { value: "slide", label: "slide" }], languageDefault: "", authorityFields: {},
   publish: { field: "approvedForWeb", header: "Restricted", invert: true },
   handling: [{ id: "link", label: "Link to existing object", object: "existing", id_rule: "object" },
              { id: "create", label: "Create new object + link", object: "create", id_rule: "object" }],
@@ -48,7 +48,7 @@ const tenant: TenantInfo = {
 const perms: Perms = { media: true, relations: true, objects: true, readObjects: true, authorities: true };
 function row(p: Partial<Row> = {}): Row {
   return { n: 1, file: "15-1234_a.jpg", size: 10, contentType: "image/jpeg", handling: "link", obj: "15-1234", objParsed: "15-1234",
-    img: "15-1234_a", parseOk: true, idnum: "15-1234", date: "", restricted: false, type: "", creator: "", contributor: "",
+    img: "15-1234_a", parseOk: true, idnum: "15-1234", date: "", restricted: false, type: [], creator: "", contributor: "",
     rightsHolder: "", description: "", copyright: "", include: true, upload: { s: "done" }, checks: [], result: null, ...p };
 }
 
@@ -90,5 +90,31 @@ describe("DocumentRow checks", () => {
     expect(mountRow({ row: row({ upload: { s: "uploading", pct: 40 } }) }).text()).toContain("Uploading 40%");
     expect(mountRow({ row: row({ upload: { s: "verifying" } }) }).text()).toContain("Verifying…");
     expect(mountRow({ row: row(), checking: true }).text()).toContain("Checking…");
+  });
+});
+
+import RepeatingSelect from "../components/RepeatingSelect.vue";
+
+describe("RepeatingSelect (design: repeating media type and language)", () => {
+  const options = [{ value: "still_image", label: "still image" }, { value: "document", label: "document" }];
+
+  it("shows labels, stores values, and adds or removes values", async () => {
+    const w = mount(RepeatingSelect, { props: { modelValue: ["still_image"], options, label: "Media type", word: "type" } });
+    expect(w.find("select option:checked").text()).toBe("still image");
+    await w.find("button.link").trigger("click"); // + Add an additional type
+    const selects = w.findAll("select");
+    expect(selects).toHaveLength(2);
+    expect(selects[1].find('option[value="still_image"]').attributes("disabled")).toBeDefined(); // no repeats
+    await selects[1].setValue("document");
+    expect(w.emitted("update:modelValue")?.at(-1)).toEqual([["still_image", "document"]]);
+    await w.setProps({ modelValue: ["still_image", "document"] });
+    await w.findAll("button.x-btn")[0].trigger("click");
+    expect(w.emitted("update:modelValue")?.at(-1)).toEqual([["document"]]);
+  });
+
+  it("keeps a stored value that isn't among the options, showing its display name", () => {
+    const ref = "urn:cspace:pahma.cspace.berkeley.edu:vocabularies:name(languages):item:name(eng)'English'";
+    const w = mount(RepeatingSelect, { props: { modelValue: [ref], options: [], label: "Language", word: "language" } });
+    expect(w.find("select option:checked").text()).toBe("English");
   });
 });

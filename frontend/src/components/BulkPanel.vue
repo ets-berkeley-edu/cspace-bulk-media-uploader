@@ -7,10 +7,12 @@
 import { computed, reactive, ref } from "vue";
 import { applyAllTargets, bulkCheck, includeTargets, type BulkChanges } from "../lib/bulk";
 import { handlingBlocked } from "../lib/status";
-import type { Perms, Row, TenantInfo } from "../types";
+import type { Option, Perms, Row, TenantInfo } from "../types";
 import AuthorityInput from "./AuthorityInput.vue";
 
-const props = defineProps<{ rows: Row[]; selected: Set<number>; tenant: TenantInfo; perms: Perms; readonly: boolean; busy: boolean }>();
+const props = defineProps<{
+  rows: Row[]; selected: Set<number>; tenant: TenantInfo; perms: Perms; readonly: boolean; busy: boolean; languages?: Option[];
+}>();
 const emit = defineEmits<{ apply: [targets: number[], changes: BulkChanges]; include: [targets: number[], include: boolean] }>();
 
 const KEY = "bmuPanelCollapsed";
@@ -24,9 +26,9 @@ function toggle(open?: boolean) {
 }
 
 // The panel's choices: "" means no change.
-const choice = reactive({ handling: "", publish: "", type: "", creator: "", contributor: "", rightsHolder: "" });
+const choice = reactive({ handling: "", publish: "", type: "", language: "", creator: "", contributor: "", rightsHolder: "" });
 function reset() {
-  Object.assign(choice, { handling: "", publish: "", type: "", creator: "", contributor: "", rightsHolder: "" });
+  Object.assign(choice, { handling: "", publish: "", type: "", language: "", creator: "", contributor: "", rightsHolder: "" });
 }
 defineExpose({ reset });
 
@@ -34,7 +36,9 @@ const changes = computed<BulkChanges>(() => {
   const c: BulkChanges = {};
   if (choice.handling) c.handling = choice.handling;
   if (choice.publish) c.restricted = choice.publish === "yes";
-  if (choice.type) c.type = choice.type;
+  // Repeating fields: the chosen value replaces a document's values (as in the UI mockup).
+  if (choice.type) c.type = [choice.type];
+  if (choice.language) c.language = [choice.language];
   if (choice.creator) c.creator = choice.creator;
   if (choice.contributor) c.contributor = choice.contributor;
   if (choice.rightsHolder) c.rightsHolder = choice.rightsHolder;
@@ -91,11 +95,16 @@ function applyAll() {
         </div>
 
         <div class="section-title">CollectionSpace Media fields</div>
-        <div class="section-hint">Leave a field blank to keep each document’s current value.</div>
+        <div class="section-hint">Leave a field blank to keep each document’s current value. A media type or language
+          replaces the document’s current ones.</div>
         <div class="bulk-group">
           <select v-model="choice.type" aria-label="Media type for selected" :disabled="readonly">
             <option value="">Media type — no change</option>
-            <option v-for="t in tenant.mediaTypes" :key="t" :value="t">{{ t }}</option>
+            <option v-for="t in tenant.mediaTypes" :key="t.value" :value="t.value">{{ t.label }}</option>
+          </select>
+          <select v-model="choice.language" aria-label="Language for selected" :disabled="readonly">
+            <option value="">Language — no change</option>
+            <option v-for="l in languages ?? []" :key="l.value" :value="l.value">{{ l.label }}</option>
           </select>
           <AuthorityInput v-if="hasField('creator')" field="creator" label="Creator" :model-value="choice.creator" :disabled="readonly"
                           @update:model-value="choice.creator = $event" />

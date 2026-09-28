@@ -8,8 +8,12 @@ from typing import Any, Callable
 from .cspace import CSpaceClient, CSpaceError
 from .tenant import Tenant, parse_filename
 
-EDITABLE = {"handling", "obj", "idnum", "date", "restricted", "type", "creator", "contributor", "rightsHolder",
-            "description", "copyright", "include", "file"}
+EDITABLE = {"handling", "obj", "idnum", "date", "restricted", "type", "language", "creator", "contributor",
+            "rightsHolder", "description", "copyright", "include", "file"}
+# Repeating fields (design: Media record fields): media type values from the tenant's option list, and
+# language refNames from the languages vocabulary.
+REPEATING = {"type", "language"}
+_LANGUAGE_REF = re.compile(r"^urn:cspace:[^:]+:vocabularies:name\(languages\):item:name\([^)]+\)'[^']*'$")
 AUTHORITY_FIELDS = {"creator", "contributor", "rightsHolder"}
 
 ROW_STATES = ("Not started", "In progress", "Done", "Partial", "Failed")
@@ -21,7 +25,7 @@ def new_row(tenant: Tenant, filename: str, size: int, content_type: str) -> dict
         "file": filename, "fileOriginal": filename, "size": size, "contentType": content_type or "",
         "handling": tenant.handling[0].id, "objParsed": p["obj"], "obj": p["obj"], "img": p["img"], "parseOk": p["ok"],
         "idnum": "", "date": "", "restricted": bool(tenant.publish.get("default", False)),
-        "type": "", "creator": "", "contributor": "", "rightsHolder": "", "description": "", "copyright": "",
+        "type": [], "language": [tenant.language_default], "creator": "", "contributor": "", "rightsHolder": "", "description": "", "copyright": "",
         "include": True, "upload": {"s": "pending"}, "checks": [], "result": None, "touched": [],
     }
     row["idnum"] = default_idnum(tenant, row)
@@ -76,9 +80,16 @@ def apply_edit(tenant: Tenant, row: dict, changes: dict[str, Any]) -> dict:
                 raise ValueError(f"Unknown handling option {v!r}")
         elif k in ("restricted", "include"):
             v = bool(v)
-        elif k == "type":
-            if v and v not in tenant.media_types:
-                raise ValueError(f"Unknown media type {v!r}")
+        elif k in REPEATING:
+            if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
+                raise ValueError(f"{k} must be a list of values")
+            v = list(dict.fromkeys(x for x in v if x))  # no blanks, no repeats, order kept
+            if k == "type":
+                bad = [x for x in v if x not in tenant.media_type_values]
+                if bad:
+                    raise ValueError(f"Unknown media type {bad[0]!r}")
+            elif any(not _LANGUAGE_REF.match(x) for x in v):
+                raise ValueError("language must be refNames chosen from the languages vocabulary")
         elif k in AUTHORITY_FIELDS:
             if v and not v.startswith("urn:cspace:"):
                 raise ValueError(f"{k} must be a refName chosen from the authority")

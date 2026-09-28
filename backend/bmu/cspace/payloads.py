@@ -31,6 +31,11 @@ def _xml(doc: Element) -> bytes:
 _ISO = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
 
 
+def _as_list(v) -> list:
+    """Repeating fields are lists; rows saved before they were repeating hold a single string."""
+    return list(v) if isinstance(v, (list, tuple)) else ([v] if v else [])
+
+
 def media_xml(tenant: Tenant, row: dict) -> bytes:
     """Media record for a row. Authority fields are refNames; the UI only shows display names.
 
@@ -41,8 +46,11 @@ def media_xml(tenant: Tenant, row: dict) -> bytes:
     common = _part(doc, "media_common", NS_MEDIA)
     _add(common, "identificationNumber", row.get("idnum"))
     _add(common, "title", row.get("file"))
-    if row.get("type"):
-        _add(SubElement(common, "typeList"), "type", row["type"])
+    types = [t for t in _as_list(row.get("type")) if t]
+    if types:
+        tl = SubElement(common, "typeList")
+        for t in types:
+            _add(tl, "type", t)
     _add(common, "creator", row.get("creator"))
     _add(common, "contributor", row.get("contributor"))
     _add(common, "rightsHolder", row.get("rightsHolder"))
@@ -57,7 +65,7 @@ def media_xml(tenant: Tenant, row: dict) -> bytes:
             _add(grp, "dateEarliestSingleDay", str(int(d)))
             _add(grp, "dateEarliestScalarValue", f"{y}-{mo}-{d}")
             _add(grp, "dateLatestScalarValue", f"{y}-{mo}-{d}")
-    langs = row.get("languages") or [tenant.language_default]
+    langs = [x for x in _as_list(row.get("language")) if x] or [tenant.language_default]
     ll = SubElement(common, "languageList")
     for lang in langs:
         _add(ll, "language", lang)

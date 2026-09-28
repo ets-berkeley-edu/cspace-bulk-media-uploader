@@ -463,3 +463,61 @@ def test_rechecking_one_row_never_saves_partial_checks_for_another(api, login, s
     api.post(f"/api/jobs/{job}/rows/{a['n']}/uploaded")          # a's re-check also re-evaluates b
     row = services.storage.get_row(job, b["n"])
     assert any("No object 20-0502" in c["text"] for c in row["checks"])  # not wiped by a partial check
+
+
+# ---- repeating media type and language (design: Media record fields) ------------------------------
+ENG = "urn:cspace:pahma.cspace.berkeley.edu:vocabularies:name(languages):item:name(eng)'English'"
+SPA = "urn:cspace:pahma.cspace.berkeley.edu:vocabularies:name(languages):item:name(spa)'Spanish'"
+
+
+def test_media_type_and_language_repeat_and_reach_collectionspace(api, login, add_uploaded, worker, fake):
+    me = login()
+    assert {"value": "image", "label": "image"} in me["tenant"]["mediaTypes"]
+    job = new_job(api)
+    row = add_uploaded(job, ["15-1234_a.jpg"])[0]
+    assert row["type"] == [] and row["language"] == [ENG]  # the tenant's default language
+    r = api.patch(f"/api/jobs/{job}/rows/{row['n']}", json={"type": ["image", "", "slide", "image"], "language": [ENG, SPA]})
+    assert r.status_code == 200, r.text
+    assert r.json()["row"]["type"] == ["image", "slide"]  # blanks and repeats dropped, order kept
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    worker.tick()
+    xml = next(m["xml"] for m in fake.media.values() if "xml" in m)
+    assert xml.count("<type>") == 2 and "<type>slide</type>" in xml
+    assert xml.count("<language>") == 2 and "name(spa)" in xml
+
+
+def test_repeating_fields_accept_only_listed_values(api, login, add_uploaded):
+    login()
+    job = new_job(api)
+    n = add_uploaded(job, ["15-1234_a.jpg"])[0]["n"]
+    assert api.patch(f"/api/jobs/{job}/rows/{n}", json={"type": ["photograph"]}).status_code == 422
+    assert api.patch(f"/api/jobs/{job}/rows/{n}", json={"type": "image"}).status_code == 422
+    assert api.patch(f"/api/jobs/{job}/rows/{n}", json={"language": ["English"]}).status_code == 422
+    assert api.patch(f"/api/jobs/{job}/rows/{n}", json={"language": []}).status_code == 200  # the default is sent then
+
+
+def test_bulk_media_type_replaces_the_list(api, login, add_uploaded):
+    login()
+    job = new_job(api)
+    a, b = add_uploaded(job, ["15-1234_a.jpg", "1-2345_1.jpg"])
+    api.patch(f"/api/jobs/{job}/rows/{a['n']}", json={"type": ["image", "slide"]})
+    r = api.post(f"/api/jobs/{job}/rows/bulk", json={"rows": [a["n"], b["n"]], "changes": {"type": ["document"]}})
+    assert all(x["type"] == ["document"] for x in r.json()["rows"] if x["n"] in (a["n"], b["n"]))
+
+
+def test_languages_vocabulary(api, login):
+    login()
+    terms = api.get("/api/vocabularies/languages").json()["terms"]
+    assert {"refName": ENG, "displayName": "English"} in terms
+    assert [t["displayName"] for t in terms] == sorted(t["displayName"] for t in terms)
+    assert api.get("/api/vocabularies/materials").status_code == 404
+
+
+def test_rows_saved_with_a_single_media_type_are_upgraded(api, login, add_uploaded, services):
+    login()
+    job = new_job(api)
+    n = add_uploaded(job, ["15-1234_a.jpg"])[0]["n"]
+    row = services.storage.get_row(job, n)
+    row["type"] = "image"  # as saved before media type was repeating
+    services.storage.put_row(job, row)
+    assert services.storage.get_row(job, n)["type"] == ["image"]

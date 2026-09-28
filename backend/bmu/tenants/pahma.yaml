@@ -33,6 +33,8 @@ filename:
   hint: "Object number, optionally followed by _ and a suffix, e.g. 15-1234_a.jpg"
   pattern: '^(?P<obj>[A-Za-z0-9][A-Za-z0-9.-]*?)(?:_(?P<suffix>[A-Za-z0-9-]+))?$'
 
+# Media type option list (PAHMA's pahmaMediaTypes): the value is stored, the label shown. Entries can be
+# written as {value: still_image, label: still image} where they differ; PAHMA's values are their labels.
 media_types: [document, image, slide, audio, video]
 
 language:

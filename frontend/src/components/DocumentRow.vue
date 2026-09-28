@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import type { Perms, Row, TenantInfo } from "../types";
+import type { Option, Perms, Row, TenantInfo } from "../types";
 import { formatBytes } from "../lib/files";
 import { handlingBlocked, rowStatus, worstLevel } from "../lib/status";
 import AuthorityInput from "./AuthorityInput.vue";
+import RepeatingSelect from "./RepeatingSelect.vue";
 
 const props = defineProps<{
   row: Row; tenant: TenantInfo; perms: Perms; preview?: string; expanded: boolean; readonly: boolean; checking?: boolean;
-  selected?: boolean;
+  selected?: boolean; languages?: Option[];
 }>();
 const emit = defineEmits<{ edit: [changes: Partial<Row>]; remove: []; toggle: []; select: [on: boolean] }>();
 
@@ -64,11 +65,10 @@ function text(field: keyof Row, e: Event) {
           <input type="text" :value="row.idnum" :disabled="ro" @change="text('idnum', $event)" /></label>
         <label class="field"><span>Date</span>
           <input type="text" :value="row.date" placeholder="YYYY-MM-DD" :disabled="ro" @change="text('date', $event)" /></label>
-        <label class="field"><span>Media type</span>
-          <select :value="row.type" :disabled="ro" @change="text('type', $event)">
-            <option value="">—</option>
-            <option v-for="t in tenant.mediaTypes" :key="t" :value="t">{{ t }}</option>
-          </select></label>
+        <RepeatingSelect label="Media type" word="type" :model-value="row.type" :options="tenant.mediaTypes" :disabled="ro"
+                         @update:model-value="emit('edit', { type: $event })" />
+        <RepeatingSelect label="Language" word="language" :model-value="row.language ?? []" :options="languages ?? []" :disabled="ro"
+                         @update:model-value="emit('edit', { language: $event })" />
         <AuthorityInput field="creator" label="Creator" :model-value="row.creator" :disabled="ro" @update:model-value="emit('edit', { creator: $event })" />
         <AuthorityInput field="contributor" label="Contributor" :model-value="row.contributor" :disabled="ro" @update:model-value="emit('edit', { contributor: $event })" />
         <AuthorityInput field="rightsHolder" label="Rights holder" :model-value="row.rightsHolder" :disabled="ro" @update:model-value="emit('edit', { rightsHolder: $event })" />

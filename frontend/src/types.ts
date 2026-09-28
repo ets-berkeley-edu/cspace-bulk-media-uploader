@@ -5,13 +5,18 @@ export interface Handling {
   id_rule: "object" | "image";
 }
 
+export interface Option {
+  value: string;
+  label: string;
+}
+
 export interface TenantInfo {
   key: string;
   name: string;
   handling: Handling[];
   publish: { field: string; header: string; invert?: boolean; default?: boolean };
   filenameHint: string;
-  mediaTypes: string[];
+  mediaTypes: Option[];
   languageDefault: string;
   authorityFields: Record<string, string[]>;
 }
@@ -67,7 +72,8 @@ export interface Row {
   idnum: string;
   date: string;
   restricted: boolean;
-  type: string;
+  type: string[]; // repeating: media type values from the tenant's option list
+  language?: string[]; // repeating: refNames from the languages vocabulary
   creator: string;
   contributor: string;
   rightsHolder: string;

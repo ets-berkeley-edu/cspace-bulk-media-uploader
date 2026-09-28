@@ -157,6 +157,17 @@ class CSpaceClient:
                 out.append({"refName": ref, "displayName": name})
         return out
 
+    def vocabulary_items(self, vocabulary: str, limit: int = 1000) -> list[dict[str, str]]:
+        """Every term of a vocabulary (e.g. languages), as refName and display name."""
+        r = self._request("GET", f"vocabularies/urn:cspace:name({vocabulary})/items",
+                          params={"wf_deleted": "false", "pgSz": str(limit)})
+        out = []
+        for item in _items(SafeET.fromstring(r.content)):
+            ref = _text(item, "refName")
+            if ref:
+                out.append({"refName": ref, "displayName": _text(item, "displayName") or display_name(ref)})
+        return out
+
     # -- creates (the BMU never updates or deletes) ---------------------------------------
     def upload_file(self, media_csid: str, filename: str, stream: IO[bytes], content_type: str) -> str:
         """Attach the file to an existing Media record: multipart PUT media/{csid}/blob.

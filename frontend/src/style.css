@@ -134,3 +134,10 @@ code { font-size: 11px; }
   .bulk-side.collapsed .bulk-title { display: block; }
   .bulk-rail { display: none; }
 }
+
+/* repeating option picker (media type, language) */
+.repeating { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-secondary); }
+.repeating .rep-row { display: flex; gap: 4px; }
+.repeating select { flex: 1; min-width: 0; }
+.repeating .x-btn { width: 28px; padding: 0; }
+.repeating .link { align-self: flex-start; }

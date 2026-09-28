@@ -51,6 +51,7 @@ export const api = {
   check: (id: string, rows?: number[]) =>
     request<{ rows: Row[]; counts: { block: number; warn: number } }>("POST", `/api/jobs/${id}/check`, rows ? { rows } : {}),
   schedule: (id: string) => request<Job>("POST", `/api/jobs/${id}/schedule`),
+  vocabulary: (name: string) => request<{ terms: Term[] }>("GET", `/api/vocabularies/${name}`),
   terms: (field: string, q: string) =>
     request<{ terms: Term[] }>("GET", `/api/authorities?field=${encodeURIComponent(field)}&q=${encodeURIComponent(q)}`),
 };

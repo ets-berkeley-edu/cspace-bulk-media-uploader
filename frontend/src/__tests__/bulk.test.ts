@@ -6,7 +6,7 @@ import type { Perms, Row, TenantInfo } from "../types";
 
 function row(p: Partial<Row> = {}): Row {
   return { n: 1, file: "15-1234_a.jpg", size: 10, contentType: "image/jpeg", handling: "link", obj: "15-1234", objParsed: "15-1234",
-    img: "15-1234_a", parseOk: true, idnum: "15-1234", date: "", restricted: false, type: "", creator: "", contributor: "",
+    img: "15-1234_a", parseOk: true, idnum: "15-1234", date: "", restricted: false, type: [], creator: "", contributor: "",
     rightsHolder: "", description: "", copyright: "", include: true, upload: { s: "done" }, checks: [], result: null, ...p };
 }
 const partial = (n: number) => row({ n, result: { state: "Partial", steps: { media: { s: "done", csid: "m" } } } });
@@ -46,7 +46,7 @@ describe("bulk rules (design: Bulk-change panel)", () => {
 });
 
 const tenant: TenantInfo = {
-  key: "pahma", name: "PAHMA", filenameHint: "hint", mediaTypes: ["image"], languageDefault: "", authorityFields: {},
+  key: "pahma", name: "PAHMA", filenameHint: "hint", mediaTypes: [{ value: "image", label: "image" }, { value: "slide", label: "slide" }], languageDefault: "", authorityFields: {},
   publish: { field: "approvedForWeb", header: "Restricted", invert: true },
   handling: [{ id: "link", label: "Link to existing object", object: "existing", id_rule: "object" },
              { id: "create", label: "Create new object + link", object: "create", id_rule: "object" }],
@@ -79,5 +79,17 @@ describe("BulkPanel", () => {
     await w.setProps({ selected: new Set([2]) });
     await w.findAll("button").find((b) => b.text() === "Disable selected")!.trigger("click");
     expect(w.emitted("include")?.[0]).toEqual([[2], false]);
+  });
+});
+
+describe("bulk repeating fields", () => {
+  it("replaces a document's media types with the chosen one", async () => {
+    const rows = [row({ type: ["image", "slide"] }), row({ n: 2, type: ["slide"] })];
+    expect(bulkCheck(rows, { type: ["slide"] }, false).ok).toBe(true);   // row 1 changes
+    expect(bulkCheck([rows[1]], { type: ["slide"] }, false).neutral).toBe(true); // already exactly that
+    const w = mount(BulkPanel, { props: { rows, selected: new Set([1, 2]), tenant, perms, readonly: false, busy: false } });
+    await w.find('select[aria-label="Media type for selected"]').setValue("slide");
+    await w.findAll("button").find((b) => b.text() === "Apply to selected")!.trigger("click");
+    expect(w.emitted("apply")?.[0]).toEqual([[1, 2], { type: ["slide"] }]);
   });
 });
