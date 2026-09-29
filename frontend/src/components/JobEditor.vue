@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { api, ApiError } from "../api";
 import { canPreview, formatTime, readExifDate, uploadToS3 } from "../lib/files";
 import { jobCounts, worstLevel } from "../lib/status";
+import { failureOf, loadFailures, OUTCOME } from "../lib/results";
 import type { Job, Me, Option, Row, RowChange } from "../types";
 import type { BulkChanges } from "../lib/bulk";
 import BulkPanel from "./BulkPanel.vue";
@@ -26,11 +27,12 @@ api.vocabulary("languages")
   .then((r) => { languages.value = r.terms.map((t) => ({ value: t.refName, label: t.displayName })); })
   .catch((e) => { message.value = { cls: "msg-warn", text: `Couldn't load the languages list: ${(e as Error).message}` }; });
 const bulkPanel = ref<InstanceType<typeof BulkPanel> | null>(null);
+loadFailures();
 const allSelected = computed(() => rows.value.length > 0 && rows.value.every((r) => selected.has(r.n)));
 const drag = ref(false);
 const fileInput = ref<HTMLInputElement | null>(null);
 
-const readonly = computed(() => !!job.value && !["Draft", "NeedsAttention", "Failed"].includes(job.value.status));
+const readonly = computed(() => !!job.value && job.value.status !== "Draft");
 // Drafts have one editor at a time: this page can change the job only while it is the draft's editor.
 const editable = computed(() => !job.value || (job.value.status === "Draft" && !!job.value.editingByYou));
 const lockedBy = computed(() => job.value?.status === "Draft" && job.value.editingBy && !job.value.editingByYou
@@ -90,10 +92,20 @@ async function failed(e: unknown) {
   if (e instanceof ApiError && e.status === 409 && (e.detail as { code?: string } | null)?.code === "not_editing") await refreshJob();
 }
 
+/** A job that has run becomes Completed as soon as every document is done or disabled (design: Job states). */
+function completedNote() {
+  if (job.value?.status === "Completed") {
+    message.value = { cls: "msg-info", text: "Every document is now done or disabled, so the job is Completed. It's under Finished jobs and is removed 30 days from now." };
+    return true;
+  }
+  return false;
+}
+
 async function saveDraft() {
   if (!job.value) return;
   try {
     job.value = await api.saveDraft(job.value.id);
+    if (completedNote()) return;
     const exp = job.value.expiresAt ? new Date(job.value.expiresAt * 1000).toLocaleDateString(undefined, { dateStyle: "medium" }) : "";
     savedNote.value = `Draft saved at ${formatTime(job.value.lastSavedAt)}` + (counts.value.block ? `; ${counts.value.block} document(s) still need fixing before it can be scheduled` : "")
       + (exp ? `. Unless it's changed or saved again, it expires on ${exp}.` : ".");
@@ -183,7 +195,22 @@ async function addFiles(list: FileList | File[] | null) {
   }
 }
 
-async function uploadOne(jobId: string, row: Row, file: File) {
+/** Replace the file of a document whose Media record exists; the rerun uploads it to that record. */
+async function replaceFile(row: Row, file: File) {
+  if (!job.value) return;
+  try {
+    const r = await api.replaceFile(job.value.id, row.n, { name: file.name, size: file.size, type: file.type });
+    replace(r.row);
+    const old = previews.get(row.n);
+    if (old) URL.revokeObjectURL(old);
+    if (canPreview(file)) previews.set(row.n, URL.createObjectURL(file));
+    await uploadOne(job.value.id, { ...r.row, uploadForm: r.uploadForm }, file, false);
+  } catch (e) {
+    await failed(e);
+  }
+}
+
+async function uploadOne(jobId: string, row: Row, file: File, exif = true) {
   const live = () => rows.value.find((r) => r.n === row.n);
   const set = (u: Row["upload"]) => { const r = live(); if (r) r.upload = u; };
   set({ s: "uploading", pct: 0 });
@@ -191,7 +218,7 @@ async function uploadOne(jobId: string, row: Row, file: File) {
     await uploadToS3(row.uploadForm!, file, (pct) => set({ s: "uploading", pct }));
     set({ s: "verifying" });
     let confirmed = await api.uploaded(jobId, row.n);
-    const date = await readExifDate(file);
+    const date = exif ? await readExifDate(file) : "";
     if (date && !confirmed.row.date) confirmed = await api.editRow(jobId, row.n, { date });
     set(confirmed.row.upload);
     apply(confirmed);
@@ -216,6 +243,16 @@ async function remove(row: Row) {
   if (!job.value) return;
   const r = await api.deleteRow(job.value.id, row.n).catch(failed);
   if (!r) return;
+  if (r.jobStatus && r.jobStatus !== "Draft") {
+    if (r.jobStatus === "Deleted") {
+      message.value = { cls: "msg-info", text: "That was the job's last document, so the job was deleted." };
+      job.value = null;
+      rows.value = [];
+      return;
+    }
+    await refreshJob();
+    completedNote();
+  }
   rows.value = rows.value.filter((x) => x.n !== row.n);
   selected.delete(row.n);
   r.others.forEach((o) => replace(o));
@@ -295,10 +332,15 @@ function toggle(n: number) {
       edited by you. Changes are saved as you make them. Schedule job moves it to the job queue.
       <button class="link" @click="emit('close')">Close this draft and start a new job</button>
     </div>
+    <div v-if="job?.fixFrom && job.status === 'Draft'" class="msg msg-warn">
+      <strong>Fixing after run {{ job.fixFrom.run }}</strong> (it {{ job.fixFrom.status === "Failed" ? "failed" : "needed attention" }}<template
+        v-if="job.fixFrom.code">: {{ failureOf(job.fixFrom.code).title }}</template>). Documents already created in CollectionSpace are read-only;
+      one whose Media record exists takes only what the rerun still needs. Scheduling queues run {{ job.fixFrom.run + 1 }}, which skips everything
+      already done. If the job isn't scheduled within 30 days of the last change, these edits are discarded and it returns to Finished jobs as it was.
+    </div>
     <div v-if="job && job.status !== 'Draft'" class="msg msg-info">
-      This job is {{ job.status }}.
-      <template v-if="job.status === 'NeedsAttention' || job.status === 'Failed'">Reschedule reruns only what's unfinished; finished steps are skipped.</template>
-      <template v-else>It can't be changed.</template>
+      This job is {{ OUTCOME[job.status]?.text ?? job.status }}; it can't be changed here.
+      <template v-if="job.status === 'NeedsAttention' || job.status === 'Failed'">Use Fix and reschedule under Finished jobs.</template>
     </div>
     <div v-if="job?.note" class="msg msg-warn">{{ job.note }}</div>
     <label class="field"><span><strong>Job name</strong></span>
@@ -337,7 +379,7 @@ function toggle(n: number) {
           <DocumentRow v-for="r in rows" :key="r.n" :row="r" :tenant="me.tenant" :perms="me.perms" :checking="checking.has(r.n)" :preview="previews.get(r.n)"
                        :expanded="expanded.has(r.n)" :readonly="readonly || !editable" :selected="selected.has(r.n)" :languages="languages"
                        :other-names="rows.filter((x) => x.n !== r.n).map((x) => x.file)"
-                       @toggle="toggle(r.n)" @edit="edit(r, $event)" @remove="remove(r)" @select="select(r.n, $event)" />
+                       @toggle="toggle(r.n)" @edit="edit(r, $event)" @remove="remove(r)" @select="select(r.n, $event)" @replace="replaceFile(r, $event)" />
         </tbody>
       </table>
     </div>

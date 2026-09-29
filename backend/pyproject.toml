@@ -30,7 +30,7 @@ build-backend = "setuptools.build_meta"
 include = ["bmu*", "fakecspace*"]
 
 [tool.setuptools.package-data]
-bmu = ["tenants/*.yaml"]
+bmu = ["tenants/*.yaml", "failures.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

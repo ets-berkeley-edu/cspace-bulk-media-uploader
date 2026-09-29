@@ -43,19 +43,65 @@ export interface Check {
 }
 
 export interface Step {
-  s: "done" | "failed" | "skipped" | "not run";
+  s: "done" | "failed" | "skipped" | "not run" | "not needed";
   csid?: string;
-  run?: number;
+  run?: number; // the run that did it
   after?: string; // skipped: the step it depended on
-  code?: string; // failed: the failure code
-  detail?: string;
+  code?: string; // failed: the failure code (see Failure)
+  detail?: string; // failed: technical detail (HTTP status and step)
+  found?: boolean; // done: an existing record was used, not one this job created
+  obj?: string; // an object step that failed: the object number it failed on
 }
 
 export interface RowResult {
   state: "Not started" | "In progress" | "Done" | "Partial" | "Failed";
   steps?: Record<string, Step>;
   error?: { code: string; detail: string; step: string } | null;
+  notices?: { code: string; detail: string }[];
   run?: number;
+}
+
+/** One entry of the failure catalog (design: Finished jobs and error messages). */
+export interface Failure {
+  title: string;
+  level: "row" | "job" | "notice" | "any";
+  explain: string;
+  fix: string;
+  needs_fix: boolean;
+}
+
+/** Documents by result. */
+export interface ResultCounts {
+  done: number;
+  partial: number;
+  failed: number;
+  notStarted: number;
+  disabled: number;
+}
+
+/** One run in a job's run history. */
+export interface Run {
+  run: number;
+  scheduledBy?: string;
+  scheduledAt?: number;
+  startedAt?: number;
+  endedAt?: number;
+  outcome: "Running" | "Completed" | "NeedsAttention" | "Failed";
+  code?: string;
+  counts?: ResultCounts;
+  cancelledBy?: string;
+  cancelledAt?: number;
+  disabledBefore?: { n: number; file: string; by: string; at?: number }[];
+  deletedBefore?: { n: number; file: string; by: string; at?: number }[];
+}
+
+/** What a job's runs created in CollectionSpace. */
+export interface Created {
+  media: number;
+  files: number;
+  objects: number;
+  relations: number;
+  unfinished: number;
 }
 
 export interface Row {
@@ -82,6 +128,10 @@ export interface Row {
   description: string;
   copyright: string;
   include: boolean;
+  disabledBy?: string;
+  disabledAt?: number;
+  skipLink?: boolean; // stop linking a Partial row's Media record to an object
+  replacedFor?: number; // the run whose rejected or lost file this row's file replaces
   upload: { s: "pending" | "uploading" | "verifying" | "done" | "failed"; pct?: number; reason?: string };
   checks: Check[];
   /** The last CollectionSpace searches for this row (object number, identification number). */
@@ -136,6 +186,11 @@ export interface Job {
   cancelRequested?: { by: string; at: number } | null;
   cancelledBy?: string;
   currentFile?: string;
+  // finished jobs (design: Finished jobs and error messages)
+  counts?: ResultCounts;
+  runBy?: string;
+  startedAt?: number;
+  fixFrom?: { status: "NeedsAttention" | "Failed"; code: string; run: number } | null;
 }
 
 export interface Term {

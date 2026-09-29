@@ -3,7 +3,7 @@ import { onMounted, ref } from "vue";
 import { api, ApiError } from "./api";
 import DraftsList from "./components/DraftsList.vue";
 import JobEditor from "./components/JobEditor.vue";
-import JobsList from "./components/JobsList.vue";
+import FinishedJobs from "./components/FinishedJobs.vue";
 import QueueList from "./components/QueueList.vue";
 import LoginForm from "./components/LoginForm.vue";
 import type { Job, Me } from "./types";
@@ -50,6 +50,7 @@ async function newJob() {
 
 async function openJob(id: string, m: "edit" | "preview" = "edit", since?: number) {
   await leaveCurrent(id);
+  notice.value = "";
   jobId.value = id;
   mode.value = m;
   takeOverSince.value = since ?? null;
@@ -93,7 +94,7 @@ async function scheduled(j: Job) {
                    @scheduled="scheduled" @opened="jobId = $event" @close="newJob" />
         <DraftsList v-if="tab === 'drafts'" @open="openJob" />
         <QueueList v-if="tab === 'queue'" @open="openJob" />
-        <JobsList v-if="tab === 'jobs'" @open="(id) => openJob(id)" />
+        <FinishedJobs v-if="tab === 'jobs'" :tenant="me.tenant" @open="(id) => openJob(id)" />
       </div>
     </template>
   </div>

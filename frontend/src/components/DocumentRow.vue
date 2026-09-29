@@ -4,18 +4,33 @@ import type { Option, Perms, Row, TenantInfo } from "../types";
 import { formatBytes } from "../lib/files";
 import { filenameProblems, idLabel, objectLabel } from "../lib/filenames";
 import { handlingBlocked, rowStatus, worstLevel } from "../lib/status";
+import { canReplaceFile, createdSomething, fixFields, mediaCreated, objectStepRan, stepList, STEP_MARK, stepNote } from "../lib/results";
 import AuthorityInput from "./AuthorityInput.vue";
 import DateInput from "./DateInput.vue";
+import ErrorBox from "./ErrorBox.vue";
 import RepeatingSelect from "./RepeatingSelect.vue";
 
 const props = defineProps<{
   row: Row; tenant: TenantInfo; perms: Perms; preview?: string; expanded: boolean; readonly: boolean; checking?: boolean;
   selected?: boolean; languages?: Option[]; otherNames?: string[];
 }>();
-const emit = defineEmits<{ edit: [changes: Partial<Row>]; remove: []; toggle: []; select: [on: boolean] }>();
+const emit = defineEmits<{ edit: [changes: Partial<Row>]; remove: []; toggle: []; select: [on: boolean]; replace: [file: File] }>();
 
-const locked = computed(() => Object.values(props.row.result?.steps ?? {}).some((s) => !!s.csid));
-const ro = computed(() => props.readonly || locked.value || !props.row.include);
+// After a run (design: Fixing a job after a run): a document whose Media record exists changes only what the
+// rerun still needs; a Failed one whose object step ran keeps its handling and object number.
+const created = computed(() => mediaCreated(props.row));
+const done = computed(() => props.row.result?.state === "Done");
+const ro = computed(() => props.readonly || created.value || !props.row.include);
+const objFixed = computed(() => !created.value && objectStepRan(props.row));
+const allowed = computed(() => fixFields(props.row));
+const canEditObj = computed(() => !props.readonly && props.row.include && (created.value ? allowed.value.obj : !objFixed.value));
+const replaceable = computed(() => !props.readonly && canReplaceFile(props.row));
+const replaceInput = ref<HTMLInputElement | null>(null);
+function pickReplacement(e: Event) {
+  const f = (e.target as HTMLInputElement).files?.[0];
+  if (f) emit("replace", f);
+  (e.target as HTMLInputElement).value = "";
+}
 const handling = computed(() => props.tenant.handling.find((h) => h.id === props.row.handling));
 
 const status = computed(() => rowStatus(props.row, props.tenant, props.checking));
@@ -53,7 +68,7 @@ function text(field: keyof Row, e: Event) {
       <div class="sub">{{ formatBytes(row.size) }}<template v-if="handling?.object !== 'none'"> · object {{ row.obj || "—" }}</template></div>
     </td>
     <td>
-      <select :value="row.handling" :disabled="ro || !row.include" aria-label="Handling" @change="emit('edit', { handling: ($event.target as HTMLSelectElement).value })">
+      <select :value="row.handling" :disabled="ro || objFixed" aria-label="Handling" :title="objFixed ? '🔒 The last run already found or created this document\'s object' : ''" @change="emit('edit', { handling: ($event.target as HTMLSelectElement).value })">
         <option v-for="h in tenant.handling" :key="h.id" :value="h.id" :disabled="!!handlingBlocked(h, perms) && h.id !== row.handling"
                 :title="handlingBlocked(h, perms)">{{ h.label }}{{ handlingBlocked(h, perms) ? " (no permission)" : "" }}</option>
       </select>
@@ -73,7 +88,41 @@ function text(field: keyof Row, e: Event) {
   </tr>
   <tr v-if="expanded" class="detail">
     <td colspan="8">
-      <div v-if="locked" class="msg msg-info">This document already created records in CollectionSpace, so it can't be changed here.</div>
+      <template v-if="created">
+        <div class="msg msg-info">
+          <template v-if="done">This document was fully created in CollectionSpace (Media record {{ row.result?.steps?.media?.csid }}). Nothing here can
+            change; to change the Media record, edit it in CollectionSpace.</template>
+          <template v-else>This document's Media record was already created in CollectionSpace ({{ row.result?.steps?.media?.csid }}), so its
+            fields, handling and publishing can't be changed here; to change them, edit the Media record in CollectionSpace. Below you can
+            change only what the rerun still needs.</template>
+        </div>
+        <div class="section-title">Last run</div>
+        <div class="steps" style="margin-bottom:6px">
+          <div v-for="s in stepList(row)" :key="s.key" :class="{ 'step-failed': s.step.s === 'failed' }">{{ STEP_MARK[s.step.s] }} {{ s.label }}
+            <code v-if="s.step.csid">{{ s.step.csid }}</code><span v-if="stepNote(s.key, s.step)" class="sub"> ({{ stepNote(s.key, s.step) }})</span></div>
+        </div>
+        <ErrorBox v-if="row.result?.error && !done" :code="row.result.error.code" :detail="row.result.error.detail" />
+        <div class="grid">
+          <div v-if="allowed.obj" class="field" :class="{ edited: objLabel.edited }">
+            <label><span>Object number <em class="num-state">{{ objLabel.text }}</em></span>
+              <input type="text" :value="row.obj" :disabled="!canEditObj" aria-label="Object number" @change="text('obj', $event)" /></label>
+          </div>
+          <label v-if="allowed.skipLink && !readonly" class="field wide check-line">
+            <input type="checkbox" :checked="!!row.skipLink" :disabled="!row.include"
+                   @change="emit('edit', { skipLink: ($event.target as HTMLInputElement).checked })" />
+            Stop linking this Media record to an object (the rerun skips the remaining object steps; the Media record keeps its
+            identification number)</label>
+          <div v-if="replaceable" class="field wide">
+            <span class="field-note" style="font-size:12px">{{ row.replacedFor === row.result?.run ? `Replacement file: ${row.file}` : `File: ${row.file}` }}</span>
+            <button type="button" @click="replaceInput?.click()">{{ row.replacedFor === row.result?.run ? "Choose another file…" : "Replace file…" }}</button>
+            <span class="field-note">The rerun uploads it to the existing Media record.</span>
+            <input ref="replaceInput" type="file" hidden @change="pickReplacement" />
+          </div>
+        </div>
+      </template>
+      <template v-else>
+      <ErrorBox v-if="row.result?.error" :code="row.result.error.code" :detail="row.result.error.detail" />
+      <div v-if="row.result?.state === 'Not started' && row.result?.run" class="msg msg-info">Not reached in the last run; it runs on the rerun.</div>
       <div class="grid">
         <div class="field wide" :class="{ edited: renamed }">
           <label><span>Filename <em class="num-state">{{ renamed ? `(renamed — original ${original})` : "(original)" }}</em></span>
@@ -84,9 +133,9 @@ function text(field: keyof Row, e: Event) {
             <template v-if="renamed && !ro"> · <button class="link" type="button" @click="emit('edit', { file: original })">Use original filename</button></template></span>
         </div>
         <div v-if="handling?.object !== 'none'" class="field" :class="{ edited: objLabel.edited }">
-          <label><span>Object number <em class="num-state">{{ objLabel.text }}</em></span>
-            <input type="text" :value="row.obj" :disabled="ro" aria-label="Object number" @change="text('obj', $event)" /></label>
-          <button v-if="objLabel.reset !== undefined && !ro" class="link field-note" type="button" @click="emit('edit', { obj: objLabel.reset })">Use parsed value</button>
+          <label><span>Object number <em class="num-state">{{ objFixed ? "🔒 its object already exists" : objLabel.text }}</em></span>
+            <input type="text" :value="row.obj" :disabled="ro || objFixed" aria-label="Object number" @change="text('obj', $event)" /></label>
+          <button v-if="objLabel.reset !== undefined && !ro && !objFixed" class="link field-note" type="button" @click="emit('edit', { obj: objLabel.reset })">Use parsed value</button>
         </div>
         <div class="field" :class="{ edited: idnLabel.edited }">
           <label><span>Identification number <em class="num-state">{{ idnLabel.text }}</em></span>
@@ -106,11 +155,13 @@ function text(field: keyof Row, e: Event) {
         <label class="field wide"><span>Description</span>
           <textarea rows="2" :value="row.description" :disabled="ro" @change="text('description', $event)"></textarea></label>
       </div>
+      </template>
+      <ErrorBox v-for="(nt, i) in row.result?.notices ?? []" :key="'n' + i" :code="nt.code" :detail="nt.detail" notice />
       <div v-for="(c, i) in row.checks" :key="i" class="msg" :class="`msg-${c.level}`"><strong>{{ PREFIX[c.level] }}</strong>{{ c.text }}</div>
-      <div v-if="row.result?.error" class="msg msg-block">
-        {{ row.result.error.detail }} ({{ row.result.error.code }}, step {{ row.result.error.step }})
-      </div>
-      <div v-if="!ro" style="margin-top:6px"><button class="link" @click="emit('remove')">Delete document</button></div>
+      <div v-if="!readonly && row.include && !createdSomething(row)" style="margin-top:6px"><button class="link" @click="emit('remove')">Delete document</button>
+        <span class="field-note" style="display:inline">Permanent, unlike Include off. Only for documents that haven't created anything in CollectionSpace.</span></div>
+      <div v-else-if="!readonly && createdSomething(row) && !done" class="field-note" style="margin-top:6px">This document already created records in
+        CollectionSpace, so it can't be deleted from the job; switch Include off to have the BMU ignore it.</div>
     </td>
   </tr>
 </template>

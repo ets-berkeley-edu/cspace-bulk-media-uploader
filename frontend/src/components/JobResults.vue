@@ -1,0 +1,99 @@
+<script setup lang="ts">
+/**
+ * View results (design: Results view): every document with its result, each step's outcome and the CSIDs
+ * created, the run that did each step, and for each failure what happened and what to do. The run history
+ * lists every run, newest first, with the documents disabled or deleted before it.
+ */
+import { computed, ref } from "vue";
+import { formatTime } from "../lib/files";
+import { countsText, failureOf, OUTCOME, RESULT_BADGE, resultCounts, resultState, stepList, STEP_MARK, stepNote } from "../lib/results";
+import type { Job, Row, Run, TenantInfo } from "../types";
+import ErrorBox from "./ErrorBox.vue";
+
+const props = defineProps<{ job: Job; rows: Row[]; runs: Run[]; tenant: TenantInfo }>();
+
+type Filter = "all" | "problems" | "failed" | "partial" | "notStarted" | "disabled" | "done";
+const filter = ref<Filter>("all");
+const c = computed(() => resultCounts(props.rows));
+const FILTERS = computed<[Filter, string][]>(() => [
+  ["all", `All documents (${props.rows.length})`],
+  ["problems", `Not finished (${c.value.failed + c.value.partial + c.value.notStarted})`],
+  ["failed", `Failed (${c.value.failed})`], ["partial", `Partial (${c.value.partial})`],
+  ["notStarted", `Not started (${c.value.notStarted})`], ["disabled", `Disabled (${c.value.disabled})`], ["done", `Done (${c.value.done})`],
+]);
+const shown = computed(() => props.rows.filter((r) => {
+  const s = resultState(r);
+  switch (filter.value) {
+    case "problems": return s === "Failed" || s === "Partial" || s === "Not started" || s === "In progress";
+    case "failed": return s === "Failed";
+    case "partial": return s === "Partial";
+    case "notStarted": return s === "Not started" || s === "In progress";
+    case "disabled": return s === "Disabled";
+    case "done": return s === "Done";
+    default: return true;
+  }
+}));
+const handlingLabel = (r: Row) => props.tenant.handling.find((h) => h.id === r.handling)?.label ?? r.handling;
+const newestFirst = computed(() => [...props.runs].sort((a, b) => b.run - a.run));
+const outcome = (o: string) => OUTCOME[o] ?? { text: o, cls: "b-muted" };
+const earlierProblem = (r: Row) => r.result?.error?.code;
+</script>
+
+<template>
+  <div>
+    <div class="sub" style="margin:4px 0 8px">Run {{ job.run }}, finished {{ formatTime(job.finishedAt) }} (run by {{ job.runBy || job.scheduledBy }}). {{ countsText(job.counts ?? c) }}.</div>
+
+    <div v-if="runs.length" class="runs">
+      <div class="section-title">Run history (newest first)</div>
+      <div v-for="rn in newestFirst" :key="rn.run" class="msg" :class="rn.outcome === 'Completed' ? 'msg-info' : 'msg-warn'">
+        <strong>Run {{ rn.run }}: {{ outcome(rn.outcome).text }}<template v-if="rn.code"> — {{ failureOf(rn.code).title }}</template></strong>
+        <template v-if="rn.counts"> · {{ countsText(rn.counts) }}</template>
+        <div class="sub">Scheduled by {{ rn.scheduledBy || "—" }}<template v-if="rn.scheduledAt"> ({{ formatTime(rn.scheduledAt) }})</template>
+          · started {{ formatTime(rn.startedAt) }} · ended {{ rn.endedAt ? formatTime(rn.endedAt) : "—" }}</div>
+        <div v-if="rn.cancelledBy" class="sub">Cancelled by {{ rn.cancelledBy }}<template v-if="rn.cancelledAt"> ({{ formatTime(rn.cancelledAt) }})</template></div>
+        <div v-if="rn.disabledBefore?.length || rn.deletedBefore?.length" class="sub">Before this run:
+          <template v-for="(d, i) in rn.disabledBefore ?? []" :key="'d' + i">{{ i ? "; " : "" }}{{ d.file }} disabled by {{ d.by || "a user" }}</template>
+          <template v-for="(d, i) in rn.deletedBefore ?? []" :key="'x' + i">{{ i || rn.disabledBefore?.length ? "; " : "" }}{{ d.file }} deleted by {{ d.by }}</template>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="job.code" style="margin:8px 0"><ErrorBox :code="job.code" :detail="job.cancelledBy ? `Cancel requested by ${job.cancelledBy}` : undefined" /></div>
+
+    <div class="pager">
+      <label>Show <select v-model="filter" aria-label="Show documents">
+        <option v-for="[k, label] in FILTERS" :key="k" :value="k">{{ label }}</option></select></label>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th style="width:36px">#</th><th style="min-width:150px">Document</th><th style="width:110px">Result</th><th style="width:300px">Steps</th><th>What happened</th></tr></thead>
+        <tbody>
+          <tr v-if="!shown.length"><td colspan="5" class="muted" style="text-align:center;padding:18px">No documents match this filter.</td></tr>
+          <tr v-for="r in shown" :key="r.n" :class="{ disabled: resultState(r) === 'Disabled' }">
+            <td class="keep">{{ r.n }}</td>
+            <td>{{ r.file }}<div class="sub">{{ handlingLabel(r) }}<template v-if="r.skipLink"> · not linked (stopped)</template></div></td>
+            <td class="keep"><span class="badge" :class="RESULT_BADGE[resultState(r)]">{{ resultState(r) }}</span></td>
+            <td class="steps">
+              <div v-for="s in stepList(r)" :key="s.key" :class="{ 'step-failed': s.step.s === 'failed' }">
+                {{ STEP_MARK[s.step.s] }} {{ s.label }}
+                <code v-if="s.step.csid">{{ s.step.csid }}</code>
+                <span v-if="stepNote(s.key, s.step)" class="sub"> ({{ stepNote(s.key, s.step) }})</span>
+                <span v-if="s.step.s === 'done' && s.step.run" class="sub"> · run {{ s.step.run }}</span>
+              </div>
+              <span v-if="!stepList(r).length" class="sub">—</span>
+            </td>
+            <td class="keep">
+              <span v-if="resultState(r) === 'Disabled'" class="sub">Disabled by {{ r.disabledBy || "a user" }}<template v-if="r.disabledAt"> ({{ formatTime(r.disabledAt) }})</template>; the BMU ignored it.
+                <template v-if="earlierProblem(r)"> Earlier problem: {{ failureOf(earlierProblem(r)).title }}.</template>
+                <template v-if="r.result?.steps?.media?.s === 'done'"> Its Media record from an earlier run ({{ r.result.steps.media.csid }}) stays in CollectionSpace, unfinished.</template></span>
+              <ErrorBox v-else-if="r.result?.error" :code="r.result.error.code" :detail="r.result.error.detail" />
+              <span v-else-if="resultState(r) === 'Not started'" class="sub">Not reached before the job stopped.</span>
+              <span v-else-if="resultState(r) === 'Done'" class="sub">Created in CollectionSpace.</span>
+              <ErrorBox v-for="(nt, i) in r.result?.notices ?? []" :key="i" :code="nt.code" :detail="nt.detail" notice />
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</template>

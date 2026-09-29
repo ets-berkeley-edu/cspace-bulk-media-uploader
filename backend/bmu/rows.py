@@ -9,7 +9,7 @@ from .cspace import CSpaceClient, CSpaceError
 from .tenant import Tenant, parse_filename
 
 EDITABLE = {"handling", "obj", "idnum", "date", "restricted", "type", "language", "creator", "contributor",
-            "rightsHolder", "description", "copyright", "include", "file"}
+            "rightsHolder", "description", "copyright", "include", "file", "skipLink"}
 # Repeating fields (design: Media record fields): media type values from the tenant's option list, and
 # language refNames from the languages vocabulary.
 REPEATING = {"type", "language"}
@@ -93,7 +93,11 @@ def default_idnum(tenant: Tenant, row: dict) -> str:
 
 def edit_problem(row: dict, changes: dict[str, Any]) -> str | None:
     """Why this row can't take these changes, or None. Changes that match the row's current values are no
-    change, so they never count against it (design: bulk-change panel)."""
+    change, so they never count against it (design: bulk-change panel).
+
+    After a run (design: Fixing a job after a run) what can change depends on the row's result: nothing on a
+    Done row; on a row whose Media record exists (Partial), only what the rerun still needs (fix_fields); on a
+    Failed row whose object step ran, everything except its handling and object number."""
     real = {k: v for k, v in changes.items() if row.get(k) != v}
     if not real:
         return None
@@ -103,9 +107,11 @@ def edit_problem(row: dict, changes: dict[str, Any]) -> str | None:
         return None  # any row with work left can be disabled or enabled, a Partial one too
     if not row.get("include", True):
         return "disabled"
-    if is_locked(row):
-        return "created"
-    if "handling" in real and object_step_ran(row):
+    if media_created(row):
+        return None if set(real) <= fix_fields(row) else "created"
+    if "skipLink" in real:
+        return "created"  # only for a row whose Media record exists
+    if ("handling" in real or "obj" in real) and object_step_ran(row):
         return "handling"
     return None
 
@@ -113,9 +119,49 @@ def edit_problem(row: dict, changes: dict[str, Any]) -> str | None:
 PROBLEM_TEXT = {
     "done": "This document is done; there is nothing left to change.",
     "disabled": "This document is disabled. Enable it first.",
-    "created": "This document already created records in CollectionSpace and can't be changed.",
-    "handling": "The last run already found or created this document's object, so its handling can't change.",
+    "created": "This document's Media record already exists in CollectionSpace, so only what the rerun still needs can "
+               "change here. To change the Media record's fields, edit it in CollectionSpace.",
+    "handling": "The last run already found or created this document's object, so its handling and object number can't change.",
 }
+
+FINISHED = ("done", "not needed")
+OBJ_STEPS = ("findObject", "createObject")
+REL_STEPS = ("relMediaObject", "relObjectMedia")
+
+
+def _steps(row: dict) -> dict:
+    return (row.get("result") or {}).get("steps") or {}
+
+
+def open_steps(row: dict, names: tuple[str, ...]) -> list[str]:
+    """Which of these steps the row has and hasn't finished."""
+    st = _steps(row)
+    return [n for n in names if n in st and st[n].get("s") not in FINISHED]
+
+
+def media_created(row: dict) -> bool:
+    return (_steps(row).get("media") or {}).get("s") == "done"
+
+
+def fix_fields(row: dict) -> set[str]:
+    """What a user may change on a row whose Media record already exists: only what the rerun still needs.
+    A corrected object number when the object step failed on its number; stopping the link when the object
+    wasn't found (or matched several) or relations weren't allowed; Include."""
+    st = _steps(row)
+    allowed = {"include"}
+    obj_codes = {st[n].get("code") for n in OBJ_STEPS if n in st and st[n].get("s") == "failed"}
+    rel_codes = {st[n].get("code") for n in REL_STEPS if n in st and st[n].get("s") == "failed"}
+    if obj_codes & {"object_gone", "object_ambiguous", "object_rejected"} and not row.get("skipLink"):
+        allowed.add("obj")
+    if open_steps(row, REL_STEPS) and (obj_codes & {"object_gone", "object_ambiguous"} or "no_permission" in rel_codes):
+        allowed.add("skipLink")
+    return allowed
+
+
+def can_replace_file(row: dict) -> bool:
+    """A replacement file is for a row whose Media record exists and whose upload hasn't succeeded (for
+    example rejected as too large, or the staged file was lost). The rerun uploads it to that Media record."""
+    return media_created(row) and bool(open_steps(row, ("upload",))) and row.get("include", True)
 
 
 def apply_edit(tenant: Tenant, row: dict, changes: dict[str, Any], other_names: list[str] | None = None) -> dict:
@@ -141,7 +187,7 @@ def apply_edit(tenant: Tenant, row: dict, changes: dict[str, Any], other_names: 
         if k == "handling":
             if not tenant.handling_by_id(v):
                 raise ValueError(f"Unknown handling option {v!r}")
-        elif k in ("restricted", "include"):
+        elif k in ("restricted", "include", "skipLink"):
             v = bool(v)
         elif k in REPEATING:
             if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
@@ -165,7 +211,7 @@ def apply_edit(tenant: Tenant, row: dict, changes: dict[str, Any], other_names: 
         row.update(objParsed=p["obj"], img=p["img"], parseOk=p["ok"])
         if "obj" not in changes and row.get("obj") == old_obj_parsed:
             row["obj"] = p["obj"]
-    if "idnum" not in changes and row.get("idnum") == old_id_default:
+    if "idnum" not in changes and row.get("idnum") == old_id_default and not media_created(row):
         row["idnum"] = default_idnum(tenant, row)  # it still held its derived value, so it follows
     row["touched"] = sorted(touched)
     return row
@@ -173,16 +219,34 @@ def apply_edit(tenant: Tenant, row: dict, changes: dict[str, Any], other_names: 
 
 def object_step_ran(row: dict) -> bool:
     """A Failed row whose object step already ran keeps its object, so its handling can't change."""
-    steps = (row.get("result") or {}).get("steps") or {}
-    return any((steps.get(k) or {}).get("s") == "done" for k in ("findObject", "createObject"))
+    return any((_steps(row).get(k) or {}).get("s") == "done" for k in OBJ_STEPS)
 
 
 def is_locked(row: dict) -> bool:
-    """True once the row has created anything in CollectionSpace (finding an existing object doesn't count)."""
+    """True once the row has created anything in CollectionSpace (finding an existing object doesn't count),
+    so it can't be deleted (design: Deleting a row). A row the worker was on when it stopped counts too: a
+    create may have reached CollectionSpace before it was recorded."""
     res = row.get("result") or {}
-    return any(st.get("csid") for name, st in (res.get("steps") or {}).items() if name != "findObject")
+    if res.get("state") == "In progress":
+        return True
+    return any(st.get("csid") and not st.get("found") for name, st in (res.get("steps") or {}).items() if name != "findObject")
 
 
+def created_records(rows: list[dict]) -> dict:
+    """What a job's runs created in CollectionSpace, by record type, and how many documents are unfinished
+    (a Media record without its file or its links). For the job-deletion warning and audit entry."""
+    c = {"media": 0, "files": 0, "objects": 0, "relations": 0, "unfinished": 0}
+    csids: list[dict] = []
+    kind = {"media": "media", "upload": "files", "createObject": "objects", "relMediaObject": "relations", "relObjectMedia": "relations"}
+    for r in rows:
+        st = _steps(r)
+        for name, x in st.items():
+            if x.get("s") == "done" and x.get("csid") and not x.get("found") and name in kind:
+                c[kind[name]] += 1
+                csids.append({"row": r["n"], "file": r["file"], "step": name, "csid": x["csid"]})
+        if media_created(r) and any(x.get("s") not in FINISHED for x in st.values()):
+            c["unfinished"] += 1
+    return {"counts": c, "csids": csids}
 
 
 # The design's supported file types, the same for every tenant: images, audio, video and 3D models.
@@ -210,7 +274,7 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
     incomplete: set[int] = set()  # rows whose lookups weren't known: their checks here are partial
     seen_ids: dict[str, int] = {}
     for r in rows:
-        if r.get("include") and not is_locked(r) and r.get("idnum"):
+        if r.get("include") and not media_created(r) and r.get("idnum"):
             seen_ids[r["idnum"]] = seen_ids.get(r["idnum"], 0) + 1
 
     def parsed_date(r: dict, text: str) -> dict | None:
@@ -251,6 +315,9 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
             r["checks"] = []
             continue
         h = tenant.handling_by_id(r["handling"])
+        if media_created(r):
+            r["checks"] = _rerun_checks(tenant, r, perms, lookup, client)
+            continue
         up = (r.get("upload") or {}).get("s")
         if up == "failed":
             out.append({"level": "block", "text": "The upload failed. Remove the document or add the file again."})
@@ -266,7 +333,7 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
             out.append({"level": "block", "text": "Your account can't create relations, so it can't link to objects. Choose a media-only handling."})
         if h.object == "create" and not perms.get("objects"):
             out.append({"level": "block", "text": "Your account can't create Object records. Choose another handling."})
-        if h.object != "none":
+        if h.object != "none" and not object_step_ran(r):  # a found or created object is reused by the rerun
             num = (r.get("obj") or "").strip()
             if not num:
                 media_only = any(x.object == "none" for x in tenant.handling)
@@ -313,6 +380,67 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
             r["lookups"].pop("date")
         r["checks"] = out
     return incomplete
+
+
+def _rerun_checks(tenant: Tenant, r: dict, perms: dict[str, bool], lookup, client: CSpaceClient) -> list[dict]:
+    """Checks for a row whose Media record already exists (Partial): only what the rerun still has to do.
+    Its fields, identification number and date went to CollectionSpace already and aren't checked again."""
+    out: list[dict[str, str]] = []
+    st = _steps(r)
+    skip = bool(r.get("skipLink"))
+    todo = list(dict.fromkeys(STEP_TEXT.get(n, n) for n, x in st.items()
+                              if x.get("s") not in FINISHED and not (skip and n in OBJ_STEPS + REL_STEPS)))
+    out.append({"level": "info", "text": ("The rerun will only " + " and ".join(todo) + "." if todo
+                                          else "Nothing is left to do for this document; the rerun skips it.")
+                + (" Its remaining object steps are skipped: you stopped linking it to an object." if skip else "")})
+    if open_steps(r, ("upload",)):
+        code = st["upload"].get("code")
+        up = (r.get("upload") or {}).get("s")
+        replaced = r.get("replacedFor") == (r.get("result") or {}).get("run")
+        if up == "failed":
+            out.append({"level": "block", "text": "The replacement file didn't upload. Choose Replace file again."})
+        elif up != "done":
+            out.append({"level": "block", "text": "The replacement file hasn't finished uploading."})
+        elif code == "file_missing" and not replaced:
+            out.append({"level": "block", "text": "The file the BMU was holding is gone. Choose Replace file to add it again."})
+        elif code in ("upload_too_large", "file_type_rejected") and not replaced:
+            out.append({"level": "warn", "text": "CollectionSpace rejected this file in the last run. Replace the file, or the upload "
+                                                 "will most likely fail again."})
+        if replaced:
+            ext = r["file"].rsplit(".", 1)[-1].lower() if "." in r["file"] else ""
+            if ext not in SUPPORTED_EXTENSIONS:
+                out.append({"level": "block", "text": f"The BMU doesn't accept .{ext or '(no extension)'} files. Supported types: {SUPPORTED_HINT}."})
+    if skip:
+        return out
+    if open_steps(r, REL_STEPS) and not perms.get("relations"):
+        out.append({"level": "block", "text": "Your account can't create relations, so this Media record can't be linked to its "
+                                              "object. Stop linking it, or have someone who can reschedule the job."})
+    obj_step = next((n for n in OBJ_STEPS if n in st), None)
+    if obj_step and open_steps(r, (obj_step,)):
+        num = (r.get("obj") or "").strip()
+        if not num:
+            out.append({"level": "block", "text": "Enter the object number, or stop linking this document."})
+            return out
+        try:
+            found = lookup(r, "object", num, client.find_objects)
+        except CSpaceError as e:
+            found = None
+            out.append({"level": "warn", "text": f"Couldn't check object {num} in CollectionSpace ({e.code})."})
+        if found is not None:
+            if len(found) > 1:
+                out.append({"level": "block", "text": f"Object number {num} matches {len(found)} objects in CollectionSpace. Correct "
+                                                      "the object number, or stop linking this document."})
+            elif not found and obj_step == "findObject":
+                out.append({"level": "block", "text": f"No object {num} in CollectionSpace. Correct the object number, or stop "
+                                                      "linking this document."})
+            elif not found and not perms.get("objects"):
+                out.append({"level": "block", "text": "Your account can't create Object records. Stop linking this document, or "
+                                                      "have someone who can reschedule the job."})
+    return out
+
+
+STEP_TEXT = {"media": "create the Media record", "findObject": "find the object", "createObject": "find or create the object",
+             "upload": "upload the file", "relMediaObject": "link it to its object", "relObjectMedia": "link it to its object"}
 
 
 def worst(row: dict) -> str:

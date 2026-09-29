@@ -19,8 +19,16 @@ This first iteration covers the **core run path for PAHMA**:
 - A worker runs the job one row at a time, following the design's steps: create the Media record, find (or
   create the skeletal) Object, attach the file with a multipart `PUT media/{csid}/blob` (CollectionSpace
   creates the Blob record and sets `blobCsid`), and relate Media and Object both ways. Each step records its
-  CSID; a step whose dependencies failed is skipped. A rerun (Reschedule) runs only unfinished steps,
-  retries an upload against the existing Media record, and checks for existing Relations first.
+  CSID; a step whose dependencies failed is skipped. A rerun runs only unfinished steps, retries an upload
+  against the existing Media record, and checks for existing Relations first.
+- Finished jobs: each job's outcome (Completed, Needs attention, Failed), documents by result and its run
+  history. View results shows every document's steps, CSIDs and the run that did each, and every failure in
+  plain language (title, explanation, what to do, technical detail on request) from the failure catalog in
+  `backend/bmu/failures.yaml`. Fix and reschedule (or Reschedule, when every failure only needs another run)
+  moves the job to Drafts: done documents are read-only, a document whose Media record exists takes only what
+  the rerun needs (a corrected object number, stopping the link to an object, a replacement file), and a fix
+  not scheduled within 30 days is reverted. Jobs that need attention or failed can be deleted from the BMU
+  (never from CollectionSpace); Completed jobs are removed 30 days after they finish.
 - Credentials: the password is encrypted at rest (a session key while signed in, a separate job key while a
   job waits or runs, for at most 72 hours) and deleted when the run ends, whatever the outcome.
 - One job per tenant at a time (a lock with a heartbeat), and an audit entry for each run.
@@ -57,6 +65,25 @@ http://localhost:8180/_fake/state (reset it with `curl -X POST localhost:8180/_f
 
 To watch the job queue, or to cancel a run partway, slow the simulated CollectionSpace down so each create and
 upload takes a while: `curl -X POST 'localhost:8180/_fake/slow?seconds=2'` (`seconds=0` turns it off).
+
+To see how the BMU reports failures, make the simulated CollectionSpace fail on purpose. Rules apply only to
+job runs (not to the editor's checks) and are used up after one matching request unless you pass `count=0`:
+
+```sh
+curl -X POST 'localhost:8180/_fake/fail?step=upload&status=413&match=1-2345'         # file too large
+curl -X POST 'localhost:8180/_fake/fail?step=objectSearch&effect=none&match=15-1234'  # object gone at run time
+curl -X POST 'localhost:8180/_fake/fail?step=objectSearch&effect=many&match=15-1240'  # several objects
+curl -X POST 'localhost:8180/_fake/fail?step=media&status=400&match=12-5678'          # Media record rejected
+curl -X POST 'localhost:8180/_fake/fail?step=relation&status=403&count=0'             # no permission for relations
+curl -X POST 'localhost:8180/_fake/fail?step=media&status=401'                        # sign-in failed (job stops)
+curl -X POST 'localhost:8180/_fake/fail?step=media&status=503&count=0'                # outage: 5 in a row stop the job
+curl -X POST 'localhost:8180/_fake/fail?step=mediaSearch&effect=many'                 # ID in use since scheduling (notice)
+curl localhost:8180/_fake/fail            # list the rules
+curl -X DELETE localhost:8180/_fake/fail  # clear them
+```
+
+`match` is compared with the document's identification number, filename and object number. Steps: `media`,
+`upload`, `objectSearch`, `objectCreate`, `relation`, `mediaSearch`.
 
 To use the Lyrasis QA tenant instead, set `BMU_CSPACE_URL=https://pahma.qa.collectionspace.org` in `.env`
 and sign in with a QA account. Records created there stay (the BMU never deletes).

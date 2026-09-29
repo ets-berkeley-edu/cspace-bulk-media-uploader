@@ -103,10 +103,13 @@ class Permissions:
 
 class CSpaceClient:
     def __init__(self, base_url: str, username: str, password: str,
-                 http: httpx.Client | None = None, timeout: float = 300.0):
+                 http: httpx.Client | None = None, timeout: float = 300.0, agent: str = "bmu-web"):
+        """agent: the User-Agent sent with every request ("bmu-web" or "bmu-worker"), so CollectionSpace's
+        logs show which part of the BMU made a call."""
         self.base = base_url.rstrip("/") + SERVICES
         self._http = http or httpx.Client(timeout=timeout, follow_redirects=False)
         self._auth = httpx.BasicAuth(username, password)
+        self._headers = {"User-Agent": agent}
 
     def close(self) -> None:
         self._http.close()
@@ -114,7 +117,8 @@ class CSpaceClient:
     # -- low level ----------------------------------------------------------------------
     def _request(self, method: str, path: str, **kw) -> httpx.Response:
         try:
-            r = self._http.request(method, self.base + path, auth=self._auth, **kw)
+            headers = {**self._headers, **kw.pop("headers", {})}
+            r = self._http.request(method, self.base + path, auth=self._auth, headers=headers, **kw)
         except httpx.TransportError as e:  # network problem, DNS, timeout
             raise CSpaceError("unavailable", f"{method} {path}: {e.__class__.__name__}") from e
         if r.status_code >= 400:

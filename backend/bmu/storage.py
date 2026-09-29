@@ -1,7 +1,9 @@
 """DynamoDB and S3 access.
 
 Tables (prefix configurable):
-  <p>-jobs         PK=JOB#<id>, SK=META | ROW#<00001>; GSI "tenant" on (tenant, created) for job lists.
+  <p>-jobs         PK=JOB#<id>, SK=META | ROW#<00001> | RUN#<00001> (one per run: the run history) |
+                   FIX#<00001> (a row as it was before a Fix and reschedule changed it, kept so an abandoned fix
+                   can be reverted); GSI "tenant" on (tenant, created) for job lists.
                    Also PK=LOCK#<tenant>, SK=LOCK: the one-job-per-tenant run lock.
   <p>-sessions     PK=<hash of session id>; TTL attribute "expires".
   <p>-credentials  PK=JOB#<id>; the job's encrypted password; TTL attribute "expires".
@@ -217,15 +219,79 @@ class Storage:
             raise
 
     def delete_job_and_files(self, job_id: str) -> list[dict]:
-        """Delete a job, its rows and their staged files. Returns the rows that were deleted."""
+        """Delete a job with its rows, run history, fix copies and staged files. Returns the rows that were deleted."""
         rows = self.get_rows(job_id)
-        for r in rows:
-            if r.get("s3Key"):
-                self.delete_object(r["s3Key"])
-            self.jobs.delete_item(Key={"PK": f"JOB#{job_id}", "SK": f"ROW#{r['n']:05d}"})
+        keys = {r.get("s3Key") for r in rows} | {r.get("supersededKey") for r in rows}
+        keys |= {r.get("s3Key") for r in self._items(job_id, "FIX#")}
+        for k in keys - {None, ""}:
+            self.delete_object(k)
+        for prefix in ("ROW#", "RUN#", "FIX#"):
+            for sk in self._keys(job_id, prefix):
+                self.jobs.delete_item(Key={"PK": f"JOB#{job_id}", "SK": sk})
         self.delete_credential(job_id)
         self.jobs.delete_item(Key={"PK": f"JOB#{job_id}", "SK": "META"})
         return rows
+
+    def _items(self, job_id: str, prefix: str) -> list[dict]:
+        out: list[dict] = []
+        kw: dict[str, Any] = dict(KeyConditionExpression=Key("PK").eq(f"JOB#{job_id}") & Key("SK").begins_with(prefix))
+        while True:
+            r = self.jobs.query(**kw)
+            out += [_strip(_clean(i)) for i in r["Items"]]
+            if "LastEvaluatedKey" not in r:
+                return out
+            kw["ExclusiveStartKey"] = r["LastEvaluatedKey"]
+
+    def _keys(self, job_id: str, prefix: str) -> list[str]:
+        out: list[str] = []
+        kw: dict[str, Any] = dict(KeyConditionExpression=Key("PK").eq(f"JOB#{job_id}") & Key("SK").begins_with(prefix),
+                                  ProjectionExpression="SK")
+        while True:
+            r = self.jobs.query(**kw)
+            out += [i["SK"] for i in r["Items"]]
+            if "LastEvaluatedKey" not in r:
+                return out
+            kw["ExclusiveStartKey"] = r["LastEvaluatedKey"]
+
+    # ---- run history (design: Job data model, Run items) --------------------------------------
+    def put_run(self, job_id: str, run: dict) -> None:
+        self.jobs.put_item(Item=_dyn({"PK": f"JOB#{job_id}", "SK": f"RUN#{int(run['run']):05d}", **run}))
+
+    def get_runs(self, job_id: str) -> list[dict]:
+        """The job's runs, oldest first."""
+        return self._items(job_id, "RUN#")
+
+    # ---- fixing a job after a run: the rows as they were, so an abandoned fix can be reverted --------
+    def save_fix_original(self, job_id: str, row: dict) -> None:
+        """Keep a row as it was before a fix first changed it (only the first time; later changes keep it)."""
+        try:
+            self.jobs.put_item(Item=_dyn({"PK": f"JOB#{job_id}", "SK": f"FIX#{row['n']:05d}", **row}),
+                               ConditionExpression=Attr("PK").not_exists())
+        except ClientError as e:
+            if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
+                raise
+
+    def fix_originals(self, job_id: str) -> list[dict]:
+        return self._items(job_id, "FIX#")
+
+    def drop_fix_original(self, job_id: str, n: int) -> None:
+        self.jobs.delete_item(Key={"PK": f"JOB#{job_id}", "SK": f"FIX#{n:05d}"})
+
+    def drop_fix_originals(self, job_id: str) -> None:
+        for sk in self._keys(job_id, "FIX#"):
+            self.jobs.delete_item(Key={"PK": f"JOB#{job_id}", "SK": sk})
+
+    def restore_row(self, job_id: str, row: dict) -> None:
+        """Put back a row as it was (an abandoned fix), with a new version so no stale copy overwrites it."""
+        current = self.get_row(job_id, row["n"])
+        row = {**row, "v": int((current or row).get("v", 0)) + 1}
+        self.jobs.put_item(Item=_dyn({"PK": f"JOB#{job_id}", "SK": f"ROW#{row['n']:05d}", **row}))
+
+    def heartbeat(self, job_id: str) -> None:
+        """Mark a running job alive. Uses the low-level client, which is safe to call from the heartbeat thread."""
+        self.jobs.meta.client.update_item(
+            TableName=self.jobs.name, Key={"PK": {"S": f"JOB#{job_id}"}, "SK": {"S": "META"}},
+            UpdateExpression="SET heartbeatAt = :t", ExpressionAttributeValues={":t": {"N": f"{now():.3f}"}})
 
     def update_job(self, job_id: str, fields: dict, expect_status: str | list[str] | None = None) -> bool:
         """Set fields on a job. With expect_status, only if the job is in that status (returns False otherwise)."""
@@ -349,6 +415,23 @@ class Storage:
             if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
                 return False
             raise
+
+    def renew_lock(self, tenant: str, owner: str, seconds: int) -> None:
+        """Extend the run lock this worker holds, from the heartbeat thread (low-level client: thread-safe)."""
+        try:
+            self.jobs.meta.client.put_item(
+                TableName=self.jobs.name,
+                Item={"PK": {"S": f"LOCK#{tenant}"}, "SK": {"S": "LOCK"}, "owner": {"S": owner}, "until": {"N": f"{now() + seconds:.3f}"}},
+                ConditionExpression="attribute_not_exists(PK) OR #o = :o",
+                ExpressionAttributeNames={"#o": "owner"}, ExpressionAttributeValues={":o": {"S": owner}})
+        except ClientError as e:
+            if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
+                raise
+
+    def clear_editing(self, job_id: str) -> None:
+        """Nobody is editing the job any more (it left Drafts other than by scheduling)."""
+        self.jobs.update_item(Key={"PK": f"JOB#{job_id}", "SK": "META"},
+                              UpdateExpression="REMOVE editingBy, editingSession, editingSince")
 
     def release_lock(self, tenant: str, owner: str) -> None:
         try:
