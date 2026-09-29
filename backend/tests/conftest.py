@@ -92,7 +92,7 @@ def login(api):
 @pytest.fixture
 def add_uploaded(api, services):
     """Add files to a job and simulate the browser's direct upload to S3."""
-    def _add(job_id, names, content=b"fake image bytes"):
+    def _add(job_id, names, content=b"\xff\xd8\xff\xe0 fake JPEG bytes"):
         r = api.post(f"/api/jobs/{job_id}/files",
                      json={"files": [{"name": n, "size": len(content), "type": "image/jpeg"} for n in names]})
         assert r.status_code == 200, r.text

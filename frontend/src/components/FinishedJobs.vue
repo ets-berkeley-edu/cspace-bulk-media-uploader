@@ -41,18 +41,18 @@ const sorted = computed(() => tableView(newestFirst.value, table, {
 }, undefined, false).shown);
 const open = computed(() => jobs.value.find((j) => j.id === resultsId.value) ?? null);
 
-async function load(id: string) {
-  const r = await api.job(id);
+async function load(id: string, poll = false) {
+  const r = await api.job(id, poll);
   details.set(id, { rows: r.rows, runs: r.runs, created: r.created });
   return r;
 }
 
 async function refresh(runChecks = false) {
   try {
-    jobs.value = (await api.jobs()).jobs.filter((j) => FINISHED.includes(j.status));
+    jobs.value = (await api.jobs(!runChecks)).jobs.filter((j) => FINISHED.includes(j.status));
     error.value = "";
     for (const id of [...expanded, ...(resultsId.value ? [resultsId.value] : [])]) {
-      if (jobs.value.some((j) => j.id === id)) await load(id);
+      if (jobs.value.some((j) => j.id === id)) await load(id, !runChecks);
     }
   } catch (e) {
     error.value = (e as Error).message;

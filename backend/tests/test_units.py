@@ -130,3 +130,20 @@ def test_create_tables_waits_for_local_services(monkeypatch):
     monkeypatch.setattr("bmu.storage.time.sleep", lambda s: None)
     Storage.create_tables(object.__new__(Storage))
     assert len(calls) == 3
+
+
+def test_file_types_are_read_from_their_first_bytes():
+    from bmu.filetypes import detect, mismatch
+    assert detect(b"\xff\xd8\xff\xe0....") == "JPEG"
+    assert detect(b"\x89PNG\r\n\x1a\n") == "PNG"
+    assert detect(b"II*\x00....") == "TIFF" and detect(b"MM\x00*") == "TIFF"
+    assert detect(b"RIFF\x00\x00\x00\x00WAVEfmt ") == "WAV"
+    assert detect(b"\x00\x00\x00\x18ftypmp42") == "MP4"
+    assert detect(b"ID3\x04\x00") == "MP3" and detect(b"\xff\xfb\x90\x00") == "MP3"
+    assert detect(b"\xff\xf1\x50\x80") == "AAC"
+    assert detect(b'\xef\xbb\xbf<?xml version="1.0"?><X3D>') == "X3D"
+    assert detect(b"GIF89a") is None
+    assert mismatch("15-1234.jpg", b"\xff\xd8\xff") is None
+    assert mismatch("15-1234.TIF", b"\xff\xd8\xff") == "its name ends in .tif, but its content is JPEG"
+    assert mismatch("a.aac", b"\x00\x00\x00\x18ftypM4A ") is None  # AAC in an MP4 container
+    assert "not a type the BMU accepts" in mismatch("a.png", b"GIF89a")

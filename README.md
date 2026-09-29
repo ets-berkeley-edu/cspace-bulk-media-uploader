@@ -128,8 +128,24 @@ python scripts/check_cspace.py --create    # also creates one test Media/Object 
   and state-changing API calls also require an `X-BMU: 1` header.
 - In AWS, set `BMU_CRYPTO_MODE=kms` with separate KMS keys for sessions and jobs
   (`BMU_KMS_SESSION_KEY_ID`, `BMU_KMS_JOB_KEY_ID`); the local mode uses keys from the environment.
-- File uploads go directly from the browser to S3; the worker streams them to CollectionSpace. No presigned
-  download URLs are given to anyone.
+- File uploads go directly from the browser to S3 with a write-only presigned POST for one key
+  (`staging/<tenant>/<job>/<row>/<random>`), the file's size and content type, for 15 minutes; set
+  `BMU_S3_KMS_KEY_ID` in AWS to require SSE-KMS. The worker checks each file's real type from its first bytes
+  before streaming it to CollectionSpace. No presigned download URLs are given to anyone; thumbnails are served
+  by the web app after checking the session.
+- Sessions end after 30 minutes without activity (`BMU_SESSION_IDLE_MINUTES`) or 8 hours in all
+  (`BMU_SESSION_HOURS`); the lists' background refreshes don't count as activity.
+
+## Audit log
+
+Every run, row deletion, job deletion, take-over and expired or reverted draft is written to the audit table.
+A run's entry lists each document's filename, object number, CSIDs and error codes (in S3 under `audit/` for
+runs over 100 documents). Each record the BMU creates is also indexed by its CSID, so you can find which job
+made it, even after the job is deleted:
+
+```sh
+cd backend && python ../scripts/find_csid.py <csid>
+```
 
 ## License
 

@@ -80,6 +80,14 @@ class Permissions:
             "readObjects": self.can("collectionobjects", "R"),
             "authorities": self.can("personauthorities", "R") and self.can("orgauthorities", "R"),
             "groups": self.can("groups", "C"),
+            # Attaching the file is PUT media/{csid}/blob: update on media (verified in the services code).
+            "mediaUpdate": self.can("media", "U"),
+            "readMedia": self.can("media", "R"),  # the identification-number check searches Media records
+            "readPersons": self.can("personauthorities", "R"),
+            "readOrgs": self.can("orgauthorities", "R"),
+            # The date parser is checked like any request. VERIFY on QA that accountperms lists structureddates;
+            # when it doesn't, the BMU doesn't block and the parse call reports any refusal itself.
+            "readDates": self.can("structureddates", "R") if "structureddates" in self.resources else True,
         }
 
     @classmethod
@@ -155,6 +163,11 @@ class CSpaceClient:
 
     def search_terms(self, service: str, vocabulary: str, text: str, limit: int = 20) -> list[dict[str, str]]:
         """Authority terms whose display name matches `text` (partial term search)."""
+        return self.search_terms_page(service, vocabulary, text, limit)[0]
+
+    def search_terms_page(self, service: str, vocabulary: str, text: str, limit: int = 20) -> tuple[list[dict[str, str]], int]:
+        """The first page of matching terms, and how many match in all (the list's totalItems), as the
+        CollectionSpace UI's autocomplete shows them: no paging through results."""
         path = f"{service}/urn:cspace:name({vocabulary})/items"
         r = self._request("GET", path, params={"pt": text, "wf_deleted": "false", "pgSz": str(limit)})
         out = []
@@ -164,7 +177,8 @@ class CSpaceClient:
             name = _text(item, "termDisplayName") or _text(item, "displayName") or display_name(ref)
             if ref:
                 out.append({"refName": ref, "displayName": name})
-        return out
+        total = next((int(e.text) for e in root if _local(e.tag) == "totalItems" and (e.text or "").isdigit()), len(out))
+        return out, max(total, len(out))
 
     def parse_date(self, text: str) -> dict[str, str] | None:
         """Parse a display date with CollectionSpace's own parser (GET structureddates?displayDate=), as the

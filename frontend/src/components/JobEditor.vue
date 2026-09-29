@@ -128,9 +128,27 @@ async function load(id: string | null) {
   rows.value = r.rows;
   name.value = r.job.name;
   if (r.job.status === "Draft" && !r.job.editingByYou && props.mode !== "preview") await openForEditing(props.takeOverSince ?? undefined);
-  // Design: checks reflect CollectionSpace as it is now. Rows whose lookups are stale are checked again.
-  if (!readonly.value) void runChecks(r.rows.map((x) => x.n), false);
+  // Design: checks reflect CollectionSpace as it is now (drafts, and previews of queued jobs). Rows whose lookups
+  // are stale are checked again.
+  if (r.job.status === "Draft" || r.job.status === "Queued") void runChecks(r.rows.map((x) => x.n), false);
+  watchRun();
 }
+
+// A running job's preview lists each document's run state, refreshed while it runs (design: Run duration and the UI).
+let runTimer: ReturnType<typeof setInterval> | undefined;
+function watchRun() {
+  clearInterval(runTimer);
+  if (job.value?.status !== "Running") return;
+  runTimer = setInterval(async () => {
+    if (!job.value) return;
+    const r = await api.job(job.value.id, true).catch(() => null);
+    if (!r) return;
+    job.value = r.job;
+    rows.value = r.rows;
+    if (r.job.status !== "Running") clearInterval(runTimer);
+  }, 3000);
+}
+onBeforeUnmount(() => clearInterval(runTimer));
 
 /** Become this draft's editor (or take over); if someone else is editing it, the page stays a preview. */
 async function openForEditing(takeOverSince?: number) {
@@ -454,6 +472,10 @@ function toggle(n: number) {
     </div>
     <div v-if="job && job.status !== 'Draft'" class="msg msg-info">
       This job is {{ OUTCOME[job.status]?.text ?? job.status }}; it can't be changed here.
+      <template v-if="job.status === 'Running' && job.progress">{{ job.progress.done }} done · {{ job.progress.failed }} failed ·
+        {{ job.progress.total - job.progress.done - job.progress.failed }} to go<template v-if="job.currentFile">; now on {{ job.currentFile }}</template>.
+        The Status column shows each document's run state.</template>
+      <template v-else-if="job.status === 'Queued'">The checks below were run again just now.</template>
       <template v-if="job.status === 'NeedsAttention' || job.status === 'Failed'">Use Fix and reschedule under Finished jobs.</template>
     </div>
     <div v-if="job?.note" class="msg msg-warn">{{ job.note }}</div>
@@ -532,7 +554,7 @@ function toggle(n: number) {
           <DocumentRow v-for="r in view.shown" :key="r.n" :row="r" :tenant="me.tenant" :perms="me.perms" :checking="checking.has(r.n)" :preview="previews.get(r.n)"
                        :expanded="expanded.has(r.n)" :readonly="readonly || !editable" :selected="selected.has(r.n)" :languages="languages"
                        :other-names="rows.filter((x) => x.n !== r.n).map((x) => x.file)"
-                       :uploading-here="uploadingHere.has(r.n)" :group-on="!!job?.groupOn" :job-id="job?.id"
+                       :uploading-here="uploadingHere.has(r.n)" :group-on="!!job?.groupOn" :job-id="job?.id" :run-view="job?.status === 'Running'"
                        @toggle="toggle(r.n)" @edit="edit(r, $event)" @remove="remove(r)" @select="select(r.n, $event)" @replace="replaceFile(r, $event)"
                        @retry="retry(r)" />
         </tbody>

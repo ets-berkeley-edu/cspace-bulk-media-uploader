@@ -214,3 +214,4 @@ table.inner td { background: var(--surface-2); }
 .lightbox figure { margin: 0; background: var(--surface-2); border-radius: 10px; padding: 10px; max-width: min(900px, 100%); }
 .lightbox img { max-width: 100%; max-height: 75vh; display: block; margin: 0 auto; }
 .lightbox figcaption { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 8px; font-size: 13px; }
+.login-notice { max-width: 380px; margin: 8vh auto -6vh; }

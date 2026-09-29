@@ -580,7 +580,7 @@ def test_filenames_are_cleaned_when_added_and_staged_under_random_keys(api, logi
                                                                {"name": "x" * 150 + ".tif", "size": 3, "type": "image/tiff"}]}).json()["rows"]
     assert rows[0]["file"] == "15-1234_a.jpg" and rows[0]["objParsed"] == "15-1234"
     assert len(rows[1]["file"]) == 100 and rows[1]["file"].endswith(".tif")
-    assert "15-1234" not in rows[0]["s3Key"] and rows[0]["s3Key"].count("/") == 2
+    assert "15-1234" not in rows[0]["s3Key"] and rows[0]["s3Key"].count("/") == 4
     r = api.post(f"/api/jobs/{job}/files", json={"files": [{"name": "../../etc/passwd..jpg", "size": 3, "type": "image/jpeg"}]})
     assert r.status_code == 422
 
@@ -776,3 +776,29 @@ def test_retry_a_failed_upload_with_the_same_file(api, login, services):
     assert done["upload"]["s"] == "done"
     # nothing to retry once it's uploaded
     assert api.post(f"/api/jobs/{job}/rows/{row['n']}/retry-upload", json={"name": "15-1234_r.jpg", "size": 6, "type": "image/jpeg"}).status_code == 409
+
+
+def test_uploads_are_signed_for_one_staging_key_type_and_15_minutes(api, login, services):
+    login()
+    job = new_job(api)
+    row = api.post(f"/api/jobs/{job}/files", json={"files": [{"name": "15-1234_k.jpg", "size": 10, "type": "image/jpeg"}]}).json()["rows"][0]
+    assert row["s3Key"].startswith(f"staging/pahma/{job}/{row['n']:05d}/") and "15-1234" not in row["s3Key"]
+    form = row["uploadForm"]
+    assert form["fields"]["key"] == row["s3Key"] and form["fields"]["Content-Type"] == "image/jpeg"
+    import base64, json as _json, time as _time
+    policy = _json.loads(base64.b64decode(form["fields"]["policy"]))
+    assert {"Content-Type": "image/jpeg"} in policy["conditions"]
+    expires = _time.mktime(_time.strptime(policy["expiration"][:19], "%Y-%m-%dT%H:%M:%S")) - _time.timezone
+    assert expires - _time.time() < 16 * 60
+
+
+def test_abandoned_staged_files_are_deleted_after_a_day(api, login, add_uploaded, worker, services, monkeypatch):
+    login()
+    job = new_job(api)
+    kept = add_uploaded(job, ["15-1234_a.jpg"])[0]["s3Key"]
+    stray = services.storage.staging_key(job, 99)
+    services.storage.put_bytes(stray, b"orphan", "image/jpeg")
+    assert worker.sweep_abandoned_uploads() == []  # too recent
+    monkeypatch.setattr(worker.s, "abandoned_upload_hours", -1)
+    assert worker.sweep_abandoned_uploads() == [stray]
+    assert services.storage.head_object(kept) is not None and services.storage.head_object(stray) is None

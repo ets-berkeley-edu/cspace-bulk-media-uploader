@@ -58,6 +58,8 @@ export function jobCounts(rows: Row[]) {
 /** Why the signed-in user can't use a handling option, or "" when they can (design: Permissions in the UI). */
 export function handlingBlocked(h: Handling, perms: Perms): string {
   if (!perms.media) return "Your CollectionSpace account can't create Media records.";
+  if (perms.mediaUpdate === false) return "Your account can't update Media records, which attaching the file needs.";
+  if (h.object !== "none" && perms.readObjects === false) return "Your account can't read Object records, so it can't find objects.";
   if (h.object !== "none" && !perms.relations) return "Your account can't create relations, so it can't link to objects.";
   if (h.object === "create" && !perms.objects) return "Your account can't create Object records.";
   return "";

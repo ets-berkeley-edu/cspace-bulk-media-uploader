@@ -48,7 +48,7 @@ function expandAll(on: boolean) {
 
 async function refresh(runChecks = false) {
   try {
-    jobs.value = (await api.jobs()).jobs.filter((j) => j.status === "Running" || j.status === "Queued");
+    jobs.value = (await api.jobs(!runChecks)).jobs.filter((j) => j.status === "Running" || j.status === "Queued");
     error.value = "";
   } catch (e) {
     error.value = (e as Error).message;

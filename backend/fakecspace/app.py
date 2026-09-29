@@ -26,7 +26,8 @@ USERS = {
     "limited": ("limited", "CRUDL"),
     "reader": ("reader", "RL"),
 }
-RESOURCES = ["media", "relations", "collectionobjects", "groups", "personauthorities", "orgauthorities", "vocabularies"]
+RESOURCES = ["media", "relations", "collectionobjects", "groups", "personauthorities", "orgauthorities", "vocabularies",
+             "structureddates"]
 
 
 def _perms_for(user: str) -> dict[str, str]:
@@ -256,12 +257,15 @@ def search_terms(service: str, vocab: str, request: Request):
         return d
     q = request.query_params.get("pt", "").lower()
     names = PEOPLE if service == "personauthorities" else ORGS
+    matches = [n for n in names if q in n.lower()]
+    page = matches[:int(request.query_params.get("pgSz", "40") or 40)]
     items = "".join(
         f"<list-item><csid>{uuid.uuid5(uuid.NAMESPACE_URL, n)}</csid><termDisplayName>{escape(n)}</termDisplayName>"
         f"<refName>{escape(_ref(service, vocab, n))}</refName></list-item>"
-        for n in names if q in n.lower()
+        for n in page
     )
-    return _xml(f'<ns2:abstract-common-list xmlns:ns2="http://collectionspace.org/services/jaxb">{items}</ns2:abstract-common-list>')
+    return _xml(f'<ns2:abstract-common-list xmlns:ns2="http://collectionspace.org/services/jaxb"><totalItems>{len(matches)}</totalItems>'
+                f'{items}</ns2:abstract-common-list>')
 
 
 _MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october",

@@ -43,8 +43,9 @@ def make_thumbnail(data: bytes) -> bytes:
     return out.getvalue()
 
 
-def thumb_key(job_id: str) -> str:
-    return f"jobs/{job_id}/thumbs/{uuid.uuid4().hex}"
+def thumb_key(tenant: str, job_id: str, n: int) -> str:
+    """Under the job's staging prefix, next to the row's file (deleted with the job's files)."""
+    return f"staging/{tenant}/{job_id}/{n:05d}/thumb-{uuid.uuid4().hex}"
 
 
 def tiff_thumbnail_step(storage, job_id: str, n: int) -> None:

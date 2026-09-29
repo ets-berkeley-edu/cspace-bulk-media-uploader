@@ -148,6 +148,14 @@ class Storage:
         self.sessions.update_item(Key={"PK": key}, UpdateExpression="SET perms = :p",
                                   ExpressionAttributeValues={":p": perms}, ConditionExpression="attribute_exists(PK)")
 
+    def touch_session(self, key: str, t: float) -> None:
+        try:
+            self.sessions.update_item(Key={"PK": key}, UpdateExpression="SET lastSeen = :t", ExpressionAttributeValues={":t": _dyn(t)},
+                                      ConditionExpression=Attr("PK").exists())
+        except ClientError as e:
+            if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
+                raise
+
     def delete_session(self, key: str) -> None:
         self.sessions.delete_item(Key={"PK": key})
 
@@ -312,8 +320,13 @@ class Storage:
                 return False
             raise
 
+    def staging_key(self, job_id: str, n: int | str) -> str:
+        """Design (Browser uploads): staging/<tenant>/<job-id>/<row>/<random-id>; the filename is never in the key."""
+        part = f"{n:05d}" if isinstance(n, int) else n
+        return f"staging/{self.s.tenant}/{job_id}/{part}/{uuid.uuid4().hex}"
+
     def add_rows(self, job_id: str, rows: list[dict]) -> list[dict]:
-        """Append rows, numbering them after the job's existing rows."""
+        """Append rows, numbering them after the job's existing rows, each with its staging key."""
         r = self.jobs.update_item(Key={"PK": f"JOB#{job_id}", "SK": "META"},
                                   UpdateExpression="SET nextRow = nextRow + :n, rowCount = rowCount + :n",
                                   ExpressionAttributeValues={":n": len(rows)}, ReturnValues="UPDATED_OLD")
@@ -322,6 +335,7 @@ class Storage:
         with self.jobs.batch_writer() as bw:
             for i, row in enumerate(rows):
                 row = {**row, "n": first + i}
+                row["s3Key"] = self.staging_key(job_id, row["n"])
                 bw.put_item(Item=_dyn({"PK": f"JOB#{job_id}", "SK": f"ROW#{row['n']:05d}", **row}))
                 out.append(row)
         return out
@@ -458,27 +472,70 @@ class Storage:
         self.credentials.delete_item(Key={"PK": f"JOB#{job_id}"})
 
     # ---- audit ------------------------------------------------------------------------------
-    def audit(self, tenant: str, type_: str, user: str, job_id: str, detail: str, csids: list[dict] | None = None) -> None:
+    def audit(self, tenant: str, type_: str, user: str, job_id: str, detail: str, csids: list[dict] | None = None,
+              **extra: Any) -> None:
         t = now()
         self.audit_table.put_item(Item=_dyn({
             "PK": f"TENANT#{tenant}", "SK": f"{t:.6f}#{uuid.uuid4().hex[:6]}", "type": type_, "user": user,
-            "job": job_id, "detail": detail, "csids": csids or [], "expires": int(t + 365 * 86400)}))
+            "job": job_id, "detail": detail, "csids": csids or [], "expires": int(t + 365 * 86400), **extra}))
+
+    # ---- the CSID index (design: Job data model, CSID index entry; Reading the audit log) ------------
+    def index_csid(self, tenant: str, csid: str, **entry: Any) -> None:
+        """One item per record the BMU creates, written when it is created: which job, run, row and step made
+        it. Answers "which BMU job created this record?" with one lookup, also after the job is deleted."""
+        self.audit_table.put_item(Item=_dyn({"PK": f"CSID#{csid}", "SK": "CSID", "tenant": tenant, "at": now(),
+                                             "expires": int(now() + 365 * 86400), **entry}))
+
+    def find_csid(self, csid: str) -> dict | None:
+        item = self.audit_table.get_item(Key={"PK": f"CSID#{csid}", "SK": "CSID"}).get("Item")
+        return _strip(_clean(item)) if item else None
+
+    def put_audit_detail(self, tenant: str, job_id: str, run: int, detail: Any) -> str:
+        """Per-row detail of a large run, as a JSON object in S3 (a one-year lifecycle rule in AWS)."""
+        import json
+        key = f"audit/{tenant}/{job_id}/run-{run:03d}-{int(now())}.json"
+        self.put_bytes(key, json.dumps(detail, default=str).encode(), "application/json")
+        return key
 
     def list_audit(self, tenant: str) -> list[dict]:
         r = self.audit_table.query(KeyConditionExpression=Key("PK").eq(f"TENANT#{tenant}"), ScanIndexForward=False)
         return [_clean(i) for i in r["Items"]]
 
     # ---- S3 staging -------------------------------------------------------------------------
-    def presign_upload(self, key: str, max_bytes: int) -> dict:
-        return self.s3_public.generate_presigned_post(
-            Bucket=self.s.s3_bucket, Key=key,
-            Conditions=[["content-length-range", 1, max_bytes]], ExpiresIn=3600)
+    def presign_upload(self, key: str, max_bytes: int, content_type: str = "") -> dict:
+        """A write-only presigned POST for one key (design: Browser uploads, Sign): the exact key, a size range,
+        the file's content type, SSE-KMS with the staging key when one is configured, about 15 minutes."""
+        fields: dict[str, str] = {}
+        conditions: list[Any] = [["content-length-range", 1, max_bytes]]
+        if content_type:
+            fields["Content-Type"] = content_type
+            conditions.append({"Content-Type": content_type})
+        if self.s.s3_kms_key_id:
+            fields.update({"x-amz-server-side-encryption": "aws:kms", "x-amz-server-side-encryption-aws-kms-key-id": self.s.s3_kms_key_id})
+            conditions += [{"x-amz-server-side-encryption": "aws:kms"},
+                           {"x-amz-server-side-encryption-aws-kms-key-id": self.s.s3_kms_key_id}]
+        return self.s3_public.generate_presigned_post(Bucket=self.s.s3_bucket, Key=key, Fields=fields, Conditions=conditions,
+                                                      ExpiresIn=self.s.upload_url_seconds)
+
+    def list_staged(self, prefix: str):
+        """(key, last modified epoch) of every staged object under a prefix."""
+        paginator = self.s3.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=self.s.s3_bucket, Prefix=prefix):
+            for o in page.get("Contents", []):
+                yield o["Key"], o["LastModified"].timestamp()
 
     def head_object(self, key: str) -> dict | None:
         try:
             return self.s3.head_object(Bucket=self.s.s3_bucket, Key=key)
         except ClientError:
             return None
+
+    def read_head(self, key: str, version_id: str | None, n: int) -> bytes:
+        """The first n bytes of a staged file (a ranged GET)."""
+        kw: dict[str, Any] = {"Bucket": self.s.s3_bucket, "Key": key, "Range": f"bytes=0-{n - 1}"}
+        if version_id:
+            kw["VersionId"] = version_id
+        return self.s3.get_object(**kw)["Body"].read()
 
     def open_object(self, key: str, version_id: str | None = None):
         kw: dict[str, Any] = {"Bucket": self.s.s3_bucket, "Key": key}
@@ -499,7 +556,7 @@ class Storage:
         """Store a row's thumbnail and record its key on the row (re-reading the row if it changed meanwhile).
         Never for a protected row. Returns False if the row is gone or protected."""
         from .thumbnails import thumb_key
-        key = thumb_key(job_id)
+        key = thumb_key(self.s.tenant, job_id, n)
         self.put_bytes(key, jpeg, "image/jpeg")
         for _ in range(attempts):
             row = self.get_row(job_id, n)

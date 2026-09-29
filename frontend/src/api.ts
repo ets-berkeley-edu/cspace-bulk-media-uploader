@@ -13,18 +13,26 @@ function messageOf(detail: unknown, status: number): string {
   return `Request failed (${status})`;
 }
 
-/** JSON request to the BMU API. The session is an httpOnly cookie; X-BMU guards against cross-site requests. */
-export async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+/**
+ * JSON request to the BMU API. The session is an httpOnly cookie; X-BMU guards against cross-site requests.
+ * poll: a background refresh, which doesn't count as activity for the idle sign-out.
+ */
+export async function request<T>(method: string, path: string, body?: unknown, poll = false): Promise<T> {
   const res = await fetch(path, {
     method,
     credentials: "same-origin",
-    headers: { "X-BMU": "1", ...(body !== undefined ? { "Content-Type": "application/json" } : {}) },
+    headers: { "X-BMU": "1", ...(poll ? { "X-BMU-Poll": "1" } : {}), ...(body !== undefined ? { "Content-Type": "application/json" } : {}) },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   const data = res.headers.get("content-type")?.includes("json") ? await res.json() : null;
   if (!res.ok) {
     const detail = data?.detail ?? null;
-    throw new ApiError(res.status, messageOf(detail, res.status), detail);
+    const err = new ApiError(res.status, messageOf(detail, res.status), detail);
+    // Signed out (idle or absolute timeout): the app returns to the sign-in page with the reason.
+    if (res.status === 401 && path !== "/api/me" && path !== "/api/login" && typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("bmu-signed-out", { detail: err.message }));
+    }
+    throw err;
   }
   return data as T;
 }
@@ -46,9 +54,9 @@ export const api = {
   me: () => request<Me>("GET", "/api/me"),
   login: (username: string, password: string) => request<Me>("POST", "/api/login", { username, password }),
   logout: () => request("POST", "/api/logout"),
-  jobs: () => request<{ jobs: Job[] }>("GET", "/api/jobs"),
+  jobs: (poll = false) => request<{ jobs: Job[] }>("GET", "/api/jobs", undefined, poll),
   createJob: (name: string) => request<Job>("POST", "/api/jobs", { name }),
-  job: (id: string) => request<{ job: Job; rows: Row[]; runs: Run[]; created: Created }>("GET", `/api/jobs/${id}`),
+  job: (id: string, poll = false) => request<{ job: Job; rows: Row[]; runs: Run[]; created: Created }>("GET", `/api/jobs/${id}`, undefined, poll),
   /** Fix and reschedule (or Reschedule): a job that needs attention or failed moves to Drafts, locked to you. */
   fix: (id: string) => request<Job>("POST", `/api/jobs/${id}/fix`),
   /** The failure catalog: title, explanation and what to do for each failure code. */
@@ -89,7 +97,7 @@ export const api = {
     request<{ ok: boolean; group: Record<string, string> }>("GET", `/api/dates/parse?text=${encodeURIComponent(text)}`),
   vocabulary: (name: string) => request<{ terms: Term[] }>("GET", `/api/vocabularies/${name}`),
   terms: (field: string, q: string) =>
-    request<{ terms: Term[] }>("GET", `/api/authorities?field=${encodeURIComponent(field)}&q=${encodeURIComponent(q)}`),
+    request<{ terms: Term[]; total?: number; more?: boolean; message?: string }>("GET", `/api/authorities?field=${encodeURIComponent(field)}&q=${encodeURIComponent(q)}`),
 };
 
 export type { Check };

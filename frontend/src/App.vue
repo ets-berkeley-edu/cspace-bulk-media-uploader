@@ -17,6 +17,16 @@ const takeOverSince = ref<number | null>(null);
 const editorKey = ref(0);
 const notice = ref("");
 
+// Signed out while working (idle or absolute timeout): back to the sign-in page, saying why.
+if (typeof window !== "undefined") {
+  window.addEventListener("bmu-signed-out", (e) => {
+    if (!me.value) return;
+    me.value = null;
+    jobId.value = null;
+    notice.value = (e as CustomEvent<string>).detail;
+  });
+}
+
 onMounted(async () => {
   try {
     me.value = await api.me();
@@ -69,7 +79,10 @@ async function scheduled(j: Job) {
 <template>
   <div class="page">
     <p v-if="loading" class="muted">Loading…</p>
-    <LoginForm v-else-if="!me" @signed-in="me = $event" />
+    <template v-else-if="!me">
+      <div v-if="notice" class="msg msg-warn login-notice" role="status">{{ notice }}</div>
+      <LoginForm @signed-in="me = $event; notice = ''" />
+    </template>
     <template v-else>
       <h1>Bulk Media Uploader</h1>
       <p class="subtitle">Prototype · creates Media records, files, Objects and Relations in CollectionSpace using your own account.</p>
