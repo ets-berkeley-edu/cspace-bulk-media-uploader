@@ -92,8 +92,8 @@ async function scheduled(j: Job) {
       <div class="card view">
         <JobEditor v-show="tab === 'editor'" :key="editorKey" :me="me" :job-id="jobId" :mode="mode" :take-over-since="takeOverSince"
                    @scheduled="scheduled" @opened="jobId = $event" @close="newJob" />
-        <DraftsList v-if="tab === 'drafts'" @open="openJob" />
-        <QueueList v-if="tab === 'queue'" @open="openJob" />
+        <DraftsList v-if="tab === 'drafts'" :tenant="me.tenant" @open="openJob" />
+        <QueueList v-if="tab === 'queue'" :tenant="me.tenant" @open="openJob" />
         <FinishedJobs v-if="tab === 'jobs'" :tenant="me.tenant" @open="(id) => openJob(id)" />
       </div>
     </template>

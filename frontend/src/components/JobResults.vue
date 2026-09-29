@@ -4,16 +4,19 @@
  * created, the run that did each step, and for each failure what happened and what to do. The run history
  * lists every run, newest first, with the documents disabled or deleted before it.
  */
-import { computed, ref } from "vue";
+import { computed } from "vue";
 import { formatTime } from "../lib/files";
 import { countsText, failureOf, OUTCOME, RESULT_BADGE, resultCounts, resultState, stepList, STEP_MARK, stepNote } from "../lib/results";
 import type { Job, Row, Run, TenantInfo } from "../types";
 import ErrorBox from "./ErrorBox.vue";
+import PagerBar from "./PagerBar.vue";
+import SortTh from "./SortTh.vue";
+import { tableState, tableView } from "../lib/table";
 
 const props = defineProps<{ job: Job; rows: Row[]; runs: Run[]; tenant: TenantInfo }>();
 
 type Filter = "all" | "problems" | "failed" | "partial" | "notStarted" | "disabled" | "done";
-const filter = ref<Filter>("all");
+const table = tableState();
 const c = computed(() => resultCounts(props.rows));
 const FILTERS = computed<[Filter, string][]>(() => [
   ["all", `All documents (${props.rows.length})`],
@@ -21,9 +24,17 @@ const FILTERS = computed<[Filter, string][]>(() => [
   ["failed", `Failed (${c.value.failed})`], ["partial", `Partial (${c.value.partial})`],
   ["notStarted", `Not started (${c.value.notStarted})`], ["disabled", `Disabled (${c.value.disabled})`], ["done", `Done (${c.value.done})`],
 ]);
-const shown = computed(() => props.rows.filter((r) => {
+const RANK: Record<string, number> = { Failed: 0, Partial: 1, "In progress": 2, "Not started": 2, Disabled: 3, Done: 4 };
+const keys = {
+  n: (r: Row) => r.n,
+  file: (r: Row) => r.file,
+  result: (r: Row) => RANK[resultState(r)] ?? 5,
+  steps: (r: Row) => { const st = Object.values(r.result?.steps ?? {}); return st.filter((x) => x.s === "done").length - st.length; },
+  what: (r: Row) => (r.result?.error ? failureOf(r.result.error.code).title : "~"),
+};
+const view = computed(() => tableView(props.rows, table, keys, (r, f) => {
   const s = resultState(r);
-  switch (filter.value) {
+  switch (f) {
     case "problems": return s === "Failed" || s === "Partial" || s === "Not started" || s === "In progress";
     case "failed": return s === "Failed";
     case "partial": return s === "Partial";
@@ -60,16 +71,16 @@ const earlierProblem = (r: Row) => r.result?.error?.code;
 
     <div v-if="job.code" style="margin:8px 0"><ErrorBox :code="job.code" :detail="job.cancelledBy ? `Cancel requested by ${job.cancelledBy}` : undefined" /></div>
 
-    <div class="pager">
-      <label>Show <select v-model="filter" aria-label="Show documents">
-        <option v-for="[k, label] in FILTERS" :key="k" :value="k">{{ label }}</option></select></label>
-    </div>
+    <PagerBar :state="table" :total="view.total" :of="view.of" :pages="view.pages" :start="view.start" noun="documents" :filters="FILTERS" />
     <div class="table-wrap">
       <table>
-        <thead><tr><th style="width:36px">#</th><th style="min-width:150px">Document</th><th style="width:110px">Result</th><th style="width:300px">Steps</th><th>What happened</th></tr></thead>
+        <thead><tr><SortTh :state="table" sort-key="n" label="#" style="width:44px" /><SortTh :state="table" sort-key="file" label="Document" style="min-width:150px" />
+          <SortTh :state="table" sort-key="result" label="Result" style="width:110px" />
+          <SortTh :state="table" sort-key="steps" label="Steps" style="width:300px" title="Sort by how many steps are done" />
+          <SortTh :state="table" sort-key="what" label="What happened" /></tr></thead>
         <tbody>
-          <tr v-if="!shown.length"><td colspan="5" class="muted" style="text-align:center;padding:18px">No documents match this filter.</td></tr>
-          <tr v-for="r in shown" :key="r.n" :class="{ disabled: resultState(r) === 'Disabled' }">
+          <tr v-if="!view.shown.length"><td colspan="5" class="muted" style="text-align:center;padding:18px">No documents match this filter.</td></tr>
+          <tr v-for="r in view.shown" :key="r.n" :class="{ disabled: resultState(r) === 'Disabled' }">
             <td class="keep">{{ r.n }}</td>
             <td>{{ r.file }}<div class="sub">{{ handlingLabel(r) }}<template v-if="r.skipLink"> · not linked (stopped)</template></div></td>
             <td class="keep"><span class="badge" :class="RESULT_BADGE[resultState(r)]">{{ resultState(r) }}</span></td>
@@ -95,5 +106,6 @@ const earlierProblem = (r: Row) => r.result?.error?.code;
         </tbody>
       </table>
     </div>
+    <PagerBar :state="table" :total="view.total" :of="view.of" :pages="view.pages" :start="view.start" noun="documents" bottom />
   </div>
 </template>

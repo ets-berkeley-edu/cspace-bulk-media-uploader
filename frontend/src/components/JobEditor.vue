@@ -8,6 +8,9 @@ import type { Job, Me, Option, Row, RowChange } from "../types";
 import type { BulkChanges } from "../lib/bulk";
 import BulkPanel from "./BulkPanel.vue";
 import DocumentRow from "./DocumentRow.vue";
+import PagerBar from "./PagerBar.vue";
+import SortTh from "./SortTh.vue";
+import { tableState, tableView } from "../lib/table";
 
 const props = defineProps<{ me: Me; jobId: string | null; mode?: "edit" | "preview"; takeOverSince?: number | null }>();
 const emit = defineEmits<{ scheduled: [job: Job]; opened: [id: string]; close: [] }>();
@@ -28,7 +31,38 @@ api.vocabulary("languages")
   .catch((e) => { message.value = { cls: "msg-warn", text: `Couldn't load the languages list: ${(e as Error).message}` }; });
 const bulkPanel = ref<InstanceType<typeof BulkPanel> | null>(null);
 loadFailures();
-const allSelected = computed(() => rows.value.length > 0 && rows.value.every((r) => selected.has(r.n)));
+// Paging, sorting and the Show filter (design: User interface, Large jobs).
+const table = tableState();
+const handlingLabel = (r: Row) => props.me.tenant.handling.find((h) => h.id === r.handling)?.label ?? r.handling;
+const LEVEL_RANK = { block: 0, warn: 1, ok: 2 } as const;
+const statusRank = (r: Row) => (!r.include ? 3 : r.result?.state === "Done" ? 4 : LEVEL_RANK[worstLevel(r)]);
+const docKeys = {
+  file: (r: Row) => r.file,
+  handling: handlingLabel,
+  publish: (r: Row) => (r.restricted ? 1 : 0),
+  status: statusRank,
+  include: (r: Row) => (r.include ? 0 : 1),
+};
+function docFilter(r: Row, f: string): boolean {
+  const lv = worstLevel(r);
+  switch (f) {
+    case "problems": return r.include && lv !== "ok";
+    case "block": return r.include && lv === "block";
+    case "warn": return r.include && lv === "warn";
+    case "disabled": return !r.include;
+    case "selected": return selected.has(r.n);
+    default: return true;
+  }
+}
+const view = computed(() => tableView(rows.value, table, docKeys, docFilter));
+const docFilters = computed<[string, string][]>(() => {
+  const n = (f: string) => rows.value.filter((r) => docFilter(r, f)).length;
+  return [["all", `All documents (${rows.value.length})`], ["problems", `With problems (${n("problems")})`], ["block", `Need fixing (${n("block")})`],
+    ["warn", `With warnings (${n("warn")})`], ["disabled", `Disabled (${n("disabled")})`], ["selected", `Selected (${selected.size})`]];
+});
+const pageSelected = computed(() => view.value.shown.length > 0 && view.value.shown.every((r) => selected.has(r.n)));
+const pageExpanded = computed(() => view.value.shown.length > 0 && view.value.shown.every((r) => expanded.has(r.n)));
+const moreMatching = computed(() => pageSelected.value && view.value.all.some((r) => !selected.has(r.n)));
 const drag = ref(false);
 const fileInput = ref<HTMLInputElement | null>(null);
 
@@ -54,6 +88,7 @@ async function load(id: string | null) {
   previews.clear();
   expanded.clear();
   selected.clear();
+  Object.assign(table, { page: 1, sort: null, dir: 1, filter: "all" });
   message.value = null;
   if (!id) {
     job.value = null;
@@ -264,9 +299,16 @@ function select(n: number, on: boolean) {
   if (on) selected.add(n);
   else selected.delete(n);
 }
-function selectAll(on: boolean) {
-  selected.clear();
-  if (on) rows.value.forEach((r) => selected.add(r.n));
+/** The header checkbox: the documents on this page (design: with a link to select every matching document). */
+function selectPage(on: boolean) {
+  view.value.shown.forEach((r) => (on ? selected.add(r.n) : selected.delete(r.n)));
+}
+function selectMatching() {
+  view.value.all.forEach((r) => selected.add(r.n));
+}
+function expandPage() {
+  const open = !pageExpanded.value;
+  view.value.shown.forEach((r) => (open ? expanded.add(r.n) : expanded.delete(r.n)));
 }
 
 /** The bulk-change panel: the server applies every change to every target, or refuses and changes nothing. */
@@ -285,10 +327,12 @@ async function bulk(targets: number[], changes: BulkChanges | Partial<Row>, rese
   }
 }
 
-/** "Show documents with problems": expand just the rows that need fixing or have warnings. */
+/** "Show documents with problems": filter to them and expand those on the page. */
 function showProblems() {
+  table.filter = "problems";
+  table.page = 1;
   expanded.clear();
-  rows.value.forEach((r) => r.include && worstLevel(r) !== "ok" && expanded.add(r.n));
+  view.value.shown.forEach((r) => expanded.add(r.n));
 }
 
 async function schedule() {
@@ -364,25 +408,36 @@ function toggle(n: number) {
     <BulkPanel ref="bulkPanel" :rows="rows" :selected="selected" :tenant="me.tenant" :perms="me.perms" :readonly="!editable" :busy="busy" :languages="languages"
                @apply="(t, c) => bulk(t, c, true)" @include="(t, on) => bulk(t, { include: on }, false)" />
     <div class="grid-main">
+    <PagerBar v-if="rows.length" :state="table" :total="view.total" :of="view.of" :pages="view.pages" :start="view.start" noun="documents" :filters="docFilters" />
+    <div v-if="selected.size" class="sel-banner"><strong>{{ selected.size.toLocaleString() }}</strong> selected<template
+      v-if="selected.size > view.shown.length"> across pages</template><template v-if="moreMatching"> · <button class="link" @click="selectMatching">Select all
+      {{ view.total.toLocaleString() }}{{ view.total !== view.of ? " matching" : "" }} documents</button></template>
+      · <button class="link" @click="selected.clear()">Clear selection</button></div>
     <div class="table-wrap">
       <table>
         <thead><tr>
           <th style="width:64px"><span class="sr-only">Preview</span></th>
-          <th style="width:28px"><input type="checkbox" :checked="allSelected" :disabled="!rows.length" aria-label="Select all documents"
-            @change="selectAll(($event.target as HTMLInputElement).checked)" /></th>
-          <th style="width:28px"></th><th>Document</th>
-          <th style="width:220px">Handling</th><th style="width:90px">{{ me.tenant.publish.header }}</th>
-          <th style="width:140px">Status</th><th style="width:90px"></th>
+          <th style="width:28px"><input type="checkbox" :checked="pageSelected" :disabled="!view.shown.length" aria-label="Select all documents on this page"
+            @change="selectPage(($event.target as HTMLInputElement).checked)" /></th>
+          <th style="width:28px"><button class="chevron" :class="{ open: pageExpanded }" :disabled="!view.shown.length"
+            title="Expand or collapse all rows on this page" aria-label="Expand or collapse all rows on this page" @click="expandPage">▸</button></th>
+          <SortTh :state="table" sort-key="file" label="Document" />
+          <SortTh :state="table" sort-key="handling" label="Handling" style="width:220px" />
+          <SortTh :state="table" sort-key="publish" :label="me.tenant.publish.header" style="width:110px" />
+          <SortTh :state="table" sort-key="status" label="Status" style="width:150px" />
+          <SortTh :state="table" sort-key="include" label="Include" style="width:90px" title="Turn off to have the BMU ignore a document" />
         </tr></thead>
         <tbody>
           <tr v-if="!rows.length"><td colspan="8" class="muted" style="text-align:center;padding:18px">No documents yet. Drop files in the box above, or browse, to add them to this job.</td></tr>
-          <DocumentRow v-for="r in rows" :key="r.n" :row="r" :tenant="me.tenant" :perms="me.perms" :checking="checking.has(r.n)" :preview="previews.get(r.n)"
+          <tr v-else-if="!view.shown.length"><td colspan="8" class="muted" style="text-align:center;padding:18px">No documents match this filter.</td></tr>
+          <DocumentRow v-for="r in view.shown" :key="r.n" :row="r" :tenant="me.tenant" :perms="me.perms" :checking="checking.has(r.n)" :preview="previews.get(r.n)"
                        :expanded="expanded.has(r.n)" :readonly="readonly || !editable" :selected="selected.has(r.n)" :languages="languages"
                        :other-names="rows.filter((x) => x.n !== r.n).map((x) => x.file)"
                        @toggle="toggle(r.n)" @edit="edit(r, $event)" @remove="remove(r)" @select="select(r.n, $event)" @replace="replaceFile(r, $event)" />
         </tbody>
       </table>
     </div>
+    <PagerBar :state="table" :total="view.total" :of="view.of" :pages="view.pages" :start="view.start" noun="documents" bottom />
     </div>
     </div>
 

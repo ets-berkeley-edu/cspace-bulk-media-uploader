@@ -177,8 +177,19 @@ div.field > label > span { display: block; margin-bottom: 2px; }
 .step-failed { color: var(--text-danger); }
 .results-title { font-size: 15px; margin: 8px 0 2px; }
 .runs { display: flex; flex-direction: column; gap: 3px; margin: 8px 0; }
-.pager { display: flex; gap: 12px; align-items: center; margin: 10px 0 6px; font-size: 13px; }
-.pager select { width: auto; }
+.pager { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 10px 0 6px; font-size: 13px; }
+.pager select { width: auto; padding: 2px 6px; }
+.pager-count { color: var(--text-secondary); }
+.pager-nav { display: inline-flex; gap: 4px; align-items: center; }
+.pager-nav button { padding: 2px 8px; }
+.pager-nav span { margin: 0 4px; }
+.sort-btn { background: none; border: none; padding: 0; font: inherit; font-weight: 600; color: inherit; cursor: pointer; white-space: nowrap; }
+.sort-btn:hover:not(:disabled) { background: none; text-decoration: underline; }
+.sort-ind { font-size: 10px; color: var(--text-muted); }
+th[aria-sort="ascending"] .sort-ind, th[aria-sort="descending"] .sort-ind { color: var(--text-accent); }
+.sel-banner { font-size: 13px; background: var(--bg-accent); color: var(--text-accent); border-radius: 6px; padding: 5px 10px; margin: 4px 0; }
+.jd-meta { display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 12px; margin: 2px 0 6px; }
+.jd-meta strong { color: var(--text-secondary); font-weight: 600; }
 .list-tools { font-size: 12px; margin: 0 0 6px; }
 table.inner td { background: var(--surface-2); }
 .delete-confirm { max-width: 520px; }
