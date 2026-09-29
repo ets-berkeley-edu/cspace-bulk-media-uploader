@@ -66,3 +66,16 @@ describe("status by object behavior", () => {
     expect(rowStatus(row("create", null), tenant).text).toBe("Not checked yet");
   });
 });
+
+describe("supported file types (design: Supported file types)", () => {
+  it("skips files of other types and says which, accepting PDF", async () => {
+    const { splitSupported, skippedText, fileKind } = await import("../lib/files");
+    const types = ["jpg", "jpeg", "tif", "tiff", "png", "pdf", "wav", "mp3", "aac", "mp4", "x3d"];
+    const r = splitSupported([{ name: "15-1234.JPG" }, { name: "notes.pdf" }, { name: ".DS_Store" }, { name: "a.docx" }], types);
+    expect(r.ok.map((f) => f.name)).toEqual(["15-1234.JPG", "notes.pdf"]);
+    expect(r.skipped.map((f) => f.name)).toEqual([".DS_Store", "a.docx"]);
+    expect(skippedText([".DS_Store", "a.docx"], "JPEG or PDF")).toBe("2 files skipped: .DS_Store, a.docx. The BMU accepts JPEG or PDF.");
+    expect(splitSupported([{ name: "a.docx" }], undefined).ok).toHaveLength(1);
+    expect(fileKind("notes.pdf").label).toBe("PDF document");
+  });
+});

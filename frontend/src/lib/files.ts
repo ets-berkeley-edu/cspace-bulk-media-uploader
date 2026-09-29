@@ -73,5 +73,24 @@ export function fileKind(name: string): { icon: string; label: string; image: bo
   if (["wav", "mp3", "aac"].includes(ext)) return { icon: "♪", label: "Audio", image: false };
   if (ext === "mp4") return { icon: "▶", label: "Video", image: false };
   if (ext === "x3d") return { icon: "⬡", label: "3D model", image: false };
+  if (ext === "pdf") return { icon: "PDF", label: "PDF document", image: false };
   return { icon: ext.toUpperCase() || "FILE", label: ext.toUpperCase() || "File", image: ["jpg", "jpeg", "png", "tif", "tiff"].includes(ext) };
+}
+
+/** Split chosen files into the ones the BMU accepts and the ones it skips (design: Supported file types).
+ *  Skipped files are never uploaded; the server's row check is the backstop. No list means accept all. */
+export function splitSupported<T extends { name: string }>(files: T[], types: string[] | undefined): { ok: T[]; skipped: T[] } {
+  if (!types?.length) return { ok: files, skipped: [] };
+  const allowed = new Set(types.map((t) => t.toLowerCase()));
+  const ext = (n: string) => (n.includes(".") ? n.split(".").pop()!.toLowerCase() : "");
+  const ok: T[] = [];
+  const skipped: T[] = [];
+  for (const f of files) (allowed.has(ext(f.name)) ? ok : skipped).push(f);
+  return { ok, skipped };
+}
+
+/** The message for files skipped because of their type. */
+export function skippedText(names: string[], hint: string | undefined): string {
+  const shown = names.slice(0, 5).join(", ") + (names.length > 5 ? `, and ${names.length - 5} more` : "");
+  return `${names.length} file${names.length === 1 ? "" : "s"} skipped: ${shown}. The BMU accepts ${hint || "only supported file types"}.`;
 }

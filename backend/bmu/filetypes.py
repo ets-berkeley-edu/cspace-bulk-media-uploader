@@ -1,10 +1,16 @@
 """What a staged file really is, from its first bytes (design: Browser uploads, File contents): the worker
 checks each file's actual type against its extension before uploading it to CollectionSpace, and fails the
-document with file_type_rejected when they differ (for example a .tif that is really a JPEG)."""
+document with file_type_rejected when they differ (for example a .tif that is really a JPEG).
+
+It also holds the list of file types the BMU accepts, the same for every tenant (design: Supported file types):
+the legacy BMU's list plus PDF documents. The browser skips other files when they are added; the row check
+is the backstop."""
 from __future__ import annotations
 
-EXT_FAMILY = {"jpg": "JPEG", "jpeg": "JPEG", "png": "PNG", "tif": "TIFF", "tiff": "TIFF", "wav": "WAV", "mp3": "MP3",
-              "aac": "AAC", "mp4": "MP4", "x3d": "X3D"}
+EXT_FAMILY = {"jpg": "JPEG", "jpeg": "JPEG", "png": "PNG", "tif": "TIFF", "tiff": "TIFF", "pdf": "PDF", "wav": "WAV",
+              "mp3": "MP3", "aac": "AAC", "mp4": "MP4", "x3d": "X3D"}
+SUPPORTED_EXTENSIONS = tuple(EXT_FAMILY)
+SUPPORTED_HINT = "JPEG, TIFF, PNG, PDF, WAV, MP3, AAC, MP4 or X3D"
 HEAD_BYTES = 64
 
 
@@ -16,6 +22,8 @@ def detect(head: bytes) -> str | None:
         return "PNG"
     if head[:4] in (b"II*\x00", b"MM\x00*", b"II+\x00", b"MM\x00+"):  # TIFF and BigTIFF
         return "TIFF"
+    if head.lstrip(b"\x00\t\r\n ").startswith(b"%PDF-"):
+        return "PDF"
     if head[:4] == b"RIFF" and head[8:12] == b"WAVE":
         return "WAV"
     if head[4:8] == b"ftyp":

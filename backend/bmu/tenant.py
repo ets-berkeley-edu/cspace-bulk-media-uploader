@@ -10,6 +10,8 @@ from typing import Any
 
 import yaml
 
+from .filetypes import SUPPORTED_EXTENSIONS, SUPPORTED_HINT
+
 
 @dataclass(frozen=True)
 class Handling:
@@ -73,6 +75,8 @@ class Tenant:
             "filenamePattern": self.filename_pattern.pattern,
             "mediaTypes": [o.__dict__ for o in self.media_types],
             "languageDefault": self.language_default,
+            "fileTypes": list(SUPPORTED_EXTENSIONS),
+            "fileTypesHint": SUPPORTED_HINT,
             "authorityFields": self.authority_fields,
             "sensitivity": {"summary": self.sensitivity.get("summary", ""), "explain": self.sensitivity.get("explain", [])},
         }

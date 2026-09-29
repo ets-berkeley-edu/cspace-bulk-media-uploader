@@ -19,6 +19,9 @@ export interface TenantInfo {
   filenamePattern: string; // Python regular expression with named parts (obj)
   mediaTypes: Option[];
   languageDefault: string;
+  /** File extensions the BMU accepts, and how to name them (design: Supported file types). */
+  fileTypes?: string[];
+  fileTypesHint?: string;
   authorityFields: Record<string, string[]>;
   sensitivity?: { summary: string; explain: string[] };
 }

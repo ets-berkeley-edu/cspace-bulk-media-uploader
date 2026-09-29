@@ -322,6 +322,17 @@ def test_unsupported_file_type_blocks(api, login, add_uploaded):
     assert any("doesn't accept .docx" in t for t in _checks(chk, "block"))
 
 
+def test_pdf_documents_are_accepted_for_every_tenant(api, login, add_uploaded):
+    from bmu.filetypes import SUPPORTED_EXTENSIONS
+    assert "pdf" in SUPPORTED_EXTENSIONS
+    me = login()
+    assert "pdf" in me["tenant"]["fileTypes"]
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_a.pdf"])
+    chk = api.post(f"/api/jobs/{job}/check").json()["rows"][0]
+    assert not any("doesn't accept" in t for t in _checks(chk, "block"))
+
+
 def test_scheduling_fetches_permissions_again(api, login, add_uploaded, fake, services):
     """Design: roles can change during a session, so scheduling re-fetches permissions and re-checks the job."""
     login()

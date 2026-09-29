@@ -30,13 +30,26 @@ def test_finding_objects_needs_read_on_objects(api, login, add_uploaded, fake):
     assert any("can't read Object records" in t for t in _texts(r))
 
 
-def test_without_read_on_media_the_id_check_is_a_warning(api, login, add_uploaded, fake):
+def test_without_read_on_media_the_id_check_blocks(api, login, add_uploaded, fake):
     fake.perm_overrides["admin"] = {"media": "CU"}
     login()
     job = new_job(api)
     add_uploaded(job, ["15-1234_1.jpg"])
     r = api.post(f"/api/jobs/{job}/check").json()["rows"][0]
-    assert any(c["level"] == "warn" and "can't read Media records" in c["text"] for c in r["checks"])
+    assert any(c["level"] == "block" and "can't read Media records" in c["text"] for c in r["checks"])
+
+
+def test_a_filled_authority_field_needs_read_on_its_authority(api, login, add_uploaded, fake):
+    fake.perm_overrides["admin"] = {"personauthorities": ""}
+    login()
+    job = new_job(api)
+    n = add_uploaded(job, ["15-1234_1.jpg"])[0]["n"]
+    r = api.post(f"/api/jobs/{job}/check").json()["rows"][0]
+    assert not any("authority" in t for t in _texts(r))  # empty fields need no check
+    ref = "urn:cspace:pahma.cspace.berkeley.edu:personauthorities:name(person):item:name(7475)'Leslie Freund'"
+    r = api.patch(f"/api/jobs/{job}/rows/{n}", json={"creator": ref}).json()["row"]
+    assert any(c["level"] == "block" and "can't read the Person authority" in c["text"] and "Creator" in c["text"]
+               for c in r["checks"])
 
 
 def test_dates_need_the_date_parser(api, login, add_uploaded, fake):

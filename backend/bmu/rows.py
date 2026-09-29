@@ -6,6 +6,7 @@ import time
 from typing import Any, Callable
 
 from .cspace import CSpaceClient, CSpaceError
+from .filetypes import SUPPORTED_EXTENSIONS, SUPPORTED_HINT
 from .sensitivity import evaluate as evaluate_sensitivity
 from .tenant import OBJECT_STEPS, Tenant, parse_filename
 
@@ -282,10 +283,6 @@ def created_records(rows: list[dict], job: dict | None = None) -> dict:
     return {"counts": c, "csids": csids}
 
 
-# The design's supported file types, the same for every tenant: images, audio, video and 3D models.
-SUPPORTED_EXTENSIONS = {"jpg", "jpeg", "tif", "tiff", "png", "wav", "mp3", "aac", "mp4", "x3d"}
-SUPPORTED_HINT = "JPEG, TIFF, PNG, WAV, MP3, AAC, MP4 or X3D"
-
 # How long a row's CollectionSpace lookup (object or Media search) is reused while editing. Scheduling always
 # looks everything up again.
 LOOKUP_TTL_SECONDS = 600
@@ -436,12 +433,14 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
                 existing = lookup(r, "media", idn, client.find_media) if perms.get("readMedia", True) else None
             except CSpaceError:
                 existing = None
-            if not perms.get("readMedia", True):
-                out.append({"level": "warn", "text": "Your account can't read Media records, so the BMU can't check whether "
-                                                     f"a Media record with ID {idn} already exists."})
+            if not perms.get("readMedia", True):  # design: a check the row needs but can't run blocks it
+                out.append({"level": "block", "text": "Your account can't read Media records (read on media), so the BMU can't "
+                                                      f"check whether a Media record with ID {idn} already exists. Ask a "
+                                                      "CollectionSpace administrator for the permission."})
             if existing:
                 out.append({"level": "warn", "text": f"A Media record with ID {idn} already exists in CollectionSpace "
                                                      f"(CSID {', '.join(existing[:5])}{' …' if len(existing) > 5 else ''})."})
+        out += authority_read_checks(r, perms)
         if r.get("date") and not perms.get("readDates", True):
             out.append({"level": "block", "text": "Your account can't use CollectionSpace's date parser (read on structureddates), "
                                                   "so the date can't be checked. Clear the date, or ask for the permission."})
@@ -461,6 +460,24 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
             out.append({"level": "info", "text": f"Orientation: {r['orientation']}."})
         r["checks"] = out
     return incomplete
+
+
+AUTHORITY_LABEL = {"creator": "Creator", "contributor": "Contributor", "rightsHolder": "Rights holder"}
+_AUTHORITY_READ = {"personauthorities": ("readPersons", "Person"), "orgauthorities": ("readOrgs", "Organization")}
+
+
+def authority_read_checks(r: dict, perms: dict[str, bool]) -> list[dict]:
+    """A filled authority field is checked against its authority, so the user must be able to read that authority
+    (design: a check the row needs but can't run blocks it). Empty fields need no check."""
+    out = []
+    for field, label in AUTHORITY_LABEL.items():
+        ref = r.get(field) or ""
+        service = next((s for s in _AUTHORITY_READ if f":{s}:" in ref), None)
+        if service and not perms.get(_AUTHORITY_READ[service][0], True):
+            kind = _AUTHORITY_READ[service][1]
+            out.append({"level": "block", "text": f"Your account can't read the {kind} authority, so the BMU can't check "
+                                                  f"{label}. Clear {label}, or ask for read on {service}."})
+    return out
 
 
 def _labels(tenant: Tenant, behaviors: tuple[str, ...]) -> str:
@@ -523,6 +540,9 @@ def sensitivity_checks(tenant: Tenant, r: dict) -> list[dict]:
     elif r.get("softSignals") and not r.get("restricted"):
         out.append({"level": "warn", "text": f"Object {r.get('obj')} has {', '.join(r['softSignals'])}. Consider checking {header}; "
                                              "nothing is set automatically."})
+    elif r.get("softSignals"):  # design: once the image is withheld, the signal stays visible as information
+        out.append({"level": "info", "text": f"Object {r.get('obj')} has {', '.join(r['softSignals'])}; this image is withheld "
+                                             f"({header} is checked)."})
     return out
 
 

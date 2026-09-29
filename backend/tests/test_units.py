@@ -142,6 +142,7 @@ def test_file_types_are_read_from_their_first_bytes():
     assert detect(b"ID3\x04\x00") == "MP3" and detect(b"\xff\xfb\x90\x00") == "MP3"
     assert detect(b"\xff\xf1\x50\x80") == "AAC"
     assert detect(b'\xef\xbb\xbf<?xml version="1.0"?><X3D>') == "X3D"
+    assert detect(b"%PDF-1.7\n%\xe2\xe3") == "PDF"
     assert detect(b"GIF89a") is None
     assert mismatch("15-1234.jpg", b"\xff\xd8\xff") is None
     assert mismatch("15-1234.TIF", b"\xff\xd8\xff") == "its name ends in .tif, but its content is JPEG"

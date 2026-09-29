@@ -46,6 +46,10 @@ def test_documents_linked_to_sensitive_objects_are_protected(api, login, add_upl
     assert any(c["level"] == "info" and c["text"].startswith("Protected file:") for c in hr["checks"])
     assert soft["protected"] is None and any(c["level"] == "warn" and "preference or recommendation" in c["text"] for c in soft["checks"])
     assert plain["protected"] is None
+    # once the image is withheld, the soft signal stays visible as information, not a warning
+    soft = api.patch(f"/api/jobs/{job}/rows/{soft['n']}", json={"restricted": True}).json()["row"]
+    assert not any(c["level"] == "warn" for c in soft["checks"])
+    assert any(c["level"] == "info" and "preference or recommendation" in c["text"] and "withheld" in c["text"] for c in soft["checks"])
     # users can't set or clear the flag
     assert api.patch(f"/api/jobs/{job}/rows/{plain['n']}", json={"protected": {"reason": "x"}}).status_code == 422
     # a protected draft expires after 7 days instead of 30

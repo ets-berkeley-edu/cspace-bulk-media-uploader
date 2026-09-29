@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { api, ApiError } from "../api";
-import { canPreview, formatTime, makeThumbnail, mapLimit, uploadToS3 } from "../lib/files";
+import { canPreview, formatTime, makeThumbnail, mapLimit, skippedText, splitSupported, uploadToS3 } from "../lib/files";
 import { readImageInfo } from "../lib/imageinfo";
 import { jobCounts, worstLevel } from "../lib/status";
 import { failureOf, loadFailures, OUTCOME } from "../lib/results";
@@ -35,6 +35,8 @@ const bulkPanel = ref<InstanceType<typeof BulkPanel> | null>(null);
 loadFailures();
 // Paging, sorting and the Show filter (design: User interface, Large jobs).
 const table = tableState();
+/** The file picker offers only the file types the BMU accepts. */
+const accept = computed(() => (props.me.tenant.fileTypes ?? []).map((t) => "." + t).join(","));
 const handlingLabel = (r: Row) => props.me.tenant.handling.find((h) => h.id === r.handling)?.label ?? r.handling;
 const LEVEL_RANK = { block: 0, warn: 1, ok: 2 } as const;
 const statusRank = (r: Row) => (!r.include ? 3 : r.result?.state === "Done" ? 4 : LEVEL_RANK[worstLevel(r)]);
@@ -253,9 +255,13 @@ function replace(row: Row) {
 
 /** Add files: create rows, upload each straight to S3 (3 at a time), then confirm with the API. */
 async function addFiles(list: FileList | File[] | null) {
-  const files = Array.from(list ?? []);
-  if (!files.length || !editable.value) return;
+  const chosen = Array.from(list ?? []);
+  if (!chosen.length || !editable.value) return;
   message.value = null;
+  // Design (Supported file types): files of other types are skipped here and never uploaded.
+  const { ok: files, skipped } = splitSupported(chosen, props.me.tenant.fileTypes);
+  if (skipped.length) message.value = { cls: "msg-warn", text: skippedText(skipped.map((f) => f.name), props.me.tenant.fileTypesHint) };
+  if (!files.length) return;
   try {
     const j = await ensureJob();
     // Design: the browser reads each image's EXIF date and orientation first and sends them with the documents,
@@ -285,6 +291,10 @@ async function addFiles(list: FileList | File[] | null) {
 /** Replace the file of a document whose Media record exists; the rerun uploads it to that record. */
 async function replaceFile(row: Row, file: File) {
   if (!job.value) return;
+  if (!splitSupported([file], props.me.tenant.fileTypes).ok.length) {
+    message.value = { cls: "msg-warn", text: skippedText([file.name], props.me.tenant.fileTypesHint) };
+    return;
+  }
   try {
     const r = await api.replaceFile(job.value.id, row.n, { name: file.name, size: file.size, type: file.type });
     replace(r.row);
@@ -512,7 +522,8 @@ function toggle(n: number) {
          @drop.prevent="drag = false; addFiles($event.dataTransfer?.files ?? null)">
       ⬆ Drop documents here or <span style="text-decoration:underline">browse</span>
       <div class="sub">{{ me.tenant.filenameHint }}</div>
-      <input ref="fileInput" type="file" multiple hidden @change="addFiles(($event.target as HTMLInputElement).files); ($event.target as HTMLInputElement).value = ''" />
+      <div v-if="me.tenant.fileTypesHint" class="sub">Accepts {{ me.tenant.fileTypesHint }}</div>
+      <input ref="fileInput" type="file" multiple hidden :accept="accept" @change="addFiles(($event.target as HTMLInputElement).files); ($event.target as HTMLInputElement).value = ''" />
     </div>
 
     <details v-if="me.tenant.sensitivity?.summary" class="sens-explain">
