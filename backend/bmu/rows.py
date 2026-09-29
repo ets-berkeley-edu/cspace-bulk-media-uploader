@@ -154,7 +154,7 @@ def media_created(row: dict) -> bool:
 def fix_fields(row: dict) -> set[str]:
     """What a user may change on a row whose Media record already exists: only what the rerun still needs.
     A corrected object number when the object step failed on its number; stopping the link when the object
-    wasn't found (or matched several) or relations weren't allowed; Exclude from job."""
+    wasn't found (or matched several) or relations weren't allowed; Exclude."""
     st = _steps(row)
     allowed = {"include"}
     obj_codes = {st[n].get("code") for n in OBJ_STEPS if n in st and st[n].get("s") == "failed"}

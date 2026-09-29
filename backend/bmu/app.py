@@ -762,7 +762,7 @@ def _routes(app: FastAPI) -> None:
         row = s.storage.get_row(job_id, n) or _404()
         if is_locked(row):
             raise HTTPException(409, "This document already created records in CollectionSpace, so it can't be deleted. "
-                                     "Check Exclude from job to have the BMU ignore it.")
+                                     "Check Exclude to have the BMU ignore it.")
         for key in {row.get("s3Key"), row.get("supersededKey")} - {None, ""}:
             s.storage.delete_object(key)
         s.storage.delete_row(job_id, n)

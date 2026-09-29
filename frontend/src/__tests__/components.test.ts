@@ -106,7 +106,7 @@ describe("DocumentRow checks", () => {
     expect((mediaOnly.find('input[aria-label="15-1234_a.jpg in the job\'s group"]').element as HTMLInputElement).disabled).toBe(true);
   });
 
-  it("Exclude from job is checked for an excluded document, and checking it excludes the document", async () => {
+  it("Exclude is checked for an excluded document, and checking it excludes the document", async () => {
     const w = mountRow({ row: row() });
     const box = w.find('input[aria-label="Exclude 15-1234_a.jpg from the job"]');
     expect((box.element as HTMLInputElement).checked).toBe(false);
@@ -164,5 +164,17 @@ describe("RepeatingSelect (design: repeating media type and language)", () => {
     const ref = "urn:cspace:pahma.cspace.berkeley.edu:vocabularies:name(languages):item:name(eng)'English'";
     const w = mount(RepeatingSelect, { props: { modelValue: [ref], options: [], label: "Language", word: "language" } });
     expect(w.find("select option:checked").text()).toBe("English");
+  });
+});
+
+describe("SortTh", () => {
+  it("shows its hover description on the column heading", async () => {
+    const { default: SortTh } = await import("../components/SortTh.vue");
+    const { tableState } = await import("../lib/table");
+    const w = mount({ components: { SortTh }, template: "<table><thead><tr><SortTh v-bind='p'/></tr></thead></table>",
+      data: () => ({ p: { state: tableState(), sortKey: "include", label: "Exclude", title: "To exclude a document from a job, check the box." } }) });
+    const th = w.find("th");
+    expect(th.text()).toContain("Exclude");
+    expect(th.attributes("title")).toBe("To exclude a document from a job, check the box.");
   });
 });

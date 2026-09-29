@@ -185,7 +185,6 @@ div.field > label > span { display: block; margin-bottom: 2px; }
 .pager-nav span { margin: 0 4px; }
 .sort-btn { background: none; border: none; padding: 0; font: inherit; font-weight: 600; color: inherit; cursor: pointer; white-space: nowrap; }
 .sort-btn:hover:not(:disabled) { background: none; text-decoration: underline; }
-th.wrap-th .sort-btn { white-space: normal; text-align: left; }
 .sort-ind { font-size: 10px; color: var(--text-muted); }
 th[aria-sort="ascending"] .sort-ind, th[aria-sort="descending"] .sort-ind { color: var(--text-accent); }
 .sel-banner { font-size: 13px; background: var(--bg-accent); color: var(--text-accent); border-radius: 6px; padding: 5px 10px; margin: 4px 0; }

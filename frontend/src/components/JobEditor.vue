@@ -546,7 +546,7 @@ function toggle(n: number) {
                   title="Whether this image will appear on the museum's public portal, combining the object's sensitivity and the image's own setting" />
           <SortTh v-if="job?.groupOn" :state="table" sort-key="group" label="Group" style="width:70px" />
           <SortTh :state="table" sort-key="status" label="Status" style="width:150px" />
-          <SortTh :state="table" sort-key="include" label="Exclude from job" class="wrap-th" style="width:80px" title="Check to have the BMU ignore a document" />
+          <SortTh :state="table" sort-key="include" label="Exclude" style="width:80px" title="To exclude a document from a job, check the box." />
         </tr></thead>
         <tbody>
           <tr v-if="!rows.length"><td :colspan="job?.groupOn ? 10 : 9" class="muted" style="text-align:center;padding:18px">No documents yet. Drop files in the box above, or browse, to add them to this job.</td></tr>
