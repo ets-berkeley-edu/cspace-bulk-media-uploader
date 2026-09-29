@@ -59,9 +59,22 @@ docker compose up --build
 ```
 
 Open http://localhost:5173. With the simulated CollectionSpace, sign in as `admin`/`admin` (all permissions),
-`limited`/`limited` (can't create objects) or `reader`/`reader` (read only). Objects `15-1234`, `12-5678`,
-`15-1240` and `1-2345` exist; `9-9999` matches two objects. The simulator's state is at
-http://localhost:8180/_fake/state (reset it with `curl -X POST localhost:8180/_fake/reset`).
+`limited`/`limited` (can't create objects) or `reader`/`reader` (read only). Sample objects (list them with
+`curl localhost:8180/_fake/objects`):
+
+| Object number | For testing |
+| --- | --- |
+| `15-1234`, `12-5678`, `15-1240`, `1-2345`, `3-1001`, `3-1002`, `16-4711` | Ordinary objects (a Media record with ID `15-1234` already exists) |
+| `3-1003.1` | A part number with a dot, e.g. `3-1003.1_a.jpg` |
+| `9-9999` | Two objects share this number |
+| `3-1004` | Deleted in CollectionSpace, so searches don't find it |
+| `12-2001` | Sensitive: culturally sensitive, Human Remains department |
+| `12-2002` | Sensitive: NAGPRA status and a display restriction at the "restriction" level |
+| `12-2003` | Not sensitive, but a display restriction at the "preference" level (a warning in the design) |
+
+The sensitivity fields are there for the Protected files feature, which isn't built yet; until then these
+objects behave like ordinary ones. The simulator's state is at http://localhost:8180/_fake/state (reset it with
+`curl -X POST localhost:8180/_fake/reset`).
 
 To watch the job queue, or to cancel a run partway, slow the simulated CollectionSpace down so each create and
 upload takes a while: `curl -X POST 'localhost:8180/_fake/slow?seconds=2'` (`seconds=0` turns it off).
