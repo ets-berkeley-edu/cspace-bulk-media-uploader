@@ -5,6 +5,7 @@ import { formatBytes } from "../lib/files";
 import { filenameProblems, idLabel, objectLabel } from "../lib/filenames";
 import { handlingBlocked, rowStatus, worstLevel } from "../lib/status";
 import { canReplaceFile, createdSomething, fixFields, mediaCreated, objectStepRan, stepList, STEP_MARK, stepNote } from "../lib/results";
+import { portalOf } from "../lib/portal";
 import AuthorityInput from "./AuthorityInput.vue";
 import DateInput from "./DateInput.vue";
 import ErrorBox from "./ErrorBox.vue";
@@ -18,8 +19,9 @@ const emit = defineEmits<{ edit: [changes: Partial<Row>]; remove: []; toggle: []
 
 // Design: a failed upload shows "Upload failed" with Retry and Remove. An upload this page isn't sending
 // (the page that added the file was closed, or it's another person's browser) won't finish on its own.
-const stalled = computed(() => !props.uploadingHere && !props.row.result && ["pending", "uploading", "verifying"].includes(props.row.upload.s));
-const canRetry = computed(() => !props.readonly && props.row.include && !props.row.result && (props.row.upload.s === "failed" || stalled.value));
+const stalled = computed(() => !props.uploadingHere && !mediaCreated(props.row) && ["pending", "uploading", "verifying"].includes(props.row.upload.s));
+const canRetry = computed(() => !props.readonly && props.row.include && !mediaCreated(props.row) && (props.row.upload.s === "failed" || stalled.value));
+const portal = computed(() => portalOf(props.row, props.tenant));
 const confirmRemove = ref(false);
 
 // The job's group: only documents linked to an object can join; once its object is in the group, it stays.
@@ -73,12 +75,15 @@ function text(field: keyof Row, e: Event) {
 
 <template>
   <tr :class="{ disabled: !row.include }">
-    <td><div class="thumb"><img v-if="preview" :src="preview" alt="" /><span v-else>{{ row.file.split(".").pop()?.toUpperCase() }}</span></div></td>
+    <td><div class="thumb" :class="{ locked: row.protected && !preview }" :title="row.protected && !preview ? 'Protected file: only the person who added it sees a preview' : ''">
+      <img v-if="preview" :src="preview" alt="" /><span v-else-if="row.protected" aria-label="Protected file">🔒</span>
+      <span v-else>{{ row.file.split(".").pop()?.toUpperCase() }}</span></div></td>
     <td class="keep"><input type="checkbox" :checked="selected" :aria-label="`Select ${row.file}`"
       @change="emit('select', ($event.target as HTMLInputElement).checked)" /></td>
     <td class="keep"><button class="chevron" :class="{ open: expanded }" :aria-expanded="expanded" aria-label="Show details" @click="emit('toggle')">▸</button></td>
     <td>
-      <div>{{ row.file }}<span v-if="renamed" class="badge b-accent" style="margin-left:6px" :title="`Original: ${original}`">Renamed</span></div>
+      <div>{{ row.file }}<span v-if="renamed" class="badge b-accent" style="margin-left:6px" :title="`Original: ${original}`">Renamed</span>
+        <span v-if="row.protected" class="badge b-danger" style="margin-left:6px" :title="`Protected file: ${row.protected.reason}`">🔒 Protected</span></div>
       <div class="sub">{{ formatBytes(row.size) }}<template v-if="handling?.object !== 'none'"> · object {{ row.obj || "—" }}</template></div>
     </td>
     <td>
@@ -91,6 +96,7 @@ function text(field: keyof Row, e: Event) {
       <input type="checkbox" :checked="row.restricted" :disabled="ro || !row.include" :aria-label="tenant.publish.header"
              @change="emit('edit', { restricted: ($event.target as HTMLInputElement).checked })" />
     </td>
+    <td><span class="portal" :class="`portal-${portal.k}`" :title="portal.why">{{ portal.k === "pub" ? "●" : "⊘" }} {{ portal.text }}</span></td>
     <td v-if="groupOn" style="text-align:center">
       <input type="checkbox" :checked="inGroup && handling?.object !== 'none'" :aria-label="`${row.file} in the job's group`" :title="groupWhy"
              :disabled="readonly || !row.include || handling?.object === 'none' || groupDone || done || (!perms.groups && !inGroup)"
@@ -111,7 +117,7 @@ function text(field: keyof Row, e: Event) {
     </td>
   </tr>
   <tr v-if="expanded" class="detail">
-    <td :colspan="groupOn ? 9 : 8">
+    <td :colspan="groupOn ? 10 : 9">
       <template v-if="created">
         <div class="msg msg-info">
           <template v-if="done">This document was fully created in CollectionSpace (Media record {{ row.result?.steps?.media?.csid }}). Nothing here can

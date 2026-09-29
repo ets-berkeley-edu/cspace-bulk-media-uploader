@@ -72,8 +72,9 @@ Open http://localhost:5173. With the simulated CollectionSpace, sign in as `admi
 | `12-2002` | Sensitive: NAGPRA status and a display restriction at the "restriction" level |
 | `12-2003` | Not sensitive, but a display restriction at the "preference" level (a warning in the design) |
 
-The sensitivity fields are there for the Protected files feature, which isn't built yet; until then these
-objects behave like ordinary ones. The simulator's state is at http://localhost:8180/_fake/state (reset it with
+Documents linked to `12-2001` or `12-2002` become protected files automatically; `12-2003` gives a warning.
+The rules are in `backend/bmu/tenants/pahma.yaml` (`sensitivity`), and the Object field names they read must be
+confirmed on the QA tenant with `scripts/check_cspace.py --object <number> --show-object`. The simulator's state is at http://localhost:8180/_fake/state (reset it with
 `curl -X POST localhost:8180/_fake/reset`).
 
 To watch the job queue, or to cancel a run partway, slow the simulated CollectionSpace down so each create and

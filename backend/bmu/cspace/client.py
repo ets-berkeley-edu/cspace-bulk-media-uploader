@@ -144,6 +144,10 @@ class CSpaceClient:
         r = self._request("GET", "collectionobjects", params={"as": q, "wf_deleted": "false", "pgSz": "10"})
         return [csid for csid, num in _list_items(r.content, "objectNumber") if num == object_number]
 
+    def get_object(self, csid: str) -> bytes:
+        """An Object record's XML, all parts (for its sensitivity fields)."""
+        return self._request("GET", f"collectionobjects/{csid}").content
+
     def find_media(self, identification_number: str) -> list[str]:
         q = f'media_common:identificationNumber = "{_quote(identification_number)}"'
         r = self._request("GET", "media", params={"as": q, "wf_deleted": "false", "pgSz": "10"})

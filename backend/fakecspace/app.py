@@ -62,9 +62,9 @@ SAMPLE_OBJECTS = [
     ("16-4711", "Ordinary"),
 ]
 
-# Objects PAHMA treats as sensitive, or nearly so (design: Protected files, Per-tenant signals). The BMU doesn't
-# read these fields yet: they are for the Protected files feature, whose real CollectionSpace field names are to
-# be confirmed on the QA tenant when it is built. Search results don't include them, as in CollectionSpace.
+# Objects PAHMA treats as sensitive, or nearly so (design: Protected files, Per-tenant signals). GET
+# collectionobjects/{csid} returns these fields with the element names in bmu/tenants/pahma.yaml's sensitivity
+# rules; both are the prototype's reading of PAHMA's profile, to be confirmed on the QA tenant.
 SENSITIVE_OBJECTS = [
     ("12-2001", "Sensitive: culturally sensitive, Human Remains department (the public portal hides its images)",
      {"objectStatus": ["culturally sensitive"], "department": "Human Remains"}),
@@ -373,6 +373,31 @@ def find_relations(request: Request):
     items = "".join(f"<relation-list-item><csid>{c}</csid></relation-list-item>" for c, r in store.relations.items()
                     if r["subjectCsid"] == q.get("sbj") and r["objectCsid"] == q.get("obj"))
     return _xml(f'<ns2:relations-common-list xmlns:ns2="http://collectionspace.org/services/relation">{items}</ns2:relations-common-list>')
+
+
+@app.get("/cspace-services/collectionobjects/{csid}")
+def get_object(csid: str, request: Request):
+    """An Object record: its number, and for the sample sensitive objects the fields PAHMA's rules read."""
+    if (d := _check(request, "collectionobjects", "R")):
+        return d
+    o = store.objects.get(csid)
+    if not o or o.get("deleted"):
+        return Response(status_code=404)
+    sens = o.get("sensitivity") or {}
+    dept = sens.get("department")
+    common = (f"<objectNumber>{escape(o['objectNumber'])}</objectNumber>"
+              + (f"<responsibleDepartments><responsibleDepartment>{escape(dept)}</responsibleDepartment></responsibleDepartments>" if dept else ""))
+    statuses = "".join(f"<pahmaObjectStatus>{escape(x)}</pahmaObjectStatus>" for x in sens.get("objectStatus", []))
+    restrictions = "".join(f"<accessRestrictionGroup><accessRestrictionType>{escape(a['type'])}</accessRestrictionType>"
+                           f"<accessRestrictionLevel>{escape(a['level'])}</accessRestrictionLevel></accessRestrictionGroup>"
+                           for a in sens.get("accessRestrictions", []))
+    pahma = ((f"<pahmaObjectStatusList>{statuses}</pahmaObjectStatusList>" if statuses else "")
+             + (f"<nagpraStatus>{escape(sens['nagpraStatus'])}</nagpraStatus>" if sens.get("nagpraStatus") else "")
+             + (f"<accessRestrictionGroupList>{restrictions}</accessRestrictionGroupList>" if restrictions else ""))
+    return _xml('<document name="collectionobjects">'
+                f'<ns2:collectionobjects_common xmlns:ns2="http://collectionspace.org/services/collectionobject">{common}</ns2:collectionobjects_common>'
+                f'<ns2:collectionobjects_pahma xmlns:ns2="http://collectionspace.org/services/collectionobject/local/pahma">{pahma}</ns2:collectionobjects_pahma>'
+                "</document>")
 
 
 @app.post("/cspace-services/collectionobjects")

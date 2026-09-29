@@ -383,15 +383,19 @@ class Storage:
             raise
 
     def save_checks(self, job_id: str, row: dict) -> bool:
-        """Save a row's checks and lookups only if its data hasn't changed since they were computed (same
-        "v"); otherwise a newer save has re-checked it already. Doesn't bump the version."""
+        """Save a row's checks and lookups, and what they set automatically (the protected-file flag and the
+        publish default it implies), only if its data hasn't changed since they were computed (same "v");
+        otherwise a newer save has re-checked it already. Doesn't bump the version."""
         old = int(row.get("v", 0))
         try:
             self.jobs.update_item(
                 Key={"PK": f"JOB#{job_id}", "SK": f"ROW#{row['n']:05d}"},
-                UpdateExpression="SET checks = :c, lookups = :l",
+                UpdateExpression="SET checks = :c, lookups = :l, #p = :p, softSignals = :w, restricted = :r, restrictedAuto = :a",
                 ConditionExpression=(Attr("PK").exists() & Attr("v").not_exists()) if old == 0 else Attr("v").eq(old),
-                ExpressionAttributeValues=_dyn({":c": row.get("checks", []), ":l": row.get("lookups", {})}))
+                ExpressionAttributeNames={"#p": "protected"},
+                ExpressionAttributeValues=_dyn({":c": row.get("checks", []), ":l": row.get("lookups", {}), ":p": row.get("protected"),
+                                                ":w": row.get("softSignals") or [], ":r": bool(row.get("restricted")),
+                                                ":a": bool(row.get("restrictedAuto"))}))
             return True
         except ClientError as e:
             if e.response["Error"]["Code"] == "ConditionalCheckFailedException":

@@ -115,7 +115,8 @@ async function del(j: Job) {
             <td>{{ formatTime(j.lastSavedAt) }}<div class="sub">by {{ j.lastSavedBy || "—" }}</div></td>
             <td><span v-if="j.editingBy" class="lock" :title="`since ${formatTime(j.editingSince)}`">🔒 {{ j.editingByYou ? "You" : j.editingBy }}</span>
               <span v-else class="sub">—</span></td>
-            <td><span :class="{ soon: expiry(j).soon }">{{ expiry(j).text }}</span><div class="sub" :title="j.fixFrom ? 'The edits are discarded and the job returns to Finished jobs as it was' : 'The draft is deleted with its files'">{{ j.fixFrom ? "then reverted" : "then deleted" }}</div></td>
+            <td><span :class="{ soon: expiry(j).soon }">{{ expiry(j).text }}</span><div class="sub" :title="j.fixFrom ? 'The edits are discarded and the job returns to Finished jobs as it was' : 'The draft is deleted with its files'">{{ j.fixFrom ? "then reverted" : "then deleted" }}</div>
+              <div v-if="j.protectedCount" class="sub" title="A draft with protected files expires 7 days after it was last saved">7 days: protected files</div></td>
             <td>
               <div v-if="confirm?.id === j.id && confirm.kind === 'delete'" class="msg msg-warn">
                 Delete this draft? Its {{ j.rowCount }} documents and uploaded files are removed from the BMU; nothing in CollectionSpace is touched<template

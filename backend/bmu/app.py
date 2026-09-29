@@ -19,7 +19,7 @@ from .crypto import Crypto, make_crypto
 from .cspace import CSpaceClient, CSpaceError
 from .failures import catalog
 from .rows import (PROBLEM_TEXT, apply_edit, can_replace_file, check_rows, clean_filename, created_records, edit_problem,
-                   is_locked, new_row, worst)
+                   is_locked, media_created, new_row, worst)
 from .storage import RowChanged, Storage, now
 from .tenant import Tenant, load_tenant
 
@@ -137,9 +137,14 @@ def _editable(job: dict, sess: "Session | None" = None) -> None:
                                              "changed before was saved." if who else "Open this draft for editing first."})
 
 
+def _draft_days(s: "Services", job: dict | None) -> int:
+    """30 days, or 7 if any document is a protected file (design: Drafts, Expiry)."""
+    return s.settings.protected_draft_days if (job or {}).get("protectedCount") else s.settings.draft_days
+
+
 def _saved(s: "Services", sess: "Session", job_id: str) -> None:
     """A change to a draft was saved: record who saved it and restart its expiry."""
-    s.storage.mark_saved(job_id, sess.user, sess.key, s.settings.draft_days)
+    s.storage.mark_saved(job_id, sess.user, sess.key, _draft_days(s, s.storage.get_job(job_id)))
 
 
 def _keep_original(s: "Services", job: dict, row: dict) -> None:
@@ -393,7 +398,7 @@ def _routes(app: FastAPI) -> None:
         if not s.storage.update_job(job_id, {"status": "Draft", "fixFrom": {"status": job["status"], "code": job.get("code", ""),
                                                                             "run": job.get("run", 0)},
                                              "note": "", "lastSavedBy": sess.user, "lastSavedAt": t,
-                                             "expiresAt": t + s.settings.draft_days * 86400}, expect_status=list(FIXABLE)):
+                                             "expiresAt": t + _draft_days(s, job) * 86400}, expect_status=list(FIXABLE)):
             now_job = s.storage.get_job(job_id) or {}
             who = now_job.get("editingBy")
             raise HTTPException(409, f"{who} is already fixing this job; it's in Drafts." if who else
@@ -423,7 +428,7 @@ def _routes(app: FastAPI) -> None:
         It goes to the end of the queue when it is scheduled again."""
         job = _job_or_404(s, sess, job_id)
         if not s.storage.update_job(job_id, {"status": "Draft", "queuePos": None, "note": "", "lastSavedBy": sess.user,
-                                             "lastSavedAt": now(), "expiresAt": now() + s.settings.draft_days * 86400},
+                                             "lastSavedAt": now(), "expiresAt": now() + _draft_days(s, job) * 86400},
                                     expect_status="Queued"):
             raise HTTPException(409, f"The job is {s.storage.get_job(job_id)['status']}; only queued jobs can be edited this way.")
         s.storage.delete_credential(job_id)
@@ -595,8 +600,8 @@ def _routes(app: FastAPI) -> None:
         row = s.storage.get_row(job_id, n) or _404()
         if (row.get("upload") or {}).get("s") == "done":
             raise HTTPException(409, "This document's file is already uploaded.")
-        if row.get("result"):
-            raise HTTPException(409, "This document has run before; use Replace file instead.")
+        if media_created(row):
+            raise HTTPException(409, "This document's Media record exists; use Replace file instead.")
         try:
             name = clean_filename(body.name)
         except ValueError as e:
@@ -762,7 +767,8 @@ def _recheck(s: Services, sess: Session, job_id: str, targets: set[int] | None, 
     rows = s.storage.get_rows(job_id)
     group_on = bool((s.storage.get_job(job_id) or {}).get("groupOn"))
     # a real copy: check_rows updates each row's lookups in place
-    before = {r["n"]: copy.deepcopy((r.get("checks"), r.get("lookups"))) for r in rows}
+    auto = ("checks", "lookups", "protected", "softSignals", "restricted", "restrictedAuto")
+    before = {r["n"]: copy.deepcopy(tuple(r.get(k) for k in auto)) for r in rows}
     client = sess.client(s)
     try:
         partial = check_rows(s.tenant, rows, client, sess.perms, targets=targets, refresh=refresh, group_on=group_on)
@@ -773,17 +779,33 @@ def _recheck(s: Services, sess: Session, job_id: str, targets: set[int] | None, 
     changed = []
     for r in rows:
         if r["n"] in partial:  # checked without its lookups: keep what it had
-            r["checks"], r["lookups"] = before[r["n"]]
+            for k, v in zip(auto, before[r["n"]]):
+                r[k] = v
             continue
         # Saved only if the row is unchanged since it was read; if not, whoever changed it re-checks it.
-        if before[r["n"]] != (r.get("checks"), r.get("lookups")) and s.storage.save_checks(job_id, r):
+        if before[r["n"]] != tuple(r.get(k) for k in auto) and s.storage.save_checks(job_id, r):
             changed.append(r)
+    _note_protected(s, job_id, rows)
     counts = {"block": 0, "warn": 0}
     for r in rows:
         w = worst(r)
         if w in counts and r.get("include"):
             counts[w] += 1
     return {"rows": rows, "changed": changed, "counts": counts}
+
+
+def _note_protected(s: Services, job_id: str, rows: list[dict]) -> None:
+    """Keep the job's count of protected files, and a draft's expiry: 7 days after the last save when it has
+    protected files, 30 otherwise (design: Drafts, Expiry)."""
+    job = s.storage.get_job(job_id) or {}
+    count = sum(1 for r in rows if r.get("protected") and r.get("include"))
+    if count == int(job.get("protectedCount") or 0):
+        return
+    fields: dict[str, Any] = {"protectedCount": count}
+    if job.get("status") == "Draft" and job.get("lastSavedAt"):
+        days = s.settings.protected_draft_days if count else s.settings.draft_days
+        fields["expiresAt"] = job["lastSavedAt"] + days * 86400
+    s.storage.update_job(job_id, fields)
 
 
 def _recheck_after_change(s: Services, sess: Session, job_id: str, n: int) -> dict:

@@ -20,6 +20,7 @@ export interface TenantInfo {
   mediaTypes: Option[];
   languageDefault: string;
   authorityFields: Record<string, string[]>;
+  sensitivity?: { summary: string; explain: string[] };
 }
 
 export interface Perms {
@@ -133,6 +134,10 @@ export interface Row {
   copyright: string;
   include: boolean;
   group?: boolean; // in the job's group (when the job creates one); on by default
+  /** Set automatically from the linked Object (design: Protected files); users never set or clear it. */
+  protected?: { reason: string; hides: boolean } | null;
+  softSignals?: string[]; // Object-level signals that only warn
+  restrictedAuto?: boolean; // Restricted was turned on because the file is protected
   disabledBy?: string;
   disabledAt?: number;
   skipLink?: boolean; // stop linking a Partial row's Media record to an object
@@ -200,6 +205,7 @@ export interface Job {
   groupOn?: boolean;
   groupTitle?: string;
   groupStep?: { s: "done" | "failed"; csid?: string; code?: string; detail?: string; run?: number } | null;
+  protectedCount?: number; // documents that are protected files (a draft then expires after 7 days)
 }
 
 export interface Term {

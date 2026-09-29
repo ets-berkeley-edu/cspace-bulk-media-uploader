@@ -144,6 +144,7 @@ class Worker:
         self.sweep_expired_drafts()
         self.sweep_completed()
         self.sweep_stopped_jobs()
+        self.sweep_protected_staged()
 
     def sweep_expired_sign_ins(self) -> list[str]:
         """A queued job whose saved sign-in reached its time limit leaves the queue for Drafts (design: State
@@ -223,6 +224,27 @@ class Worker:
                                        f"{self.s.completed_days} days after it completed.")
                     gone.append(j["id"])
         return gone
+
+    def sweep_protected_staged(self) -> list[tuple[str, int]]:
+        """Design: Protected files, Cleanup. In jobs that need attention or failed, a protected file's staged
+        upload is removed after a time limit even though the job stays; a fix adds the file again."""
+        removed = []
+        limit = now() - self.s.protected_staged_days * 86400
+        for j in self.storage.list_jobs(self.tenant.key):
+            if j["status"] not in ("NeedsAttention", "Failed") or (j.get("finishedAt") or now()) > limit:
+                continue
+            for r in self.storage.get_rows(j["id"]):
+                upload_open = ((r.get("result") or {}).get("steps") or {}).get("upload", {}).get("s") != "done"
+                if r.get("protected") and upload_open and (r.get("upload") or {}).get("s") == "done" and r.get("s3Key"):
+                    self._delete_key(r["s3Key"])
+                    r["upload"] = {"s": "failed", "reason": "removed"}
+                    self.storage.put_row(j["id"], r, guard=False)
+                    removed.append((j["id"], r["n"]))
+            if any(jid == j["id"] for jid, _ in removed):
+                self.storage.audit(self.tenant.key, "Protected files removed", "BMU", j["id"],
+                                   f"Removed the staged uploads of {sum(1 for jid, _ in removed if jid == j['id'])} protected file(s) "
+                                   f"from “{j.get('name') or 'Untitled job'}”, {self.s.protected_staged_days} days after it stopped.")
+        return removed
 
     def sweep_stopped_jobs(self) -> list[str]:
         """A Running job whose heartbeat went stale lost its worker: it stops as Failed with code

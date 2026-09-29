@@ -11,6 +11,7 @@ import DocumentRow from "./DocumentRow.vue";
 import PagerBar from "./PagerBar.vue";
 import SortTh from "./SortTh.vue";
 import { tableState, tableView } from "../lib/table";
+import { portalOf } from "../lib/portal";
 
 const props = defineProps<{ me: Me; jobId: string | null; mode?: "edit" | "preview"; takeOverSince?: number | null }>();
 const emit = defineEmits<{ scheduled: [job: Job]; opened: [id: string]; close: [] }>();
@@ -40,6 +41,7 @@ const docKeys = {
   file: (r: Row) => r.file,
   handling: handlingLabel,
   publish: (r: Row) => (r.restricted ? 1 : 0),
+  portal: (r: Row) => portalOf(r, props.me.tenant).text,
   group: (r: Row) => (r.group ?? true ? 0 : 1),
   status: statusRank,
   include: (r: Row) => (r.include ? 0 : 1),
@@ -50,6 +52,7 @@ function docFilter(r: Row, f: string): boolean {
     case "problems": return r.include && lv !== "ok";
     case "block": return r.include && lv === "block";
     case "warn": return r.include && lv === "warn";
+    case "protected": return !!r.protected;
     case "disabled": return !r.include;
     case "selected": return selected.has(r.n);
     default: return true;
@@ -59,7 +62,8 @@ const view = computed(() => tableView(rows.value, table, docKeys, docFilter));
 const docFilters = computed<[string, string][]>(() => {
   const n = (f: string) => rows.value.filter((r) => docFilter(r, f)).length;
   return [["all", `All documents (${rows.value.length})`], ["problems", `With problems (${n("problems")})`], ["block", `Need fixing (${n("block")})`],
-    ["warn", `With warnings (${n("warn")})`], ["disabled", `Disabled (${n("disabled")})`], ["selected", `Selected (${selected.size})`]];
+    ["warn", `With warnings (${n("warn")})`], ["protected", `Protected (${n("protected")})`], ["disabled", `Disabled (${n("disabled")})`],
+    ["selected", `Selected (${selected.size})`]];
 });
 const pageSelected = computed(() => view.value.shown.length > 0 && view.value.shown.every((r) => selected.has(r.n)));
 const pageExpanded = computed(() => view.value.shown.length > 0 && view.value.shown.every((r) => expanded.has(r.n)));
@@ -476,6 +480,14 @@ function toggle(n: number) {
       <input ref="fileInput" type="file" multiple hidden @change="addFiles(($event.target as HTMLInputElement).files); ($event.target as HTMLInputElement).value = ''" />
     </div>
 
+    <details v-if="me.tenant.sensitivity?.summary" class="sens-explain">
+      <summary><strong>Sensitivity and publishing at {{ me.tenant.name }}:</strong> {{ me.tenant.sensitivity.summary }} <span class="link">More</span></summary>
+      <ul><li v-for="(t, i) in me.tenant.sensitivity.explain" :key="i">{{ t }}</li></ul>
+      <div class="field-note">Three different things: the museum's sensitivity of an <em>object</em>, the publish setting of each <em>image</em>,
+        and the BMU's <em>protected file</em> handling while the file is in the BMU. The Public portal column combines the first two. None of
+        them stops CollectionSpace users who can read the record from seeing the image. Protected files are set automatically from
+        CollectionSpace; there is no manual setting.</div>
+    </details>
     <input ref="retryInput" type="file" hidden aria-hidden="true" @change="retryPicked" />
     <div v-if="message" class="msg" :class="message.cls" role="status">{{ message.text }}</div>
     <div v-if="counts.uploading || counts.uploadFailed" class="sub" style="margin:6px 0">
@@ -503,13 +515,15 @@ function toggle(n: number) {
           <SortTh :state="table" sort-key="file" label="Document" />
           <SortTh :state="table" sort-key="handling" label="Handling" style="width:220px" />
           <SortTh :state="table" sort-key="publish" :label="me.tenant.publish.header" style="width:110px" />
+          <SortTh :state="table" sort-key="portal" label="Public portal" style="width:170px"
+                  title="Whether this image will appear on the museum's public portal, combining the object's sensitivity and the image's own setting" />
           <SortTh v-if="job?.groupOn" :state="table" sort-key="group" label="Group" style="width:70px" />
           <SortTh :state="table" sort-key="status" label="Status" style="width:150px" />
           <SortTh :state="table" sort-key="include" label="Include" style="width:90px" title="Turn off to have the BMU ignore a document" />
         </tr></thead>
         <tbody>
-          <tr v-if="!rows.length"><td :colspan="job?.groupOn ? 9 : 8" class="muted" style="text-align:center;padding:18px">No documents yet. Drop files in the box above, or browse, to add them to this job.</td></tr>
-          <tr v-else-if="!view.shown.length"><td :colspan="job?.groupOn ? 9 : 8" class="muted" style="text-align:center;padding:18px">No documents match this filter.</td></tr>
+          <tr v-if="!rows.length"><td :colspan="job?.groupOn ? 10 : 9" class="muted" style="text-align:center;padding:18px">No documents yet. Drop files in the box above, or browse, to add them to this job.</td></tr>
+          <tr v-else-if="!view.shown.length"><td :colspan="job?.groupOn ? 10 : 9" class="muted" style="text-align:center;padding:18px">No documents match this filter.</td></tr>
           <DocumentRow v-for="r in view.shown" :key="r.n" :row="r" :tenant="me.tenant" :perms="me.perms" :checking="checking.has(r.n)" :preview="previews.get(r.n)"
                        :expanded="expanded.has(r.n)" :readonly="readonly || !editable" :selected="selected.has(r.n)" :languages="languages"
                        :other-names="rows.filter((x) => x.n !== r.n).map((x) => x.file)"
