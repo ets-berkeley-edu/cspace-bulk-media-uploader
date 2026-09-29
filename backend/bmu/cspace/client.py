@@ -221,6 +221,12 @@ class CSpaceClient:
     def create_relation(self, xml: bytes) -> str:
         return self._post_xml("relations", xml)
 
+    def derivative(self, blob_csid: str, name: str = "Thumbnail") -> tuple[bytes, str]:
+        """A Blob's derivative image made by CollectionSpace (Thumbnail, Medium, OriginalJpeg), as the
+        CollectionSpace UI shows it: GET blobs/{csid}/derivatives/{name}/content. VERIFY on QA."""
+        r = self._request("GET", f"blobs/{blob_csid}/derivatives/{name}/content")
+        return r.content, r.headers.get("content-type", "image/jpeg")
+
     def media_blob_csid(self, media_csid: str) -> str:
         """The blobCsid CollectionSpace set on a Media record (after PUT media/{csid}/blob)."""
         r = self._request("GET", f"media/{media_csid}")

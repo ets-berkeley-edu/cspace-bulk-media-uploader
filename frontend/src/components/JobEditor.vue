@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { api, ApiError } from "../api";
-import { canPreview, formatTime, readExifDate, uploadToS3 } from "../lib/files";
+import { canPreview, formatTime, makeThumbnail, readExifDate, uploadToS3 } from "../lib/files";
 import { jobCounts, worstLevel } from "../lib/status";
 import { failureOf, loadFailures, OUTCOME } from "../lib/results";
 import type { Job, Me, Option, Row, RowChange } from "../types";
@@ -322,6 +322,11 @@ async function sendFile(jobId: string, row: Row, file: File, exif: boolean) {
     if (date && !confirmed.row.date) confirmed = await api.editRow(jobId, row.n, { date });
     set(confirmed.row.upload);
     apply(confirmed);
+    // Design: the browser makes the thumbnail for JPEG and PNG and sends it with the file (none for a protected file).
+    if (confirmed.row.upload.s === "done" && !confirmed.row.protected) {
+      const thumb = await makeThumbnail(file);
+      if (thumb) await api.putThumbnail(jobId, row.n, thumb).catch(() => undefined);
+    }
   } catch {
     set({ s: "failed" });
     try {
@@ -527,7 +532,7 @@ function toggle(n: number) {
           <DocumentRow v-for="r in view.shown" :key="r.n" :row="r" :tenant="me.tenant" :perms="me.perms" :checking="checking.has(r.n)" :preview="previews.get(r.n)"
                        :expanded="expanded.has(r.n)" :readonly="readonly || !editable" :selected="selected.has(r.n)" :languages="languages"
                        :other-names="rows.filter((x) => x.n !== r.n).map((x) => x.file)"
-                       :uploading-here="uploadingHere.has(r.n)" :group-on="!!job?.groupOn"
+                       :uploading-here="uploadingHere.has(r.n)" :group-on="!!job?.groupOn" :job-id="job?.id"
                        @toggle="toggle(r.n)" @edit="edit(r, $event)" @remove="remove(r)" @select="select(r.n, $event)" @replace="replaceFile(r, $event)"
                        @retry="retry(r)" />
         </tbody>

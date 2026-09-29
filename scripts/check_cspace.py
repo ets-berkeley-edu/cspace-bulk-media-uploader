@@ -101,7 +101,10 @@ def main():
     media = step("create Media (no blobCsid)", lambda: c.create_media(media_xml(t, row)))
     if media:
         blob = step("attach file (PUT media/{csid}/blob)", lambda: c.upload_file(media, row["file"], io.BytesIO(PNG), "image/png"))
-        step("read back the Media record's blobCsid", lambda: c.media_blob_csid(media))
+        blob_csid = step("read back the Media record's blobCsid", lambda: c.media_blob_csid(media))
+        if blob_csid:  # the thumbnails the BMU shows once a file is in CollectionSpace (design: Thumbnails)
+            step("fetch its Thumbnail derivative (GET blobs/{csid}/derivatives/Thumbnail/content)",
+                 lambda: (lambda d: f"{len(d[0])} bytes, {d[1]}")(c.derivative(blob_csid, "Thumbnail")))
         step(f"read back types {row['type']}, {len(row['language'])} languages and the date", lambda: _repeating(c, media))
     obj = step(f"create Object {num}", lambda: c.create_object(object_xml(num)))
     if media and obj:

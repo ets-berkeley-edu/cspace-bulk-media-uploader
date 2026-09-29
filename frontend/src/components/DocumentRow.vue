@@ -9,11 +9,12 @@ import { portalOf } from "../lib/portal";
 import AuthorityInput from "./AuthorityInput.vue";
 import DateInput from "./DateInput.vue";
 import ErrorBox from "./ErrorBox.vue";
+import ThumbCell from "./ThumbCell.vue";
 import RepeatingSelect from "./RepeatingSelect.vue";
 
 const props = defineProps<{
   row: Row; tenant: TenantInfo; perms: Perms; preview?: string; expanded: boolean; readonly: boolean; checking?: boolean;
-  selected?: boolean; languages?: Option[]; otherNames?: string[]; uploadingHere?: boolean; groupOn?: boolean;
+  selected?: boolean; languages?: Option[]; otherNames?: string[]; uploadingHere?: boolean; groupOn?: boolean; jobId?: string | null;
 }>();
 const emit = defineEmits<{ edit: [changes: Partial<Row>]; remove: []; toggle: []; select: [on: boolean]; replace: [file: File]; retry: [] }>();
 
@@ -75,9 +76,7 @@ function text(field: keyof Row, e: Event) {
 
 <template>
   <tr :class="{ disabled: !row.include }">
-    <td><div class="thumb" :class="{ locked: row.protected && !preview }" :title="row.protected && !preview ? 'Protected file: only the person who added it sees a preview' : ''">
-      <img v-if="preview" :src="preview" alt="" /><span v-else-if="row.protected" aria-label="Protected file">🔒</span>
-      <span v-else>{{ row.file.split(".").pop()?.toUpperCase() }}</span></div></td>
+    <td><ThumbCell :job-id="jobId" :row="row" :preview="preview" /></td>
     <td class="keep"><input type="checkbox" :checked="selected" :aria-label="`Select ${row.file}`"
       @change="emit('select', ($event.target as HTMLInputElement).checked)" /></td>
     <td class="keep"><button class="chevron" :class="{ open: expanded }" :aria-expanded="expanded" aria-label="Show details" @click="emit('toggle')">▸</button></td>

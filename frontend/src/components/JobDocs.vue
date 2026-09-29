@@ -7,6 +7,7 @@ import { computed } from "vue";
 import { formatTime } from "../lib/files";
 import { rowStatus, worstLevel } from "../lib/status";
 import type { Job, Row, TenantInfo } from "../types";
+import ThumbCell from "./ThumbCell.vue";
 
 const props = defineProps<{ job: Job; rows: Row[] | undefined; tenant: TenantInfo; kind: "drafts" | "queue" }>();
 const emit = defineEmits<{ preview: [] }>();
@@ -47,7 +48,7 @@ const message = (r: Row) => r.checks.find((c) => c.level === "block")?.text ?? r
     <table v-else class="inner">
       <tbody>
         <tr v-for="r in top" :key="r.n" :class="{ disabled: !r.include }">
-          <td style="width:36px">{{ r.n }}</td><td>{{ r.file }}</td>
+          <td style="width:64px"><ThumbCell :job-id="job.id" :row="r" /></td><td style="width:36px">{{ r.n }}</td><td>{{ r.file }}</td>
           <td style="width:170px"><span class="badge" :class="rowStatus(r, tenant).cls">{{ rowStatus(r, tenant).text }}</span></td>
           <td class="sub">{{ message(r) }}</td>
         </tr>

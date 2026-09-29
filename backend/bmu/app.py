@@ -9,7 +9,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -21,6 +21,7 @@ from .failures import catalog
 from .rows import (PROBLEM_TEXT, apply_edit, can_replace_file, check_rows, clean_filename, created_records, edit_problem,
                    is_locked, media_created, new_row, worst)
 from .storage import RowChanged, Storage, now
+from .thumbnails import MAX_BROWSER_BYTES, TIFF_EXTENSIONS, NotAnImage, make_thumbnail, tiff_thumbnail_step
 from .tenant import Tenant, load_tenant
 
 COOKIE = "bmu_session"
@@ -553,7 +554,7 @@ def _routes(app: FastAPI) -> None:
                          for r, f in zip(rows, body.files)]}
 
     @app.post("/api/jobs/{job_id}/rows/{n}/uploaded")
-    def uploaded(job_id: str, n: int, sess: Session = Depends(current_session), s: Services = Depends(svc)):
+    def uploaded(job_id: str, n: int, background: BackgroundTasks, sess: Session = Depends(current_session), s: Services = Depends(svc)):
         _editable(_job_or_404(s, sess, job_id))
         row = s.storage.get_row(job_id, n) or _404()
         head = s.storage.head_object(row["s3Key"])
@@ -562,7 +563,53 @@ def _routes(app: FastAPI) -> None:
         else:
             row["upload"] = {"s": "failed", "reason": "missing" if not head else "size mismatch"}
         s.storage.put_row(job_id, row)
-        return _recheck_after_change(s, sess, job_id, n)
+        result = _recheck_after_change(s, sess, job_id, n)
+        if row["upload"]["s"] == "done" and row["file"].rsplit(".", 1)[-1].lower() in TIFF_EXTENSIONS:
+            background.add_task(tiff_thumbnail_step, s.storage, job_id, n)  # the thumbnail step (a Lambda in AWS)
+        return result
+
+    # ---- thumbnails (design: User interface, Thumbnails) -------------------------------------------
+    @app.post("/api/jobs/{job_id}/rows/{n}/thumbnail")
+    async def put_thumbnail(job_id: str, n: int, request: Request, sess: Session = Depends(current_session), s: Services = Depends(svc)):
+        """The thumbnail the browser made from the local file (JPEG and PNG). It is decoded and written again
+        here, so nothing but pixels is kept; none is stored for a protected file."""
+        _editable(_job_or_404(s, sess, job_id))
+        row = s.storage.get_row(job_id, n) or _404()
+        body = await request.body()
+        if len(body) > MAX_BROWSER_BYTES:
+            raise HTTPException(413, "The thumbnail is too large.")
+        if row.get("protected"):
+            return {"stored": False}
+        try:
+            jpeg = make_thumbnail(body)
+        except NotAnImage:
+            raise HTTPException(422, "Not an image.")
+        return {"stored": s.storage.store_thumbnail(job_id, n, jpeg)}
+
+    @app.get("/api/jobs/{job_id}/rows/{n}/thumbnail")
+    def get_thumbnail(job_id: str, n: int, size: str = "small", sess: Session = Depends(current_session), s: Services = Depends(svc)):
+        """A document's thumbnail, after checking the session and tenant: CollectionSpace's own derivative once
+        the file is there (fetched with your credentials, so CollectionSpace's permissions apply, protected or
+        not), otherwise the staged thumbnail. The browser never gets an S3 URL."""
+        _job_or_404(s, sess, job_id)
+        row = s.storage.get_row(job_id, n) or _404()
+        upload = ((row.get("result") or {}).get("steps") or {}).get("upload") or {}
+        headers = {"Cache-Control": "private, max-age=300"}
+        if upload.get("s") == "done" and upload.get("csid"):
+            client = sess.client(s)
+            try:
+                data, ctype = client.derivative(upload["csid"], "Medium" if size == "large" else "Thumbnail")
+            except CSpaceError as e:
+                raise HTTPException(404 if e.status in (403, 404) else 502, "No thumbnail from CollectionSpace.")
+            finally:
+                client.close()
+            return Response(content=data, media_type=ctype, headers=headers)
+        if row.get("protected") or not row.get("thumbKey"):
+            raise HTTPException(404, "No thumbnail.")
+        data = s.storage.get_bytes(row["thumbKey"])
+        if data is None:
+            raise HTTPException(404, "No thumbnail.")
+        return Response(content=data, media_type="image/jpeg", headers=headers)
 
     @app.post("/api/jobs/{job_id}/rows/{n}/replace-file")
     def replace_file(job_id: str, n: int, body: FileSpec, sess: Session = Depends(current_session), s: Services = Depends(svc)):
@@ -586,6 +633,9 @@ def _routes(app: FastAPI) -> None:
             row["supersededKey"] = row.get("s3Key")  # kept until the rerun starts, in case the fix is abandoned
         elif row.get("s3Key"):
             s.storage.delete_object(row["s3Key"])  # an earlier replacement, never used
+        if row.get("thumbKey"):
+            s.storage.delete_object(row["thumbKey"])
+            row["thumbKey"] = None
         row.update(file=name, fileOriginal=name, size=body.size, contentType=body.type, upload={"s": "pending"},
                    s3Key=f"jobs/{job_id}/{uuid.uuid4().hex}", replacedFor=(row.get("result") or {}).get("run"))
         s.storage.put_row(job_id, row)
@@ -611,8 +661,9 @@ def _routes(app: FastAPI) -> None:
         if body.size > s.settings.max_file_bytes:
             raise HTTPException(413, f"Too large: {body.name}")
         _saved(s, sess, job_id)
-        if row.get("s3Key"):
-            s.storage.delete_object(row["s3Key"])  # whatever part of the failed upload arrived
+        for key in {row.get("s3Key"), row.get("thumbKey")} - {None, ""}:
+            s.storage.delete_object(key)  # whatever part of the failed upload arrived, and its old thumbnail
+        row["thumbKey"] = None
         row.update(size=body.size, contentType=body.type or row.get("contentType", ""), upload={"s": "pending"},
                    s3Key=f"jobs/{job_id}/{uuid.uuid4().hex}")
         s.storage.put_row(job_id, row)
@@ -767,7 +818,7 @@ def _recheck(s: Services, sess: Session, job_id: str, targets: set[int] | None, 
     rows = s.storage.get_rows(job_id)
     group_on = bool((s.storage.get_job(job_id) or {}).get("groupOn"))
     # a real copy: check_rows updates each row's lookups in place
-    auto = ("checks", "lookups", "protected", "softSignals", "restricted", "restrictedAuto")
+    auto = ("checks", "lookups", "protected", "softSignals", "restricted", "restrictedAuto", "thumbKey")
     before = {r["n"]: copy.deepcopy(tuple(r.get(k) for k in auto)) for r in rows}
     client = sess.client(s)
     try:
@@ -783,6 +834,10 @@ def _recheck(s: Services, sess: Session, job_id: str, targets: set[int] | None, 
                 r[k] = v
             continue
         # Saved only if the row is unchanged since it was read; if not, whoever changed it re-checks it.
+        if r.get("protected") and r.get("thumbKey"):
+            # Design: if a row becomes protected after its thumbnail was stored, the thumbnail is deleted at once.
+            s.storage.delete_object(r["thumbKey"])
+            r["thumbKey"] = None
         if before[r["n"]] != tuple(r.get(k) for k in auto) and s.storage.save_checks(job_id, r):
             changed.append(r)
     _note_protected(s, job_id, rows)

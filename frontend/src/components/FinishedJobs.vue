@@ -11,6 +11,7 @@ import { formatTime } from "../lib/files";
 import { countsText, createdText, failureOf, importantRows, loadFailures, needsFix, OUTCOME, RESULT_BADGE, resultState, rowCodes } from "../lib/results";
 import type { Created, Job, Row, Run, TenantInfo } from "../types";
 import JobResults from "./JobResults.vue";
+import ThumbCell from "./ThumbCell.vue";
 import SortTh from "./SortTh.vue";
 import { tableState, tableView } from "../lib/table";
 
@@ -213,7 +214,7 @@ function mainMessage(r: Row): string {
                   <table v-else class="inner">
                     <tbody>
                       <tr v-for="r in importantRows(details.get(j.id)!.rows)" :key="r.n">
-                        <td style="width:36px">{{ r.n }}</td><td>{{ r.file }}</td>
+                        <td style="width:64px"><ThumbCell :job-id="j.id" :row="r" /></td><td style="width:36px">{{ r.n }}</td><td>{{ r.file }}</td>
                         <td style="width:110px"><span class="badge" :class="RESULT_BADGE[resultState(r)]">{{ resultState(r) }}</span></td>
                         <td class="sub">{{ mainMessage(r) }}</td>
                       </tr>

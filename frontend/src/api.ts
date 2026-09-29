@@ -29,7 +29,20 @@ export async function request<T>(method: string, path: string, body?: unknown): 
   return data as T;
 }
 
+/** Send the thumbnail the browser made; the server rewrites it, and stores none for a protected file. */
+async function putThumbnail(id: string, n: number, jpeg: Blob): Promise<{ stored: boolean }> {
+  const res = await fetch(`/api/jobs/${id}/rows/${n}/thumbnail`, {
+    method: "POST", credentials: "same-origin", headers: { "X-BMU": "1", "Content-Type": "image/jpeg" }, body: jpeg,
+  });
+  if (!res.ok) throw new ApiError(res.status, `Thumbnail not stored (${res.status})`);
+  return res.json();
+}
+
+export const thumbnailUrl = (id: string, n: number, v = 0, large = false) =>
+  `/api/jobs/${id}/rows/${n}/thumbnail?v=${v}${large ? "&size=large" : ""}`;
+
 export const api = {
+  putThumbnail,
   me: () => request<Me>("GET", "/api/me"),
   login: (username: string, password: string) => request<Me>("POST", "/api/login", { username, password }),
   logout: () => request("POST", "/api/logout"),

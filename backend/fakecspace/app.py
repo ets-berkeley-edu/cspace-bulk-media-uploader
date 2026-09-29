@@ -86,6 +86,7 @@ class Store:
         self.blobs: dict[str, dict] = {}
         self.relations: dict[str, dict] = {}
         self.groups: dict[str, dict] = {}
+        self.content: dict[str, bytes] = {}  # blob CSID -> file bytes (small files only)
         self.fail_next: dict[str, int] = {}  # e.g. {"media": 503} or {"media_blob": 500}: fail the next call once
         self.perm_overrides: dict[str, dict[str, str]] = {}  # e.g. {"admin": {"collectionobjects": "RL"}}: roles changed
         self.searches: list[tuple[str, str | None]] = []  # (service, searched value), to test lookup caching
@@ -339,11 +340,15 @@ async def media_blob(csid: str, request: Request, file: UploadFile):
         return Response(status_code=404)
     if (f := _fail(request, "upload", [file.filename or "", *_media_names(csid)])) is not None:
         return f
-    size = 0
+    size, head = 0, b""
     while chunk := await file.read(1024 * 1024):
         size += len(chunk)
+        if size <= KEEP_BYTES:
+            head += chunk
     blob = str(uuid.uuid4())
     store.blobs[blob] = {"name": file.filename, "size": size, "type": file.content_type, "media": csid}
+    if size <= KEEP_BYTES:
+        store.content[blob] = head  # small files are kept, to serve as their own derivatives
     store.media[csid]["blobCsid"] = blob
     return _created(request, "blobs", blob)
 
@@ -362,6 +367,20 @@ def get_media(csid: str, request: Request):
     return _xml(f'<document name="media"><ns2:media_common xmlns:ns2="http://collectionspace.org/services/media">'
                 f"<identificationNumber>{escape(m.get('identificationNumber', ''))}</identificationNumber>"
                 f"<blobCsid>{m.get('blobCsid', '')}</blobCsid></ns2:media_common></document>")
+
+
+KEEP_BYTES = 5 * 1024 * 1024
+
+
+@app.get("/cspace-services/blobs/{csid}/derivatives/{name}/content")
+def derivative(csid: str, name: str, request: Request):
+    """A Blob's derivative image. Real CollectionSpace makes resized JPEGs; the simulator returns the file itself."""
+    if (d := _check(request, "media", "R")):
+        return d
+    blob = store.blobs.get(csid)
+    if not blob or csid not in store.content or name not in ("Thumbnail", "Medium", "OriginalJpeg"):
+        return Response(status_code=404)
+    return Response(content=store.content[csid], media_type=blob.get("type") or "application/octet-stream")
 
 
 @app.get("/cspace-services/relations")

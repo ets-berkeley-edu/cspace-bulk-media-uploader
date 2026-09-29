@@ -9,6 +9,7 @@ import { formatTime } from "../lib/files";
 import { countsText, failureOf, OUTCOME, RESULT_BADGE, resultCounts, resultState, stepList, STEP_MARK, stepNote } from "../lib/results";
 import type { Job, Row, Run, TenantInfo } from "../types";
 import ErrorBox from "./ErrorBox.vue";
+import ThumbCell from "./ThumbCell.vue";
 import PagerBar from "./PagerBar.vue";
 import SortTh from "./SortTh.vue";
 import { tableState, tableView } from "../lib/table";
@@ -78,13 +79,14 @@ const earlierProblem = (r: Row) => r.result?.error?.code;
     <PagerBar :state="table" :total="view.total" :of="view.of" :pages="view.pages" :start="view.start" noun="documents" :filters="FILTERS" />
     <div class="table-wrap">
       <table>
-        <thead><tr><SortTh :state="table" sort-key="n" label="#" style="width:44px" /><SortTh :state="table" sort-key="file" label="Document" style="min-width:150px" />
+        <thead><tr><th style="width:64px"><span class="sr-only">Preview</span></th><SortTh :state="table" sort-key="n" label="#" style="width:44px" /><SortTh :state="table" sort-key="file" label="Document" style="min-width:150px" />
           <SortTh :state="table" sort-key="result" label="Result" style="width:110px" />
           <SortTh :state="table" sort-key="steps" label="Steps" style="width:300px" title="Sort by how many steps are done" />
           <SortTh :state="table" sort-key="what" label="What happened" /></tr></thead>
         <tbody>
-          <tr v-if="!view.shown.length"><td colspan="5" class="muted" style="text-align:center;padding:18px">No documents match this filter.</td></tr>
+          <tr v-if="!view.shown.length"><td colspan="6" class="muted" style="text-align:center;padding:18px">No documents match this filter.</td></tr>
           <tr v-for="r in view.shown" :key="r.n" :class="{ disabled: resultState(r) === 'Disabled' }">
+            <td class="keep"><ThumbCell :job-id="job.id" :row="r" /></td>
             <td class="keep">{{ r.n }}</td>
             <td>{{ r.file }}<div class="sub">{{ handlingLabel(r) }}<template v-if="r.skipLink"> · not linked (stopped)</template></div></td>
             <td class="keep"><span class="badge" :class="RESULT_BADGE[resultState(r)]">{{ resultState(r) }}</span></td>

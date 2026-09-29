@@ -546,8 +546,12 @@ class Worker:
                                          "detail": f"GET media?as=identificationNumber = \"{idn}\" found {', '.join(new[:5])}"}]
 
     def _delete_staged(self, row: dict) -> None:
-        # the staged file is no longer needed once it is in CollectionSpace
+        # the staged file and its thumbnail are no longer needed once the file is in CollectionSpace, whose own
+        # derivatives are shown from then on
         self._delete_key(row["s3Key"])
+        if row.get("thumbKey"):
+            self._delete_key(row["thumbKey"])
+            row["thumbKey"] = None
 
     def _delete_key(self, key: str) -> None:
         try:

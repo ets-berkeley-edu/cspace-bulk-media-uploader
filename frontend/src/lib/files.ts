@@ -53,3 +53,33 @@ export function formatTime(epochSeconds?: number): string {
   if (!epochSeconds) return "—";
   return new Date(epochSeconds * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
+
+/**
+ * A thumbnail made in the browser from the local file (JPEG and PNG; design: Thumbnails): at most 320 px on
+ * its longer side, drawn on a canvas and saved as a JPEG, which carries no EXIF or other metadata. null if the
+ * browser can't draw it.
+ */
+export async function makeThumbnail(file: File, maxSide = 320): Promise<Blob | null> {
+  if (!canPreview(file) || typeof createImageBitmap !== "function") return null;
+  try {
+    const bmp = await createImageBitmap(file);
+    const scale = Math.min(1, maxSide / Math.max(bmp.width, bmp.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(bmp.width * scale));
+    canvas.height = Math.max(1, Math.round(bmp.height * scale));
+    canvas.getContext("2d")?.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+    bmp.close();
+    return await new Promise((resolve) => canvas.toBlob((b) => resolve(b), "image/jpeg", 0.8));
+  } catch {
+    return null;
+  }
+}
+
+/** What to show for a file the browser can't draw: its kind (design: video, audio and 3D files show a type icon). */
+export function fileKind(name: string): { icon: string; label: string; image: boolean } {
+  const ext = name.includes(".") ? name.split(".").pop()!.toLowerCase() : "";
+  if (["wav", "mp3", "aac"].includes(ext)) return { icon: "♪", label: "Audio", image: false };
+  if (ext === "mp4") return { icon: "▶", label: "Video", image: false };
+  if (ext === "x3d") return { icon: "⬡", label: "3D model", image: false };
+  return { icon: ext.toUpperCase() || "FILE", label: ext.toUpperCase() || "File", image: ["jpg", "jpeg", "png", "tif", "tiff"].includes(ext) };
+}
