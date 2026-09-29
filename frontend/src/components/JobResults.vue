@@ -69,7 +69,11 @@ const earlierProblem = (r: Row) => r.result?.error?.code;
       </div>
     </div>
 
-    <div v-if="job.code" style="margin:8px 0"><ErrorBox :code="job.code" :detail="job.cancelledBy ? `Cancel requested by ${job.cancelledBy}` : undefined" /></div>
+    <div v-if="job.groupOn" class="sub" style="margin:4px 0">Group “{{ job.groupTitle }}”:
+      <template v-if="job.groupStep?.s === 'done'">created in run {{ job.groupStep.run }} (<code>{{ job.groupStep.csid }}</code>)</template>
+      <template v-else-if="job.groupStep?.s === 'failed'">couldn't be created in run {{ job.groupStep.run }}</template>
+      <template v-else>not created (no document reached the point of joining it)</template></div>
+    <div v-if="job.code" style="margin:8px 0"><ErrorBox :code="job.code" :detail="job.cancelledBy ? `Cancel requested by ${job.cancelledBy}` : job.code === 'group_failed' ? job.groupStep?.detail : undefined" /></div>
 
     <PagerBar :state="table" :total="view.total" :of="view.of" :pages="view.pages" :start="view.start" noun="documents" :filters="FILTERS" />
     <div class="table-wrap">

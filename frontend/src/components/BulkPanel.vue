@@ -12,6 +12,7 @@ import AuthorityInput from "./AuthorityInput.vue";
 
 const props = defineProps<{
   rows: Row[]; selected: Set<number>; tenant: TenantInfo; perms: Perms; readonly: boolean; busy: boolean; languages?: Option[];
+  groupOn?: boolean;
 }>();
 const emit = defineEmits<{ apply: [targets: number[], changes: BulkChanges]; include: [targets: number[], include: boolean] }>();
 
@@ -26,9 +27,9 @@ function toggle(open?: boolean) {
 }
 
 // The panel's choices: "" means no change.
-const choice = reactive({ handling: "", publish: "", type: "", language: "", creator: "", contributor: "", rightsHolder: "" });
+const choice = reactive({ handling: "", publish: "", group: "", type: "", language: "", creator: "", contributor: "", rightsHolder: "" });
 function reset() {
-  Object.assign(choice, { handling: "", publish: "", type: "", language: "", creator: "", contributor: "", rightsHolder: "" });
+  Object.assign(choice, { handling: "", publish: "", group: "", type: "", language: "", creator: "", contributor: "", rightsHolder: "" });
 }
 defineExpose({ reset });
 
@@ -36,6 +37,7 @@ const changes = computed<BulkChanges>(() => {
   const c: BulkChanges = {};
   if (choice.handling) c.handling = choice.handling;
   if (choice.publish) c.restricted = choice.publish === "yes";
+  if (choice.group && props.groupOn) c.group = choice.group === "yes";
   // Repeating fields: the chosen value replaces a document's values (as in the UI mockup).
   if (choice.type) c.type = [choice.type];
   if (choice.language) c.language = [choice.language];
@@ -47,9 +49,10 @@ const changes = computed<BulkChanges>(() => {
 
 const selectedRows = computed(() => props.rows.filter((r) => props.selected.has(r.n)));
 const anySelected = computed(() => selectedRows.value.length > 0);
+const linking = computed(() => new Set(props.tenant.handling.filter((h) => h.object !== "none").map((h) => h.id)));
 const verdict = computed(() => anySelected.value
-  ? bulkCheck(selectedRows.value, changes.value, false)
-  : bulkCheck(applyAllTargets(props.rows), changes.value, true));
+  ? bulkCheck(selectedRows.value, changes.value, false, linking.value)
+  : bulkCheck(applyAllTargets(props.rows), changes.value, true, linking.value));
 const toDisable = computed(() => includeTargets(selectedRows.value, false));
 const toEnable = computed(() => includeTargets(selectedRows.value, true));
 const hasField = (f: string) => (props.tenant.authorityFields[f] ?? []).length > 0;
@@ -91,6 +94,12 @@ function applyAll() {
             <option value="">{{ tenant.publish.header }} — no change</option>
             <option value="yes">Yes</option>
             <option value="no">No</option>
+          </select>
+          <select v-if="groupOn" v-model="choice.group" aria-label="Group for selected" :disabled="readonly || !perms.groups"
+                  :title="perms.groups ? '' : 'You don\'t have permission to create groups'">
+            <option value="">In the job's group — no change</option>
+            <option value="yes">Yes</option>
+            <option value="no">No (leave out)</option>
           </select>
         </div>
 

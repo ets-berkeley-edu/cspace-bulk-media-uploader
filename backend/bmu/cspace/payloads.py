@@ -9,6 +9,7 @@ from ..tenant import Tenant
 NS_MEDIA = "http://collectionspace.org/services/media"
 NS_OBJECT = "http://collectionspace.org/services/collectionobject"
 NS_RELATION = "http://collectionspace.org/services/relation"
+NS_GROUP = "http://collectionspace.org/services/group"
 
 
 def _doc(name: str) -> Element:
@@ -83,6 +84,14 @@ def object_xml(object_number: str) -> bytes:
     doc = _doc("collectionobjects")
     common = _part(doc, "collectionobjects_common", NS_OBJECT)
     _add(common, "objectNumber", object_number)
+    return _xml(doc)
+
+
+def group_xml(title: str) -> bytes:
+    """A Group record (design: Groups). VERIFY on QA with check_cspace.py --create: groups_common/title."""
+    doc = _doc("groups")
+    common = _part(doc, "groups_common", NS_GROUP)
+    _add(common, "title", title)
     return _xml(doc)
 
 

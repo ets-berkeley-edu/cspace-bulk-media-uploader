@@ -45,7 +45,9 @@ export const api = {
     request<{ row: Row; uploadForm: { url: string; fields: Record<string, string> } }>("POST", `/api/jobs/${id}/rows/${n}/retry-upload`, f),
   replaceFile: (id: string, n: number, f: { name: string; size: number; type: string }) =>
     request<{ row: Row; uploadForm: { url: string; fields: Record<string, string> } }>("POST", `/api/jobs/${id}/rows/${n}/replace-file`, f),
-  renameJob: (id: string, name: string) => request<Job>("PATCH", `/api/jobs/${id}`, { name }),
+  /** The job header: name, and the job's group. Turning the group on or off returns the rows whose checks changed. */
+  patchJob: (id: string, fields: { name?: string; groupOn?: boolean; groupTitle?: string }) =>
+    request<Job & { rows?: Row[] }>("PATCH", `/api/jobs/${id}`, fields),
   deleteJob: (id: string) => request("DELETE", `/api/jobs/${id}`),
   /** Become the draft's editor; with takeOverSince, take over from the editor the user was warned about. */
   openJob: (id: string, takeOverSince?: number) =>

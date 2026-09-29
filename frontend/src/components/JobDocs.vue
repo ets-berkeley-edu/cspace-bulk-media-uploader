@@ -30,6 +30,7 @@ const message = (r: Row) => r.checks.find((c) => c.level === "block")?.text ?? r
   <div>
     <div class="jd-meta">
       <span><strong>Handling</strong> {{ handlingMix }}</span>
+      <span><strong>Group title</strong> {{ job.groupOn ? job.groupTitle || "—" : "None" }}</span>
       <span><strong>Created by</strong> {{ job.createdBy }}</span>
       <template v-if="kind === 'drafts'">
         <span><strong>Last saved</strong> {{ formatTime(job.lastSavedAt) }} by {{ job.lastSavedBy || "—" }}</span>

@@ -183,11 +183,12 @@ def _complete_if_clean(s: "Services", sess: "Session", job_id: str) -> bool:
 def _delete_job(s: "Services", sess: "Session", job: dict, rows: list[dict]) -> None:
     """Delete a job and its staged files. Records its runs created stay in CollectionSpace; the audit entry
     lists every one, by row and record type, so they can still be found and finished there."""
-    created = created_records(rows)
+    created = created_records(rows, job)
     s.storage.delete_job_and_files(job["id"])
     c = created["counts"]
-    what = (f"; its runs created {c['media']} Media records ({c['files']} with files), {c['objects']} Objects and "
-            f"{c['relations']} Relations, which stay in CollectionSpace" + (f", {c['unfinished']} unfinished" if c["unfinished"] else "")
+    what = (f"; its runs created {c['media']} Media records ({c['files']} with files), {c['objects']} Objects, "
+            + ("the Group, " if c["groups"] else "") +
+            f"and {c['relations']} Relations, which stay in CollectionSpace" + (f", {c['unfinished']} unfinished" if c["unfinished"] else "")
             if created["csids"] else "; it had created nothing in CollectionSpace")
     s.storage.audit(sess.tenant, "Job deleted", sess.user, job["id"],
                     f"Deleted “{job['name'] or 'Untitled job'}” ({len(rows)} documents){what}.", created["csids"])
@@ -219,7 +220,15 @@ class NewJob(BaseModel):
 
 
 class JobPatch(BaseModel):
-    name: str = Field(max_length=200)
+    name: str | None = Field(default=None, max_length=200)
+    groupOn: bool | None = None  # "Create a group for this job"
+    groupTitle: str | None = Field(default=None, max_length=200)
+
+
+def default_group_title(name: str) -> str:
+    """Design: prefilled with bmu-<job name> (the legacy =job convention)."""
+    slug = re.sub(r"[^a-z0-9]+", "-", (name or "untitled job").lower()).strip("-")
+    return f"bmu-{slug or 'untitled-job'}"
 
 
 class FileSpec(BaseModel):
@@ -371,7 +380,7 @@ def _routes(app: FastAPI) -> None:
         job = _job_or_404(s, sess, job_id)
         rows = s.storage.get_rows(job_id)
         return {"job": _public(job, sess), "rows": rows, "runs": s.storage.get_runs(job_id),
-                "created": created_records(rows)["counts"]}
+                "created": created_records(rows, job)["counts"]}
 
     # ---- Fix and reschedule (design: Fixing a job after a run; Rescheduling after a run) --------------
     @app.post("/api/jobs/{job_id}/fix")
@@ -465,11 +474,35 @@ def _routes(app: FastAPI) -> None:
         return _public(s.storage.get_job(job_id), sess)
 
     @app.patch("/api/jobs/{job_id}")
-    def rename_job(job_id: str, body: JobPatch, sess: Session = Depends(current_session), s: Services = Depends(svc)):
-        _editable(_job_or_404(s, sess, job_id), sess)
-        s.storage.update_job(job_id, {"name": body.name.strip()}, expect_status="Draft")
+    def patch_job(job_id: str, body: JobPatch, sess: Session = Depends(current_session), s: Services = Depends(svc)):
+        """The job header: its name, and the job's group (design: Groups). The Group title follows the job name
+        until the user edits it. Once the Group exists in CollectionSpace, it can't be turned off or renamed."""
+        job = _job_or_404(s, sess, job_id)
+        _editable(job, sess)
+        fields: dict[str, Any] = {}
+        name = job.get("name", "") if body.name is None else body.name.strip()
+        if body.name is not None:
+            fields["name"] = name
+        group_made = (job.get("groupStep") or {}).get("s") == "done"
+        if (body.groupOn is not None and body.groupOn != bool(job.get("groupOn"))) or \
+           (body.groupTitle is not None and body.groupTitle.strip() != job.get("groupTitle", "")):
+            if group_made:
+                raise HTTPException(409, "The job's group already exists in CollectionSpace, so it can't be turned off or renamed here.")
+        on = bool(job.get("groupOn")) if body.groupOn is None else body.groupOn
+        if body.groupOn is not None:
+            fields["groupOn"] = on
+            if on and not job.get("groupTitle"):
+                fields.update(groupTitle=default_group_title(name), groupTitleAuto=True)
+        if body.groupTitle is not None:
+            title = body.groupTitle.strip()
+            fields.update(groupTitle=title, groupTitleAuto=title == default_group_title(name))
+        elif body.name is not None and job.get("groupTitleAuto") and not group_made:
+            fields["groupTitle"] = default_group_title(name)  # still the prefilled title: it follows the name
+        if fields:
+            s.storage.update_job(job_id, fields, expect_status="Draft")
         _saved(s, sess, job_id)
-        return _public(s.storage.get_job(job_id), sess)
+        rc = _recheck(s, sess, job_id, targets=set()) if "groupOn" in fields else None
+        return {**_public(s.storage.get_job(job_id), sess), **({"rows": rc["changed"]} if rc else {})}
 
     @app.delete("/api/jobs/{job_id}")
     def delete_job(job_id: str, sess: Session = Depends(current_session), s: Services = Depends(svc)):
@@ -683,6 +716,8 @@ def _routes(app: FastAPI) -> None:
             raise HTTPException(409, f"The job is {job['status']} and can't be scheduled.")
         if job["status"] == "Draft":
             _editable(job, sess)  # only the draft's editor schedules it
+        if job.get("groupOn") and not (job.get("groupTitle") or "").strip():
+            raise HTTPException(409, "Enter a group title, or turn off the job's group.")
         # Roles can change during a session: fetch the permissions again, then check the whole job afresh.
         sess = _refresh_permissions(s, sess)
         result = _recheck(s, sess, job_id, targets=None, refresh=True)
@@ -725,11 +760,12 @@ def _refresh_permissions(s: Services, sess: Session) -> Session:
 def _recheck(s: Services, sess: Session, job_id: str, targets: set[int] | None, refresh: bool = False) -> dict:
     """Re-run the checks on every row (see check_rows) and save the rows whose checks or lookups changed."""
     rows = s.storage.get_rows(job_id)
+    group_on = bool((s.storage.get_job(job_id) or {}).get("groupOn"))
     # a real copy: check_rows updates each row's lookups in place
     before = {r["n"]: copy.deepcopy((r.get("checks"), r.get("lookups"))) for r in rows}
     client = sess.client(s)
     try:
-        partial = check_rows(s.tenant, rows, client, sess.perms, targets=targets, refresh=refresh)
+        partial = check_rows(s.tenant, rows, client, sess.perms, targets=targets, refresh=refresh, group_on=group_on)
     except CSpaceError as e:
         raise _cspace_http(e)
     finally:

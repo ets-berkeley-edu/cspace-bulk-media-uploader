@@ -51,7 +51,7 @@ const tenant: TenantInfo = {
   handling: [{ id: "link", label: "Link to existing object", object: "existing", id_rule: "object" },
              { id: "create", label: "Create new object + link", object: "create", id_rule: "object" }],
 };
-const perms: Perms = { media: true, relations: true, objects: false, readObjects: true, authorities: true };
+const perms: Perms = { media: true, relations: true, objects: false, readObjects: true, authorities: true, groups: true };
 
 describe("BulkPanel", () => {
   it("applies to the selected rows only when every one can take the change", async () => {
@@ -91,5 +91,17 @@ describe("bulk repeating fields", () => {
     await w.find('select[aria-label="Media type for selected"]').setValue("slide");
     await w.findAll("button").find((b) => b.text() === "Apply to selected")!.trigger("click");
     expect(w.emitted("apply")?.[0]).toEqual([[1, 2], { type: ["slide"] }]);
+  });
+});
+
+describe("bulk Group (design: Groups)", () => {
+  const linking = new Set(["link", "create"]);
+  const mk = (n: number, p: Partial<Row> = {}) => ({ n, file: `${n}.jpg`, handling: "link", include: true, group: true, result: null, ...p }) as unknown as Row;
+  it("can't put documents without an object into the group, and never takes an object out once added", () => {
+    expect(bulkCheck([mk(1), mk(2, { handling: "mediaonly", group: false })], { group: true }, false, linking).why)
+      .toContain("1 of the 2 selected documents can’t take this change: 1 isn't linked to an object, so it can't join the group");
+    const added = mk(3, { result: { state: "Partial", steps: { media: { s: "done", csid: "m" }, addToGroup: { s: "done", csid: "g" } } } });
+    expect(bulkCheck([added], { group: false }, false, linking).why).toContain("already has its object in the group");
+    expect(bulkCheck([mk(4)], { group: false }, false, linking).ok).toBe(true);
   });
 });

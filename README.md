@@ -59,7 +59,7 @@ docker compose up --build
 ```
 
 Open http://localhost:5173. With the simulated CollectionSpace, sign in as `admin`/`admin` (all permissions),
-`limited`/`limited` (can't create objects) or `reader`/`reader` (read only). Sample objects (list them with
+`limited`/`limited` (can't create objects or groups) or `reader`/`reader` (read only). Sample objects (list them with
 `curl localhost:8180/_fake/objects`):
 
 | Object number | For testing |
@@ -91,12 +91,13 @@ curl -X POST 'localhost:8180/_fake/fail?step=relation&status=403&count=0'       
 curl -X POST 'localhost:8180/_fake/fail?step=media&status=401'                        # sign-in failed (job stops)
 curl -X POST 'localhost:8180/_fake/fail?step=media&status=503&count=0'                # outage: 5 in a row stop the job
 curl -X POST 'localhost:8180/_fake/fail?step=mediaSearch&effect=many'                 # ID in use since scheduling (notice)
+curl -X POST 'localhost:8180/_fake/fail?step=group&status=400'                        # the job's group can't be created
 curl localhost:8180/_fake/fail            # list the rules
 curl -X DELETE localhost:8180/_fake/fail  # clear them
 ```
 
 `match` is compared with the document's identification number, filename and object number. Steps: `media`,
-`upload`, `objectSearch`, `objectCreate`, `relation`, `mediaSearch`.
+`upload`, `objectSearch`, `objectCreate`, `relation`, `mediaSearch`, `group`.
 
 To use the Lyrasis QA tenant instead, set `BMU_CSPACE_URL=https://pahma.qa.collectionspace.org` in `.env`
 and sign in with a QA account. Records created there stay (the BMU never deletes).

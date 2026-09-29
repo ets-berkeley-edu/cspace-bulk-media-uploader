@@ -197,3 +197,6 @@ table.inner td { background: var(--surface-2); }
 .check-line input { margin-top: 3px; }
 .retry-line { display: flex; gap: 4px; align-items: center; margin-top: 4px; flex-wrap: wrap; }
 .retry-line button { padding: 1px 8px; font-size: 12px; }
+.group-box { margin: 10px 0; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-1); }
+.group-title { display: flex; gap: 8px; align-items: center; font-size: 13px; margin: 6px 0 2px; flex-wrap: wrap; }
+.group-title input { flex: 1; min-width: 200px; }

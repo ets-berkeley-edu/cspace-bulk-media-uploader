@@ -40,6 +40,7 @@ const docKeys = {
   file: (r: Row) => r.file,
   handling: handlingLabel,
   publish: (r: Row) => (r.restricted ? 1 : 0),
+  group: (r: Row) => (r.group ?? true ? 0 : 1),
   status: statusRank,
   include: (r: Row) => (r.include ? 0 : 1),
 };
@@ -79,8 +80,25 @@ const lockedBy = computed(() => job.value?.status === "Draft" && job.value.editi
 const confirmTakeOver = ref(false);
 const savedNote = ref("");
 const counts = computed(() => jobCounts(rows.value));
+// The job's group (design: Groups): on/off and its title; fixed once the Group exists in CollectionSpace.
+const groupMade = computed(() => job.value?.groupStep?.s === "done");
+const groupTitle = ref("");
+watch(() => job.value?.groupTitle, (t) => { groupTitle.value = t ?? ""; }, { immediate: true });
+async function setGroup(fields: { groupOn?: boolean; groupTitle?: string }) {
+  try {
+    const j = await ensureJob();
+    const r = await api.patchJob(j.id, fields);
+    (r.rows ?? []).forEach((row) => replace(row));
+    const { rows: _changed, ...rest } = r;
+    job.value = rest;
+  } catch (e) {
+    await failed(e);
+  }
+}
+
 const scheduleBlocked = computed(() => {
   const c = counts.value;
+  if (job.value?.groupOn && !job.value.groupTitle?.trim()) return "Enter a group title, or turn off the job's group";
   if (c.block) return "Fix or disable the documents marked Needs fixing first";
   if (c.uploading) return "Wait until every file is uploaded and verified";
   if (!c.work) return "Nothing left to run: every document is done or disabled";
@@ -194,7 +212,7 @@ async function rename() {
   }
   if (name.value.trim() !== job.value.name && editable.value) {
     try {
-      job.value = await api.renameJob(job.value.id, name.value.trim());
+      job.value = await api.patchJob(job.value.id, { name: name.value.trim() });
     } catch (e) {
       await failed(e);
     }
@@ -433,6 +451,22 @@ function toggle(n: number) {
     <label class="field"><span><strong>Job name</strong></span>
       <input v-model="name" type="text" placeholder="e.g. 2026 spring accession batch" :disabled="!editable" @change="rename" /></label>
 
+    <div class="group-box">
+      <label class="check-line"><input type="checkbox" :checked="!!job?.groupOn" aria-label="Create a group for this job"
+          :disabled="!editable || groupMade || (!me.perms.groups && !job?.groupOn)"
+          :title="!me.perms.groups ? 'You don\'t have permission to create groups' : groupMade ? 'The group already exists in CollectionSpace' : ''"
+          @change="setGroup({ groupOn: ($event.target as HTMLInputElement).checked })" />
+        <span><strong>Create a group for this job</strong></span></label>
+      <label class="group-title">Object group title
+        <input v-model="groupTitle" type="text" :disabled="!editable || !job?.groupOn || groupMade" aria-label="Object group title"
+               :placeholder="job?.groupOn ? '' : 'Turn on “Create a group” first'" @change="setGroup({ groupTitle })" /></label>
+      <div class="field-note">When on, the job creates one new group in CollectionSpace, and every document linked to an object joins it
+        once its Media record is linked; untick a document's Group box to leave it out. Documents that aren't linked to an object can't join.
+        <template v-if="groupMade"> The group was created in run {{ job?.groupStep?.run }} (<code>{{ job?.groupStep?.csid }}</code>), so it can't be
+          turned off or renamed here.</template>
+        <template v-else-if="!me.perms.groups"> Your account can't create groups.</template></div>
+    </div>
+
     <div v-if="editable" class="dropzone" :class="{ drag }" role="button" tabindex="0"
          @click="fileInput?.click()" @keydown.enter.prevent="fileInput?.click()"
          @dragenter.prevent="drag = true" @dragover.prevent="drag = true" @dragleave.prevent="drag = false"
@@ -450,6 +484,7 @@ function toggle(n: number) {
 
     <div class="editor-split">
     <BulkPanel ref="bulkPanel" :rows="rows" :selected="selected" :tenant="me.tenant" :perms="me.perms" :readonly="!editable" :busy="busy" :languages="languages"
+               :group-on="!!job?.groupOn"
                @apply="(t, c) => bulk(t, c, true)" @include="(t, on) => bulk(t, { include: on }, false)" />
     <div class="grid-main">
     <PagerBar v-if="rows.length" :state="table" :total="view.total" :of="view.of" :pages="view.pages" :start="view.start" noun="documents" :filters="docFilters" />
@@ -468,16 +503,17 @@ function toggle(n: number) {
           <SortTh :state="table" sort-key="file" label="Document" />
           <SortTh :state="table" sort-key="handling" label="Handling" style="width:220px" />
           <SortTh :state="table" sort-key="publish" :label="me.tenant.publish.header" style="width:110px" />
+          <SortTh v-if="job?.groupOn" :state="table" sort-key="group" label="Group" style="width:70px" />
           <SortTh :state="table" sort-key="status" label="Status" style="width:150px" />
           <SortTh :state="table" sort-key="include" label="Include" style="width:90px" title="Turn off to have the BMU ignore a document" />
         </tr></thead>
         <tbody>
-          <tr v-if="!rows.length"><td colspan="8" class="muted" style="text-align:center;padding:18px">No documents yet. Drop files in the box above, or browse, to add them to this job.</td></tr>
-          <tr v-else-if="!view.shown.length"><td colspan="8" class="muted" style="text-align:center;padding:18px">No documents match this filter.</td></tr>
+          <tr v-if="!rows.length"><td :colspan="job?.groupOn ? 9 : 8" class="muted" style="text-align:center;padding:18px">No documents yet. Drop files in the box above, or browse, to add them to this job.</td></tr>
+          <tr v-else-if="!view.shown.length"><td :colspan="job?.groupOn ? 9 : 8" class="muted" style="text-align:center;padding:18px">No documents match this filter.</td></tr>
           <DocumentRow v-for="r in view.shown" :key="r.n" :row="r" :tenant="me.tenant" :perms="me.perms" :checking="checking.has(r.n)" :preview="previews.get(r.n)"
                        :expanded="expanded.has(r.n)" :readonly="readonly || !editable" :selected="selected.has(r.n)" :languages="languages"
                        :other-names="rows.filter((x) => x.n !== r.n).map((x) => x.file)"
-                       :uploading-here="uploadingHere.has(r.n)"
+                       :uploading-here="uploadingHere.has(r.n)" :group-on="!!job?.groupOn"
                        @toggle="toggle(r.n)" @edit="edit(r, $event)" @remove="remove(r)" @select="select(r.n, $event)" @replace="replaceFile(r, $event)"
                        @retry="retry(r)" />
         </tbody>

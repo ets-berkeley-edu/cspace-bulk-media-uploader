@@ -54,6 +54,8 @@ def classify(step: str, e: CSpaceError) -> tuple[str, str]:
         return "media_rejected", detail
     if step == "createObject" and status == 400:
         return "object_rejected", detail
+    if step == "group":
+        return "group_failed", detail  # any other failure creating the job's Group
     if e.code == "unavailable" or (status is not None and status >= 500):
         return "server_error", detail  # one 5xx or timeout; five in a row stop the job as "unavailable"
     return "unknown", f"{detail} (step {step})"

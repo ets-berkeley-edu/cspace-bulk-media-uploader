@@ -79,6 +79,7 @@ class Permissions:
             "objects": self.can("collectionobjects", "C"),
             "readObjects": self.can("collectionobjects", "R"),
             "authorities": self.can("personauthorities", "R") and self.can("orgauthorities", "R"),
+            "groups": self.can("groups", "C"),
         }
 
     @classmethod
@@ -209,6 +210,9 @@ class CSpaceClient:
 
     def create_object(self, xml: bytes) -> str:
         return self._post_xml("collectionobjects", xml)
+
+    def create_group(self, xml: bytes) -> str:
+        return self._post_xml("groups", xml)
 
     def create_relation(self, xml: bytes) -> str:
         return self._post_xml("relations", xml)

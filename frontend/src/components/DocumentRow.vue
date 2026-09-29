@@ -12,7 +12,7 @@ import RepeatingSelect from "./RepeatingSelect.vue";
 
 const props = defineProps<{
   row: Row; tenant: TenantInfo; perms: Perms; preview?: string; expanded: boolean; readonly: boolean; checking?: boolean;
-  selected?: boolean; languages?: Option[]; otherNames?: string[]; uploadingHere?: boolean;
+  selected?: boolean; languages?: Option[]; otherNames?: string[]; uploadingHere?: boolean; groupOn?: boolean;
 }>();
 const emit = defineEmits<{ edit: [changes: Partial<Row>]; remove: []; toggle: []; select: [on: boolean]; replace: [file: File]; retry: [] }>();
 
@@ -21,6 +21,13 @@ const emit = defineEmits<{ edit: [changes: Partial<Row>]; remove: []; toggle: []
 const stalled = computed(() => !props.uploadingHere && !props.row.result && ["pending", "uploading", "verifying"].includes(props.row.upload.s));
 const canRetry = computed(() => !props.readonly && props.row.include && !props.row.result && (props.row.upload.s === "failed" || stalled.value));
 const confirmRemove = ref(false);
+
+// The job's group: only documents linked to an object can join; once its object is in the group, it stays.
+const inGroup = computed(() => props.row.group ?? true);
+const groupDone = computed(() => props.row.result?.steps?.addToGroup?.s === "done");
+const groupWhy = computed(() => handling.value?.object === "none" ? "Not linked to an object, so it can't join the group"
+  : groupDone.value ? (props.row.result?.steps?.addToGroup?.sameAs ? `Its object was added by document ${props.row.result.steps.addToGroup.sameAs}` : "Its object is in the group")
+  : !props.perms.groups ? "You don't have permission to create groups" : "");
 
 // After a run (design: Fixing a job after a run): a document whose Media record exists changes only what the
 // rerun still needs; a Failed one whose object step ran keeps its handling and object number.
@@ -84,6 +91,10 @@ function text(field: keyof Row, e: Event) {
       <input type="checkbox" :checked="row.restricted" :disabled="ro || !row.include" :aria-label="tenant.publish.header"
              @change="emit('edit', { restricted: ($event.target as HTMLInputElement).checked })" />
     </td>
+    <td v-if="groupOn" style="text-align:center">
+      <input type="checkbox" :checked="inGroup && handling?.object !== 'none'" :aria-label="`${row.file} in the job's group`" :title="groupWhy"
+             :disabled="readonly || !row.include || handling?.object === 'none' || groupDone || done || (!perms.groups && !inGroup)"
+             @change="emit('edit', { group: ($event.target as HTMLInputElement).checked })" /></td>
     <td><span class="badge" :class="status.cls">{{ status.text }}</span>
       <span v-if="hasWarnings && status.cls !== 'b-danger'" class="badge b-warn" title="This document has warnings"> !</span>
       <div v-if="row.upload.s === 'uploading' && !stalled" class="progress"><span class="up" :style="{ width: (row.upload.pct ?? 0) + '%' }"></span></div>
@@ -100,7 +111,7 @@ function text(field: keyof Row, e: Event) {
     </td>
   </tr>
   <tr v-if="expanded" class="detail">
-    <td colspan="8">
+    <td :colspan="groupOn ? 9 : 8">
       <template v-if="created">
         <div class="msg msg-info">
           <template v-if="done">This document was fully created in CollectionSpace (Media record {{ row.result?.steps?.media?.csid }}). Nothing here can

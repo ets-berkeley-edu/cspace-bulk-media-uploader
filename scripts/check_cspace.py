@@ -17,7 +17,7 @@ import sys
 import time
 
 from bmu.cspace import CSpaceClient, CSpaceError
-from bmu.cspace.payloads import media_xml, object_xml, relation_xml
+from bmu.cspace.payloads import group_xml, media_xml, object_xml, relation_xml
 from bmu.rows import new_row
 from bmu.tenant import load_tenant
 
@@ -61,7 +61,7 @@ def main():
     if perms:
         print("     summary:", perms.summary)
         print("     resources:", {k: "".join(sorted(v)) for k, v in sorted(perms.resources.items()) if k in (
-            "media", "relations", "collectionobjects", "personauthorities", "orgauthorities")})
+            "media", "relations", "collectionobjects", "groups", "personauthorities", "orgauthorities")})
     step(f"find object {a.object}", lambda: c.find_objects(a.object))
     step(f"find media id {a.object}", lambda: c.find_media(a.object))
     for kind, cfg in t.authorities.items():
@@ -98,6 +98,12 @@ def main():
         step("relate Object -> Media", lambda: c.create_relation(relation_xml(obj, "CollectionObject", media, "Media")))
         step("existing relations Media -> Object (expect one)", lambda: c.find_relations(media, obj))
         step(f"find object {num} again", lambda: c.find_objects(num))
+        # the job's Group (design: Groups): a new Group, related to the Object both ways
+        group = step(f"create Group bmu-{num.lower()}", lambda: c.create_group(group_xml(f"bmu-{num.lower()}")))
+        if group:
+            step("relate Group -> Object", lambda: c.create_relation(relation_xml(group, "Group", obj, "CollectionObject")))
+            step("relate Object -> Group", lambda: c.create_relation(relation_xml(obj, "CollectionObject", group, "Group")))
+            step("existing relations Group -> Object (expect one)", lambda: c.find_relations(group, obj))
     print(f"Created test records for {num}; they stay in CollectionSpace.")
 
 

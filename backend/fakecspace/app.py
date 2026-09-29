@@ -5,7 +5,7 @@ search, creating Media, Objects and Relations, and attaching a file with PUT med
 behavior against the real server must be confirmed on the Lyrasis QA tenant.
 
 Run: uvicorn fakecspace.app:app --port 8180
-Users: admin/admin (all permissions), limited/limited (can't create objects), reader/reader (read only).
+Users: admin/admin (all permissions), limited/limited (can't create objects or groups), reader/reader (read only).
 Development hooks: /_fake/state, /_fake/reset, /_fake/slow, /_fake/fail (failures on demand).
 """
 from __future__ import annotations
@@ -26,7 +26,7 @@ USERS = {
     "limited": ("limited", "CRUDL"),
     "reader": ("reader", "RL"),
 }
-RESOURCES = ["media", "relations", "collectionobjects", "personauthorities", "orgauthorities", "vocabularies"]
+RESOURCES = ["media", "relations", "collectionobjects", "groups", "personauthorities", "orgauthorities", "vocabularies"]
 
 
 def _perms_for(user: str) -> dict[str, str]:
@@ -34,6 +34,7 @@ def _perms_for(user: str) -> dict[str, str]:
     p = {r: base for r in RESOURCES}
     if user == "limited":
         p["collectionobjects"] = "RL"
+        p["groups"] = "RL"
     p.update(store.perm_overrides.get(user, {}))
     return p
 
@@ -84,6 +85,7 @@ class Store:
         self.media: dict[str, dict] = {}
         self.blobs: dict[str, dict] = {}
         self.relations: dict[str, dict] = {}
+        self.groups: dict[str, dict] = {}
         self.fail_next: dict[str, int] = {}  # e.g. {"media": 503} or {"media_blob": 500}: fail the next call once
         self.perm_overrides: dict[str, dict[str, str]] = {}  # e.g. {"admin": {"collectionobjects": "RL"}}: roles changed
         self.searches: list[tuple[str, str | None]] = []  # (service, searched value), to test lookup caching
@@ -130,7 +132,7 @@ def _check(request: Request, resource: str, action: str) -> Response | None:
 
 
 # ---- failures on demand (development only; see /_fake/fail) ----------------------------------------
-STEPS = {"media", "upload", "objectSearch", "objectCreate", "relation", "mediaSearch"}
+STEPS = {"media", "upload", "objectSearch", "objectCreate", "relation", "mediaSearch", "group"}
 
 
 def _rule(request: Request, step: str, names: list[str]) -> dict | None:
@@ -385,6 +387,21 @@ async def create_object(request: Request):
     return _created(request, "collectionobjects", csid)
 
 
+@app.post("/cspace-services/groups")
+async def create_group(request: Request):
+    if (d := _check(request, "groups", "C")):
+        return d
+    body = await request.body()
+    title = _field(body, "title")
+    if (f := _fail(request, "group", [title])) is not None:
+        return f
+    if not title:
+        return Response(status_code=400)
+    csid = str(uuid.uuid4())
+    store.groups[csid] = {"title": title}
+    return _created(request, "groups", csid)
+
+
 @app.post("/cspace-services/relations")
 async def create_relation(request: Request):
     if (d := _check(request, "relations", "C")):
@@ -422,8 +439,8 @@ def slow(seconds: float = 2.0):
 def add_failure(step: str, match: str = "", status: int = 500, effect: str = "", count: int = 1, client: str = "worker"):
     """Development only: make CollectionSpace fail on purpose, to see how the BMU reports it.
 
-    step:   media | upload | objectSearch | objectCreate | relation | mediaSearch
-    match:  only requests whose identification number, filename or object number contains this text ("" = any)
+    step:   media | upload | objectSearch | objectCreate | relation | mediaSearch | group
+    match:  only requests whose identification number, filename, object number or group title contains this text ("" = any)
     status: the HTTP status to return, e.g. 400 (rejected), 401 (sign-in), 403 (permission), 409 (inactive
             account), 413 (file too large), 415 (file type), 500 (server error)
     effect: for objectSearch, "none" (no object found) or "many" (several objects) instead of a status
@@ -454,7 +471,7 @@ def clear_failures():
 @app.get("/_fake/state")
 def state():
     return {"objects": store.objects, "media": {k: {x: y for x, y in v.items() if x != "xml"} for k, v in store.media.items()},
-            "blobs": store.blobs, "relations": store.relations}
+            "blobs": store.blobs, "relations": store.relations, "groups": store.groups}
 
 
 @app.get("/_fake/objects")
