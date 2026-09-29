@@ -683,3 +683,64 @@ def test_expired_drafts_that_never_ran_are_deleted(api, login, add_uploaded, wor
     assert services.storage.head_object(row["s3Key"]) is None
     assert services.storage.get_job(ran) and services.storage.get_job(fresh)
     assert any(a["type"] == "Draft expired" for a in services.storage.list_audit("pahma"))
+
+
+# ---- the job queue (design: The job queue; State rules) --------------------------------------------
+def _queued_job(api, add_uploaded, files):
+    job = new_job(api)
+    add_uploaded(job, files)
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    return job
+
+
+def test_queued_jobs_run_in_the_order_shown_and_can_be_reordered(api, login, add_uploaded, worker, services):
+    login()
+    a, b, c = (_queued_job(api, add_uploaded, [f]) for f in ["15-1234_a.jpg", "1-2345_1.jpg", "12-5678_1.jpg"])
+    order = [j["id"] for j in api.post(f"/api/jobs/{c}/move", json={"toIndex": 0}).json()["jobs"]]
+    assert order == [c, a, b]
+    assert api.get(f"/api/jobs/{a}").json()["job"]["checksAtSchedule"] == {"block": 0, "warn": 1}
+    worker.tick()
+    assert services.storage.get_job(c)["status"] == "Completed"
+    assert services.storage.get_job(a)["status"] == "Queued" and services.storage.get_job(b)["status"] == "Queued"
+    assert api.post(f"/api/jobs/{c}/move", json={"toIndex": 0}).status_code == 409  # not queued any more
+
+
+def test_editing_a_queued_job_moves_it_to_drafts_and_deletes_its_sign_in(api, login, add_uploaded, services):
+    login()
+    job = _queued_job(api, add_uploaded, ["15-1234_a.jpg"])
+    assert services.storage.get_credential(job)
+    j = api.post(f"/api/jobs/{job}/edit").json()
+    assert j["status"] == "Draft" and j["editingByYou"] and services.storage.get_credential(job) is None
+    assert api.post(f"/api/jobs/{job}/edit").status_code == 409
+    # scheduling it again puts it at the end of the queue
+    other = _queued_job(api, add_uploaded, ["1-2345_1.jpg"])
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    assert services.storage.get_job(job)["queuePos"] > services.storage.get_job(other)["queuePos"]
+
+
+def test_cancel_run_stops_after_the_document_in_progress(api, login, add_uploaded, worker, services):
+    login()
+    job = _queued_job(api, add_uploaded, ["15-1234_a.jpg", "1-2345_1.jpg", "12-5678_1.jpg"])
+    assert api.post(f"/api/jobs/{job}/cancel").status_code == 409  # not running yet
+    run_row = worker.run_row
+    def cancel_after_first(client, job_id, row, run_no, created):
+        err = run_row(client, job_id, row, run_no, created)
+        if row["n"] == 1:
+            assert api.post(f"/api/jobs/{job_id}/cancel").status_code == 200
+        return err
+    worker.run_row = cancel_after_first
+    worker.tick()
+    j = api.get(f"/api/jobs/{job}").json()
+    assert j["job"]["status"] == "NeedsAttention" and j["job"]["code"] == "cancelled" and j["job"]["cancelledBy"] == "admin"
+    assert [(r.get("result") or {}).get("state") for r in j["rows"]] == ["Done", None, None]
+    assert services.storage.get_credential(job) is None
+    assert any("cancelled by admin" in a["detail"] for a in services.storage.list_audit("pahma"))
+
+
+def test_a_queued_job_whose_sign_in_expired_moves_to_drafts(api, login, add_uploaded, worker, services):
+    login()
+    job = _queued_job(api, add_uploaded, ["15-1234_a.jpg"])
+    services.storage.update_job(job, {"credentialExpires": 1})
+    assert worker.sweep_expired_sign_ins() == [job]
+    j = services.storage.get_job(job)
+    assert j["status"] == "Draft" and "Sign-in expired" in j["note"] and services.storage.get_credential(job) is None

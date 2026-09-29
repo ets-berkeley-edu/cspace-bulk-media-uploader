@@ -59,6 +59,7 @@ class Store:
         self.fail_next: dict[str, int] = {}  # e.g. {"media": 503} or {"media_blob": 500}: fail the next call once
         self.perm_overrides: dict[str, dict[str, str]] = {}  # e.g. {"admin": {"collectionobjects": "RL"}}: roles changed
         self.searches: list[tuple[str, str | None]] = []  # (service, searched value), to test lookup caching
+        self.delay = 0.0  # seconds added to every create or upload, to watch the queue in a browser (/_fake/slow)
         for num in ["15-1234", "12-5678", "15-1240", "1-2345"]:
             self.objects[str(uuid.uuid4())] = {"objectNumber": num, "deleted": False}
         # two objects share a number, to exercise "matches several objects"
@@ -318,6 +319,22 @@ async def create_relation(request: Request):
 
 
 # ---- development helpers (not part of CollectionSpace) ----------------------------------
+@app.middleware("http")
+async def slow_down(request: Request, call_next):
+    """With /_fake/slow, creates and uploads take a while, so a job runs long enough to watch or cancel."""
+    if store.delay and request.method in ("POST", "PUT") and request.url.path.startswith("/cspace-services/"):
+        import asyncio
+        await asyncio.sleep(store.delay)
+    return await call_next(request)
+
+
+@app.post("/_fake/slow")
+def slow(seconds: float = 2.0):
+    """Development only: add this many seconds to every create and upload (0 to turn it off)."""
+    store.delay = max(0.0, min(seconds, 30.0))
+    return {"delay": store.delay}
+
+
 @app.get("/_fake/state")
 def state():
     return {"objects": store.objects, "media": {k: {x: y for x, y in v.items() if x != "xml"} for k, v in store.media.items()},

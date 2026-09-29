@@ -4,12 +4,13 @@ import { api, ApiError } from "./api";
 import DraftsList from "./components/DraftsList.vue";
 import JobEditor from "./components/JobEditor.vue";
 import JobsList from "./components/JobsList.vue";
+import QueueList from "./components/QueueList.vue";
 import LoginForm from "./components/LoginForm.vue";
 import type { Job, Me } from "./types";
 
 const me = ref<Me | null>(null);
 const loading = ref(true);
-const tab = ref<"editor" | "drafts" | "jobs">("editor");
+const tab = ref<"editor" | "drafts" | "queue" | "jobs">("editor");
 const jobId = ref<string | null>(null);
 const mode = ref<"edit" | "preview">("edit");
 const takeOverSince = ref<number | null>(null);
@@ -59,8 +60,8 @@ async function openJob(id: string, m: "edit" | "preview" = "edit", since?: numbe
 async function scheduled(j: Job) {
   jobId.value = null; // scheduling already took it out of Drafts
   await newJob();
-  notice.value = `“${j.name || "Untitled job"}” was scheduled. It runs with your sign-in, which is deleted when the run ends.`;
-  tab.value = "jobs";
+  notice.value = `“${j.name || "Untitled job"}” was scheduled and added to the end of the queue. It runs with your sign-in, which is deleted when the run ends.`;
+  tab.value = "queue";
 }
 </script>
 
@@ -82,7 +83,8 @@ async function scheduled(j: Job) {
       <div class="tabs" role="tablist">
         <button class="tab" :class="{ active: tab === 'editor' }" role="tab" :aria-selected="tab === 'editor'" @click="tab = 'editor'">Create / edit job</button>
         <button class="tab" :class="{ active: tab === 'drafts' }" role="tab" :aria-selected="tab === 'drafts'" @click="tab = 'drafts'">Drafts</button>
-        <button class="tab" :class="{ active: tab === 'jobs' }" role="tab" :aria-selected="tab === 'jobs'" @click="tab = 'jobs'">Jobs</button>
+        <button class="tab" :class="{ active: tab === 'queue' }" role="tab" :aria-selected="tab === 'queue'" @click="tab = 'queue'">Job queue</button>
+        <button class="tab" :class="{ active: tab === 'jobs' }" role="tab" :aria-selected="tab === 'jobs'" @click="tab = 'jobs'">Finished jobs</button>
         <span class="spacer"></span>
         <button class="primary new-job" @click="newJob">+ New job</button>
       </div>
@@ -90,6 +92,7 @@ async function scheduled(j: Job) {
         <JobEditor v-show="tab === 'editor'" :key="editorKey" :me="me" :job-id="jobId" :mode="mode" :take-over-since="takeOverSince"
                    @scheduled="scheduled" @opened="jobId = $event" @close="newJob" />
         <DraftsList v-if="tab === 'drafts'" @open="openJob" />
+        <QueueList v-if="tab === 'queue'" @open="openJob" />
         <JobsList v-if="tab === 'jobs'" @open="(id) => openJob(id)" />
       </div>
     </template>
