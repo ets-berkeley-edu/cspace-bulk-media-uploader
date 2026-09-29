@@ -47,6 +47,33 @@ def _ref(service: str, vocab: str, name: str) -> str:
     return f"urn:cspace:{DOMAIN}:{service}:name({vocab}):item:name({short})'{name}'"
 
 
+# Sample Object records. Most are ordinary; 9-9999 is on two objects, to exercise "matches several objects".
+SAMPLE_OBJECTS = [
+    ("15-1234", "Ordinary; a Media record with ID 15-1234 already exists"),
+    ("12-5678", "Ordinary"),
+    ("15-1240", "Ordinary"),
+    ("1-2345", "Ordinary"),
+    ("9-9999", "Shares its number with another object"),
+    ("9-9999", "Shares its number with another object"),
+    ("3-1001", "Ordinary"),
+    ("3-1002", "Ordinary"),
+    ("3-1003.1", "Ordinary; a part number with a dot (filename 3-1003.1_a.jpg)"),
+    ("16-4711", "Ordinary"),
+]
+
+# Objects PAHMA treats as sensitive, or nearly so (design: Protected files, Per-tenant signals). The BMU doesn't
+# read these fields yet: they are for the Protected files feature, whose real CollectionSpace field names are to
+# be confirmed on the QA tenant when it is built. Search results don't include them, as in CollectionSpace.
+SENSITIVE_OBJECTS = [
+    ("12-2001", "Sensitive: culturally sensitive, Human Remains department (the public portal hides its images)",
+     {"objectStatus": ["culturally sensitive"], "department": "Human Remains"}),
+    ("12-2002", "Sensitive: NAGPRA status and a display restriction at the restriction level",
+     {"nagpraStatus": "under NAGPRA review", "accessRestrictions": [{"type": "display/visual", "level": "restriction"}]}),
+    ("12-2003", "Soft signal only: a display restriction at the preference level (a warning, not protected)",
+     {"accessRestrictions": [{"type": "display/visual", "level": "preference"}]}),
+]
+
+
 class Store:
     def __init__(self) -> None:
         self.lock = threading.Lock()
@@ -62,12 +89,12 @@ class Store:
         self.searches: list[tuple[str, str | None]] = []  # (service, searched value), to test lookup caching
         self.delay = 0.0  # seconds added to every create or upload, to watch the queue in a browser (/_fake/slow)
         self.rules: list[dict] = []  # failures on demand (/_fake/fail)
-        for num in ["15-1234", "12-5678", "15-1240", "1-2345"]:
-            self.objects[str(uuid.uuid4())] = {"objectNumber": num, "deleted": False}
-        # two objects share a number, to exercise "matches several objects"
-        dup = "9-9999"
-        self.objects[str(uuid.uuid4())] = {"objectNumber": dup, "deleted": False}
-        self.objects[str(uuid.uuid4())] = {"objectNumber": dup, "deleted": False}
+        for num, note in SAMPLE_OBJECTS:
+            self.objects[str(uuid.uuid4())] = {"objectNumber": num, "deleted": False, "note": note}
+        for num, note, sens in SENSITIVE_OBJECTS:
+            self.objects[str(uuid.uuid4())] = {"objectNumber": num, "deleted": False, "note": note, "sensitivity": sens}
+        # soft-deleted in CollectionSpace: searches (wf_deleted=false) don't find it
+        self.objects[str(uuid.uuid4())] = {"objectNumber": "3-1004", "deleted": True, "note": "Deleted: searches don't find it"}
         self.media[str(uuid.uuid4())] = {"identificationNumber": "15-1234", "deleted": False}
 
 
@@ -428,6 +455,14 @@ def clear_failures():
 def state():
     return {"objects": store.objects, "media": {k: {x: y for x, y in v.items() if x != "xml"} for k, v in store.media.items()},
             "blobs": store.blobs, "relations": store.relations}
+
+
+@app.get("/_fake/objects")
+def objects():
+    """Development only: the Object records, one line each (object number, what it's for, sensitivity fields)."""
+    return sorted(({"objectNumber": o["objectNumber"], "note": o.get("note", ""), "deleted": o.get("deleted", False),
+                    **({"sensitivity": o["sensitivity"]} if o.get("sensitivity") else {})} for o in store.objects.values()),
+                  key=lambda o: o["objectNumber"])
 
 
 @app.post("/_fake/reset")
