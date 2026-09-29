@@ -195,3 +195,5 @@ table.inner td { background: var(--surface-2); }
 .delete-confirm { max-width: 520px; }
 .check-line { display: flex; gap: 6px; align-items: flex-start; }
 .check-line input { margin-top: 3px; }
+.retry-line { display: flex; gap: 4px; align-items: center; margin-top: 4px; flex-wrap: wrap; }
+.retry-line button { padding: 1px 8px; font-size: 12px; }

@@ -87,9 +87,24 @@ describe("DocumentRow checks", () => {
   });
 
   it("shows upload progress, then Verifying, before the checks", () => {
-    expect(mountRow({ row: row({ upload: { s: "uploading", pct: 40 } }) }).text()).toContain("Uploading 40%");
-    expect(mountRow({ row: row({ upload: { s: "verifying" } }) }).text()).toContain("Verifying…");
+    expect(mountRow({ row: row({ upload: { s: "uploading", pct: 40 } }), uploadingHere: true }).text()).toContain("Uploading 40%");
+    expect(mountRow({ row: row({ upload: { s: "verifying" } }), uploadingHere: true }).text()).toContain("Verifying…");
     expect(mountRow({ row: row(), checking: true }).text()).toContain("Checking…");
+  });
+
+  it("offers Retry and Remove for a failed upload, or one this page isn't sending", async () => {
+    const failed = mountRow({ row: row({ upload: { s: "failed" } }) });
+    expect(failed.text()).toContain("Upload failed");
+    await failed.findAll("button").find((b) => b.text() === "Retry")!.trigger("click");
+    expect(failed.findComponent(DocumentRow).emitted("retry")).toHaveLength(1);
+    await failed.findAll("button").find((b) => b.text() === "Remove")!.trigger("click");
+    expect(failed.text()).toContain("Remove this document?");
+    await failed.findAll("button").find((b) => b.text() === "Remove")!.trigger("click");
+    expect(failed.findComponent(DocumentRow).emitted("remove")).toHaveLength(1);
+    const stalled = mountRow({ row: row({ upload: { s: "pending" } }) });
+    expect(stalled.text()).toContain("Upload not finished");
+    expect(stalled.findAll("button").some((b) => b.text() === "Retry")).toBe(true);
+    expect(mountRow({ row: row({ upload: { s: "pending" } }), uploadingHere: true }).text()).toContain("Waiting to upload");
   });
 });
 

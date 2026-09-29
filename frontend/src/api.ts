@@ -40,6 +40,9 @@ export const api = {
   fix: (id: string) => request<Job>("POST", `/api/jobs/${id}/fix`),
   /** The failure catalog: title, explanation and what to do for each failure code. */
   failures: () => request<{ failures: Record<string, Failure> }>("GET", "/api/failures"),
+  /** Retry a document's upload that failed or never finished: a new staged key for the same file. */
+  retryUpload: (id: string, n: number, f: { name: string; size: number; type: string }) =>
+    request<{ row: Row; uploadForm: { url: string; fields: Record<string, string> } }>("POST", `/api/jobs/${id}/rows/${n}/retry-upload`, f),
   replaceFile: (id: string, n: number, f: { name: string; size: number; type: string }) =>
     request<{ row: Row; uploadForm: { url: string; fields: Record<string, string> } }>("POST", `/api/jobs/${id}/rows/${n}/replace-file`, f),
   renameJob: (id: string, name: string) => request<Job>("PATCH", `/api/jobs/${id}`, { name }),

@@ -320,9 +320,10 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
             continue
         up = (r.get("upload") or {}).get("s")
         if up == "failed":
-            out.append({"level": "block", "text": "The upload failed. Remove the document or add the file again."})
+            out.append({"level": "block", "text": "The upload failed. Retry it, or remove the document."})
         elif up != "done":
-            out.append({"level": "block", "text": "The file hasn't finished uploading."})
+            out.append({"level": "block", "text": "The file hasn't finished uploading. If it isn't uploading in your browser now "
+                                                  "(for example the page was closed), Retry it, or remove the document."})
         ext = r["file"].rsplit(".", 1)[-1].lower() if "." in r["file"] else ""
         if ext not in SUPPORTED_EXTENSIONS:
             out.append({"level": "block", "text": f"The BMU doesn't accept .{ext or '(no extension)'} files. "

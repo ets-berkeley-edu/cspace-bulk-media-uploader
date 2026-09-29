@@ -553,6 +553,33 @@ def _routes(app: FastAPI) -> None:
         s.storage.put_row(job_id, row)
         return {"row": row, "uploadForm": s.storage.presign_upload(row["s3Key"], body.size)}
 
+    @app.post("/api/jobs/{job_id}/rows/{n}/retry-upload")
+    def retry_upload(job_id: str, n: int, body: FileSpec, sess: Session = Depends(current_session), s: Services = Depends(svc)):
+        """Retry a document's upload that failed or never finished (design: Browser uploads, "Upload failed" with
+        Retry and Remove). The same file is sent again to a new staged key; its row keeps every field."""
+        job = _job_or_404(s, sess, job_id)
+        _editable(job, sess)
+        row = s.storage.get_row(job_id, n) or _404()
+        if (row.get("upload") or {}).get("s") == "done":
+            raise HTTPException(409, "This document's file is already uploaded.")
+        if row.get("result"):
+            raise HTTPException(409, "This document has run before; use Replace file instead.")
+        try:
+            name = clean_filename(body.name)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        if name.lower() != (row.get("fileOriginal") or row["file"]).lower():
+            raise HTTPException(422, f"Choose the same file, {row.get('fileOriginal') or row['file']}. To add a different file, add it as a new document.")
+        if body.size > s.settings.max_file_bytes:
+            raise HTTPException(413, f"Too large: {body.name}")
+        _saved(s, sess, job_id)
+        if row.get("s3Key"):
+            s.storage.delete_object(row["s3Key"])  # whatever part of the failed upload arrived
+        row.update(size=body.size, contentType=body.type or row.get("contentType", ""), upload={"s": "pending"},
+                   s3Key=f"jobs/{job_id}/{uuid.uuid4().hex}")
+        s.storage.put_row(job_id, row)
+        return {"row": row, "uploadForm": s.storage.presign_upload(row["s3Key"], body.size)}
+
     @app.post("/api/jobs/{job_id}/rows/{n}/upload-failed")
     def upload_failed(job_id: str, n: int, sess: Session = Depends(current_session), s: Services = Depends(svc)):
         _editable(_job_or_404(s, sess, job_id))

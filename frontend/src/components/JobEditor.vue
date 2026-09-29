@@ -64,6 +64,11 @@ const pageSelected = computed(() => view.value.shown.length > 0 && view.value.sh
 const pageExpanded = computed(() => view.value.shown.length > 0 && view.value.shown.every((r) => expanded.has(r.n)));
 const moreMatching = computed(() => pageSelected.value && view.value.all.some((r) => !selected.has(r.n)));
 const drag = ref(false);
+// The files this page added, kept for Retry, and the uploads this page is sending right now.
+const localFiles = new Map<number, File>();
+const uploadingHere = reactive(new Set<number>());
+const retryInput = ref<HTMLInputElement | null>(null);
+let retryRow: Row | null = null;
 const fileInput = ref<HTMLInputElement | null>(null);
 
 const readonly = computed(() => !!job.value && job.value.status !== "Draft");
@@ -216,6 +221,8 @@ async function addFiles(list: FileList | File[] | null) {
     const queue = created.map((row, i) => ({ row, file: files[i] }));
     for (const { row, file } of queue) {
       row.upload = { s: "pending" };
+      localFiles.set(row.n, file);
+      uploadingHere.add(row.n);
       rows.value.push(row);
       if (canPreview(file)) previews.set(row.n, URL.createObjectURL(file));
     }
@@ -246,6 +253,42 @@ async function replaceFile(row: Row, file: File) {
 }
 
 async function uploadOne(jobId: string, row: Row, file: File, exif = true) {
+  uploadingHere.add(row.n);
+  try {
+    await sendFile(jobId, row, file, exif);
+  } finally {
+    uploadingHere.delete(row.n);
+  }
+}
+
+/** Retry an upload that failed or never finished, with the file this page still holds, or one the user picks again. */
+async function retry(row: Row, picked?: File) {
+  if (!job.value) return;
+  const file = picked ?? localFiles.get(row.n);
+  if (!file) {
+    retryRow = row;
+    retryInput.value?.click();
+    return;
+  }
+  try {
+    const r = await api.retryUpload(job.value.id, row.n, { name: file.name, size: file.size, type: file.type });
+    localFiles.set(row.n, file);
+    replace(r.row);
+    if (!previews.has(row.n) && canPreview(file)) previews.set(row.n, URL.createObjectURL(file));
+    await uploadOne(job.value.id, { ...r.row, uploadForm: r.uploadForm }, file);
+  } catch (e) {
+    await failed(e);
+  }
+}
+function retryPicked(e: Event) {
+  const input = e.target as HTMLInputElement;
+  const f = input.files?.[0];
+  input.value = "";
+  if (f && retryRow) void retry(retryRow, f);
+  retryRow = null;
+}
+
+async function sendFile(jobId: string, row: Row, file: File, exif: boolean) {
   const live = () => rows.value.find((r) => r.n === row.n);
   const set = (u: Row["upload"]) => { const r = live(); if (r) r.upload = u; };
   set({ s: "uploading", pct: 0 });
@@ -399,6 +442,7 @@ function toggle(n: number) {
       <input ref="fileInput" type="file" multiple hidden @change="addFiles(($event.target as HTMLInputElement).files); ($event.target as HTMLInputElement).value = ''" />
     </div>
 
+    <input ref="retryInput" type="file" hidden aria-hidden="true" @change="retryPicked" />
     <div v-if="message" class="msg" :class="message.cls" role="status">{{ message.text }}</div>
     <div v-if="counts.uploading || counts.uploadFailed" class="sub" style="margin:6px 0">
       {{ counts.uploaded }} of {{ counts.work }} uploaded<template v-if="counts.uploading"> · {{ counts.uploading }} uploading</template><template v-if="counts.uploadFailed"> · {{ counts.uploadFailed }} failed</template>
@@ -433,7 +477,9 @@ function toggle(n: number) {
           <DocumentRow v-for="r in view.shown" :key="r.n" :row="r" :tenant="me.tenant" :perms="me.perms" :checking="checking.has(r.n)" :preview="previews.get(r.n)"
                        :expanded="expanded.has(r.n)" :readonly="readonly || !editable" :selected="selected.has(r.n)" :languages="languages"
                        :other-names="rows.filter((x) => x.n !== r.n).map((x) => x.file)"
-                       @toggle="toggle(r.n)" @edit="edit(r, $event)" @remove="remove(r)" @select="select(r.n, $event)" @replace="replaceFile(r, $event)" />
+                       :uploading-here="uploadingHere.has(r.n)"
+                       @toggle="toggle(r.n)" @edit="edit(r, $event)" @remove="remove(r)" @select="select(r.n, $event)" @replace="replaceFile(r, $event)"
+                       @retry="retry(r)" />
         </tbody>
       </table>
     </div>
