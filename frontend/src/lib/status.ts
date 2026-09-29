@@ -15,7 +15,10 @@ export function rowStatus(r: Row, tenant: TenantInfo, checking = false): Badge {
   }
   if (!r.include) return { text: "Disabled — ignored", cls: "b-accent" };
   if (r.result?.state === "Done") return { text: "Done in last run", cls: "b-ok" };
-  if (r.result?.state === "Partial") return { text: "Partial — rerun finishes it", cls: "b-warn" };
+  if (r.result?.state === "Partial") {
+    if (worstLevel(r) === "block") return { text: "Needs fixing", cls: "b-danger" };
+    return { text: checking ? "Checking…" : "Partial — rerun finishes it", cls: checking ? "b-muted" : "b-warn" };
+  }
   const needsObject = tenant.handling.find((x) => x.id === r.handling)?.object !== "none";
   if (needsObject && !r.parseOk && !r.obj) return { text: "Fix filename", cls: "b-danger" };
   if (worstLevel(r) === "block") return { text: "Needs fixing", cls: "b-danger" };

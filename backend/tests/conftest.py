@@ -37,6 +37,22 @@ def factory(user, password):
     return CSpaceClient("http://fake", user, password, http=TestClient(fake_app, base_url="http://fake"))
 
 
+def worker_factory(user, password):
+    return CSpaceClient("http://fake", user, password, http=TestClient(fake_app, base_url="http://fake"), agent="bmu-worker")
+
+
+@pytest.fixture
+def fail_on(fake):
+    """Add a /_fake/fail rule: e.g. fail_on("upload", status=413, match="1-2345")."""
+    c = TestClient(fake_app, base_url="http://fake")
+
+    def _add(step, **params):
+        r = c.post("/_fake/fail", params={"step": step, **params})
+        assert r.status_code == 200, r.text
+        return r.json()["rules"]
+    return _add
+
+
 @pytest.fixture
 def aws():
     with mock_aws():
@@ -61,7 +77,7 @@ def api(services):
 
 @pytest.fixture
 def worker(services):
-    return Worker(services.settings, services.storage, services.crypto, factory)
+    return Worker(services.settings, services.storage, services.crypto, worker_factory)
 
 
 @pytest.fixture

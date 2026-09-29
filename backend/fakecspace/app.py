@@ -6,6 +6,7 @@ behavior against the real server must be confirmed on the Lyrasis QA tenant.
 
 Run: uvicorn fakecspace.app:app --port 8180
 Users: admin/admin (all permissions), limited/limited (can't create objects), reader/reader (read only).
+Development hooks: /_fake/state, /_fake/reset, /_fake/slow, /_fake/fail (failures on demand).
 """
 from __future__ import annotations
 
@@ -60,6 +61,7 @@ class Store:
         self.perm_overrides: dict[str, dict[str, str]] = {}  # e.g. {"admin": {"collectionobjects": "RL"}}: roles changed
         self.searches: list[tuple[str, str | None]] = []  # (service, searched value), to test lookup caching
         self.delay = 0.0  # seconds added to every create or upload, to watch the queue in a browser (/_fake/slow)
+        self.rules: list[dict] = []  # failures on demand (/_fake/fail)
         for num in ["15-1234", "12-5678", "15-1240", "1-2345"]:
             self.objects[str(uuid.uuid4())] = {"objectNumber": num, "deleted": False}
         # two objects share a number, to exercise "matches several objects"
@@ -100,6 +102,41 @@ def _check(request: Request, resource: str, action: str) -> Response | None:
     return None
 
 
+# ---- failures on demand (development only; see /_fake/fail) ----------------------------------------
+STEPS = {"media", "upload", "objectSearch", "objectCreate", "relation", "mediaSearch"}
+
+
+def _rule(request: Request, step: str, names: list[str]) -> dict | None:
+    """The /_fake/fail rule that applies to this request, if any (counted as used). A rule applies to one step, to requests
+    whose names (identification number, filename, object number) contain its match text, and by default
+    only to the BMU worker's requests (User-Agent bmu-worker), so the editor's checks aren't affected."""
+    agent = request.headers.get("user-agent", "")
+    for rule in list(store.rules):
+        if rule["step"] != step or (rule["client"] == "worker" and not agent.startswith("bmu-worker")):
+            continue
+        if rule["match"] and not any(rule["match"].lower() in (n or "").lower() for n in names):
+            continue
+        if rule["count"]:
+            rule["left"] -= 1
+            if rule["left"] <= 0:
+                store.rules.remove(rule)
+        rule["hits"] = rule.get("hits", 0) + 1
+        return rule
+    return None
+
+
+def _fail(request: Request, step: str, names: list[str]) -> Response | None:
+    """The error response a matching /_fake/fail rule asks for, if any."""
+    rule = _rule(request, step, names)
+    return Response(status_code=rule["status"]) if rule else None
+
+
+def _media_names(csid: str) -> list[str]:
+    m = store.media.get(csid) or {}
+    blob = next((b for b in store.blobs.values() if b.get("media") == csid), {})
+    return [m.get("identificationNumber", ""), m.get("title", ""), blob.get("name", "")]
+
+
 def _created(request: Request, service: str, csid: str) -> Response:
     base = str(request.base_url).rstrip("/")
     return Response(status_code=201, headers={"Location": f"{base}/cspace-services/{service}/{csid}"})
@@ -138,6 +175,15 @@ def _search(request: Request, table: dict, field: str, service: str):
         return d
     m = _AS.match(request.query_params.get("as", ""))
     value = m.group(2).replace('\\"', '"') if m and m.group(1) == field else None
+    step = "objectSearch" if service == "collectionobjects" else "mediaSearch"
+    if (rule := _rule(request, step, [value or ""])) is not None:
+        effect = rule.get("effect")
+        if effect == "none":
+            return _xml('<ns2:abstract-common-list xmlns:ns2="http://collectionspace.org/services/jaxb"></ns2:abstract-common-list>')
+        if effect == "many":
+            items = "".join(f"<list-item><csid>{uuid.uuid4()}</csid><{field}>{escape(value or '')}</{field}></list-item>" for _ in range(2))
+            return _xml(f'<ns2:abstract-common-list xmlns:ns2="http://collectionspace.org/services/jaxb">{items}</ns2:abstract-common-list>')
+        return Response(status_code=rule["status"])
     store.searches.append((service, value))
     items = "".join(
         f"<list-item><csid>{c}</csid><{field}>{escape(rec[field])}</{field}></list-item>"
@@ -246,7 +292,10 @@ async def create_media(request: Request):
     csid = str(uuid.uuid4())
     if _field(body, "blobCsid"):
         return Response(status_code=400)  # the BMU must not send blobCsid; the file is attached with PUT .../blob
-    store.media[csid] = {"identificationNumber": _field(body, "identificationNumber"), "blobCsid": "", "xml": body.decode()}
+    if (f := _fail(request, "media", [_field(body, "identificationNumber"), _field(body, "title")])) is not None:
+        return f
+    store.media[csid] = {"identificationNumber": _field(body, "identificationNumber"), "title": _field(body, "title"),
+                         "blobCsid": "", "xml": body.decode()}
     return _created(request, "media", csid)
 
 
@@ -259,6 +308,8 @@ async def media_blob(csid: str, request: Request, file: UploadFile):
         return Response(status_code=fail)
     if csid not in store.media:
         return Response(status_code=404)
+    if (f := _fail(request, "upload", [file.filename or "", *_media_names(csid)])) is not None:
+        return f
     size = 0
     while chunk := await file.read(1024 * 1024):
         size += len(chunk)
@@ -301,6 +352,8 @@ async def create_object(request: Request):
         return d
     body = await request.body()
     csid = str(uuid.uuid4())
+    if (f := _fail(request, "objectCreate", [_field(body, "objectNumber")])) is not None:
+        return f
     store.objects[csid] = {"objectNumber": _field(body, "objectNumber"), "deleted": False}
     return _created(request, "collectionobjects", csid)
 
@@ -311,7 +364,10 @@ async def create_relation(request: Request):
         return d
     body = await request.body()
     csid = str(uuid.uuid4())
-    store.relations[csid] = {k: _field(body, k) for k in ("subjectCsid", "subjectDocumentType", "objectCsid", "objectDocumentType")}
+    rel = {k: _field(body, k) for k in ("subjectCsid", "subjectDocumentType", "objectCsid", "objectDocumentType")}
+    if (f := _fail(request, "relation", _media_names(rel["subjectCsid"]) + _media_names(rel["objectCsid"]))) is not None:
+        return f
+    store.relations[csid] = rel
     # "relations_lost": the relation is saved but the response is lost (e.g. a gateway timeout)
     if (fail := store.fail_next.pop("relations_lost", None)):
         return Response(status_code=fail)
@@ -333,6 +389,39 @@ def slow(seconds: float = 2.0):
     """Development only: add this many seconds to every create and upload (0 to turn it off)."""
     store.delay = max(0.0, min(seconds, 30.0))
     return {"delay": store.delay}
+
+
+@app.post("/_fake/fail")
+def add_failure(step: str, match: str = "", status: int = 500, effect: str = "", count: int = 1, client: str = "worker"):
+    """Development only: make CollectionSpace fail on purpose, to see how the BMU reports it.
+
+    step:   media | upload | objectSearch | objectCreate | relation | mediaSearch
+    match:  only requests whose identification number, filename or object number contains this text ("" = any)
+    status: the HTTP status to return, e.g. 400 (rejected), 401 (sign-in), 403 (permission), 409 (inactive
+            account), 413 (file too large), 415 (file type), 500 (server error)
+    effect: for objectSearch, "none" (no object found) or "many" (several objects) instead of a status
+    count:  how many requests fail (0 = until cleared with DELETE /_fake/fail)
+    client: "worker" (default: only job runs, so the editor's checks are unaffected) or "any"
+    """
+    if step not in STEPS:
+        return Response(status_code=400, content=f"step must be one of {', '.join(sorted(STEPS))}")
+    if effect and (step not in ("objectSearch", "mediaSearch") or effect not in ("none", "many")):
+        return Response(status_code=400, content="effect is none or many, for objectSearch and mediaSearch")
+    rule = {"step": step, "match": match, "status": status, "effect": effect, "count": max(0, count),
+            "left": max(0, count), "client": "any" if client == "any" else "worker"}
+    store.rules.append(rule)
+    return {"rules": store.rules}
+
+
+@app.get("/_fake/fail")
+def list_failures():
+    return {"rules": store.rules}
+
+
+@app.delete("/_fake/fail")
+def clear_failures():
+    store.rules.clear()
+    return {"rules": []}
 
 
 @app.get("/_fake/state")

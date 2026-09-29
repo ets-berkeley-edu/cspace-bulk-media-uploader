@@ -1,0 +1,128 @@
+# What the BMU tells people about each kind of failure (design: Finished jobs and error messages).
+#
+# The worker records only the code, on the document (row level) or on the job (job level); the UI looks up
+# the wording here, so wording can improve and codes can be added without changing code. Each entry has a
+# title, a plain explanation, what to do, and whether the job needs a change before a rerun can succeed
+# (needs_fix: the button reads "Fix and reschedule") or only another run ("Reschedule"). The technical
+# detail (HTTP status and step) is recorded with each failure and shown on request.
+#
+# level: row, job, or notice (a row-level notice that doesn't stop the document).
+
+upload_too_large:
+  title: File too large for CollectionSpace
+  level: row
+  needs_fix: true
+  explain: CollectionSpace refused the file because it is larger than its upload limit. The Media record was created without it.
+  fix: Replace the file with a smaller version (for example a compressed TIFF), then choose Fix and reschedule. The Media record already exists, so the rerun only uploads the file.
+
+file_type_rejected:
+  title: CollectionSpace rejected the file
+  level: row
+  needs_fix: true
+  explain: CollectionSpace refused the file's type, or the file's content doesn't match its name (for example a .tif that is really a JPEG).
+  fix: Replace the file with a supported format, then choose Fix and reschedule. The Media record already exists, so the rerun only uploads the file.
+
+file_missing:
+  title: The uploaded file is no longer available
+  level: row
+  needs_fix: true
+  explain: The file the BMU was holding for this document is gone or has changed since it was uploaded, so it wasn't sent to CollectionSpace.
+  fix: Add the file to the document again (Replace file), then choose Fix and reschedule.
+
+media_rejected:
+  title: CollectionSpace rejected the Media record
+  level: row
+  needs_fix: true
+  explain: CollectionSpace couldn't save the Media record with the values sent, so no Media record or file was created. The object step doesn't depend on the Media record, so it still ran.
+  fix: Check the document's fields (the date is the usual cause), then choose Fix and reschedule.
+
+object_gone:
+  title: Object not found when the job ran
+  level: row
+  needs_fix: true
+  explain: The object was found when the job was checked, but not when it ran. It may have been renumbered or deleted in the meantime. The Media record and its file were still created; the links to the object were skipped.
+  fix: Correct the object number, or stop linking the document to an object, then choose Fix and reschedule.
+
+object_ambiguous:
+  title: Object number matches several objects
+  level: row
+  needs_fix: true
+  explain: When the job ran, more than one object had this object number, so the BMU couldn't tell which one to link. Another object with the same number was probably added after the job was scheduled.
+  fix: Correct the object number, or have the duplicate object resolved in CollectionSpace, then choose Fix and reschedule. The Media record and its file already exist.
+
+object_rejected:
+  title: CollectionSpace rejected the new object
+  level: row
+  needs_fix: true
+  explain: The document's handling creates an object when none exists, but CollectionSpace refused the new Object record, so the Media record couldn't be linked to it.
+  fix: Check the object number, then choose Fix and reschedule. The Relations were skipped; the Media record and file are unaffected.
+
+no_permission:
+  title: Permission denied
+  level: row
+  needs_fix: true
+  explain: The account that ran the job isn't allowed to create this kind of record in CollectionSpace.
+  fix: Ask a CollectionSpace administrator for the permission, or have someone who has it use Fix and reschedule.
+
+server_error:
+  title: CollectionSpace error on this document
+  level: row
+  needs_fix: false
+  explain: CollectionSpace returned an error (or didn't answer in time) for one step of this document. It wasn't part of a longer outage, so the job carried on with the other documents.
+  fix: Reschedule the job. Only the failed step and the steps that depend on it run again.
+
+duplicate_at_run:
+  title: Identification number already in use
+  level: notice
+  needs_fix: false
+  explain: When the job ran, a Media record with the same identification number already existed; it was created after the job was scheduled. As with the editor's warning, the document was still processed.
+  fix: Review both Media records in CollectionSpace. No rerun is needed.
+
+group_failed:
+  title: The group could not be created
+  level: job
+  needs_fix: true
+  explain: CollectionSpace refused the job's group, so no documents were added to a group. Everything else in each document still ran.
+  fix: Check the group title and that you may create groups, then choose Fix and reschedule. Only the group steps run again.
+
+auth:
+  title: Sign-in failed
+  level: job
+  needs_fix: false
+  explain: CollectionSpace rejected the password of the person who scheduled the job; it may have been changed after the job was scheduled. The job stopped at once so the account wouldn't be locked out.
+  fix: Reschedule the job. Scheduling it again uses your own current sign-in.
+
+account_inactive:
+  title: CollectionSpace account inactive
+  level: job
+  needs_fix: false
+  explain: The CollectionSpace account of the person who scheduled the job is inactive. The job stopped at once.
+  fix: Ask a CollectionSpace administrator to reactivate the account, or have another user reschedule the job with their own sign-in.
+
+unavailable:
+  title: CollectionSpace unavailable
+  level: job
+  needs_fix: false
+  explain: Five requests in a row failed because CollectionSpace wasn't responding, so the job stopped. Documents it hadn't reached were not started.
+  fix: Reschedule the job later. Documents already done are skipped.
+
+worker_stopped:
+  title: The job stopped unexpectedly
+  level: job
+  needs_fix: false
+  explain: The worker running the job stopped responding, so the job was stopped and its saved sign-in deleted. Every finished step was recorded.
+  fix: Reschedule the job. Documents and steps already done are skipped.
+
+cancelled:
+  title: Run cancelled
+  level: job
+  needs_fix: false
+  explain: Someone chose Cancel run. The worker finished the document it was on and stopped; documents it hadn't reached were not started.
+  fix: Reschedule to continue from where it stopped. Documents already done are skipped.
+
+unknown:
+  title: Unexpected problem
+  level: any
+  needs_fix: false
+  explain: Something went wrong that the BMU doesn't have a specific message for.
+  fix: Reschedule the job. If it happens again, contact support with the technical detail.

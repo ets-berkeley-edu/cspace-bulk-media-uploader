@@ -17,14 +17,17 @@ from pydantic import BaseModel, Field
 from .config import Settings, get_settings
 from .crypto import Crypto, make_crypto
 from .cspace import CSpaceClient, CSpaceError
-from .rows import PROBLEM_TEXT, apply_edit, check_rows, clean_filename, edit_problem, is_locked, new_row, worst
+from .failures import catalog
+from .rows import (PROBLEM_TEXT, apply_edit, can_replace_file, check_rows, clean_filename, created_records, edit_problem,
+                   is_locked, new_row, worst)
 from .storage import RowChanged, Storage, now
 from .tenant import Tenant, load_tenant
 
 COOKIE = "bmu_session"
 CSRF_HEADER = "x-bmu"
-# Draft: a new job. NeedsAttention/Failed: "Reschedule" reruns only the unfinished steps.
-RESCHEDULABLE = ("Draft", "NeedsAttention", "Failed")
+# Only drafts are scheduled. A job that needs attention or failed goes to Drafts first (Fix and reschedule).
+RESCHEDULABLE = ("Draft",)
+FIXABLE = ("NeedsAttention", "Failed")
 
 ClientFactory = Callable[[str, str], CSpaceClient]
 
@@ -139,6 +142,57 @@ def _saved(s: "Services", sess: "Session", job_id: str) -> None:
     s.storage.mark_saved(job_id, sess.user, sess.key, s.settings.draft_days)
 
 
+def _keep_original(s: "Services", job: dict, row: dict) -> None:
+    """While a job is being fixed, keep each row as it was before its first change, so an abandoned fix can
+    be reverted (design: State rules, Abandoned fixes). Rows added during the fix are simply removed then."""
+    if job.get("fixFrom") and not row.get("addedInFix"):
+        s.storage.save_fix_original(job["id"], copy.deepcopy(row))
+
+
+def _note_include(row: dict, before: bool, user: str) -> None:
+    """Record who disabled a row and when; the next run lists it (design: Disabling rows)."""
+    if before and not row.get("include"):
+        row["disabledBy"], row["disabledAt"] = user, now()
+    elif row.get("include"):
+        row.pop("disabledBy", None)
+        row.pop("disabledAt", None)
+
+
+def _complete_if_clean(s: "Services", sess: "Session", job_id: str) -> bool:
+    """A job that has run becomes Completed, with its 30-day expiry, as soon as every row is done or
+    disabled, also when that happens in a draft (design: Job states). With no rows left, it is deleted."""
+    job = s.storage.get_job(job_id)
+    if not job or job["status"] != "Draft" or not job.get("run"):
+        return False
+    rows = s.storage.get_rows(job_id)
+    if not rows:
+        _delete_job(s, sess, job, [])
+        return True
+    if any(r.get("include") and (r.get("result") or {}).get("state") != "Done" for r in rows):
+        return False
+    if not s.storage.update_job(job_id, {"status": "Completed", "code": "", "note": "", "fixFrom": None,
+                                         "expiresAt": now() + s.settings.completed_days * 86400}, expect_status="Draft"):
+        return False
+    s.storage.clear_editing(job_id)
+    s.storage.drop_fix_originals(job_id)
+    s.storage.audit(sess.tenant, "Completed", sess.user, job_id,
+                    f"“{job['name'] or 'Untitled job'}” completed: every document is done or disabled.")
+    return True
+
+
+def _delete_job(s: "Services", sess: "Session", job: dict, rows: list[dict]) -> None:
+    """Delete a job and its staged files. Records its runs created stay in CollectionSpace; the audit entry
+    lists every one, by row and record type, so they can still be found and finished there."""
+    created = created_records(rows)
+    s.storage.delete_job_and_files(job["id"])
+    c = created["counts"]
+    what = (f"; its runs created {c['media']} Media records ({c['files']} with files), {c['objects']} Objects and "
+            f"{c['relations']} Relations, which stay in CollectionSpace" + (f", {c['unfinished']} unfinished" if c["unfinished"] else "")
+            if created["csids"] else "; it had created nothing in CollectionSpace")
+    s.storage.audit(sess.tenant, "Job deleted", sess.user, job["id"],
+                    f"Deleted “{job['name'] or 'Untitled job'}” ({len(rows)} documents){what}.", created["csids"])
+
+
 def _public(job: dict, sess: "Session") -> dict:
     """A job as the API shows it: whether this session is its editor, not the other session's key."""
     out = {k: v for k, v in job.items() if k != "editingSession"}
@@ -239,6 +293,11 @@ def _routes(app: FastAPI) -> None:
         response.delete_cookie(COOKIE, path="/")
         return {"ok": True}
 
+    @app.get("/api/failures")
+    def failures(sess: Session = Depends(current_session)):
+        """The failure catalog: what the UI says about each failure code (design: Finished jobs and error messages)."""
+        return {"failures": catalog()}
+
     @app.get("/api/me")
     def me(sess: Session = Depends(current_session), s: Services = Depends(svc)):
         return {"user": sess.user, "tenant": s.tenant.public_summary(), "perms": sess.perms}
@@ -310,7 +369,28 @@ def _routes(app: FastAPI) -> None:
     @app.get("/api/jobs/{job_id}")
     def get_job(job_id: str, sess: Session = Depends(current_session), s: Services = Depends(svc)):
         job = _job_or_404(s, sess, job_id)
-        return {"job": _public(job, sess), "rows": s.storage.get_rows(job_id)}
+        rows = s.storage.get_rows(job_id)
+        return {"job": _public(job, sess), "rows": rows, "runs": s.storage.get_runs(job_id),
+                "created": created_records(rows)["counts"]}
+
+    # ---- Fix and reschedule (design: Fixing a job after a run; Rescheduling after a run) --------------
+    @app.post("/api/jobs/{job_id}/fix")
+    def fix(job_id: str, sess: Session = Depends(current_session), s: Services = Depends(svc)):
+        """Fix and reschedule (or Reschedule): a job that needs attention or failed moves to Drafts, locked to
+        you. Its rows keep their results; scheduling it queues a rerun of only what's unfinished. A fix not
+        scheduled within 30 days of its last change is reverted."""
+        job = _job_or_404(s, sess, job_id)
+        t = now()
+        if not s.storage.update_job(job_id, {"status": "Draft", "fixFrom": {"status": job["status"], "code": job.get("code", ""),
+                                                                            "run": job.get("run", 0)},
+                                             "note": "", "lastSavedBy": sess.user, "lastSavedAt": t,
+                                             "expiresAt": t + s.settings.draft_days * 86400}, expect_status=list(FIXABLE)):
+            now_job = s.storage.get_job(job_id) or {}
+            who = now_job.get("editingBy")
+            raise HTTPException(409, f"{who} is already fixing this job; it's in Drafts." if who else
+                                f"The job is {now_job.get('status')}; only jobs that need attention or failed can be fixed.")
+        s.storage.open_draft(job_id, sess.user, sess.key)
+        return _public(s.storage.get_job(job_id), sess)
 
     # ---- the job queue (design: The job queue; State rules) ---------------------------------------
     @app.post("/api/jobs/{job_id}/move")
@@ -369,15 +449,19 @@ def _routes(app: FastAPI) -> None:
 
     @app.post("/api/jobs/{job_id}/close")
     def close_draft(job_id: str, sess: Session = Depends(current_session), s: Services = Depends(svc)):
-        _job_or_404(s, sess, job_id)
+        job = _job_or_404(s, sess, job_id)
+        if job.get("editingSession") == sess.key:
+            _complete_if_clean(s, sess, job_id)
         s.storage.close_draft(job_id, sess.key)
         return {"ok": True}
 
     @app.post("/api/jobs/{job_id}/save")
     def save_draft(job_id: str, sess: Session = Depends(current_session), s: Services = Depends(svc)):
-        """Save draft: every change is already saved; this confirms it and restarts the draft's expiry."""
+        """Save draft: every change is already saved; this confirms it and restarts the draft's expiry. A job
+        that has run and has every document done or disabled becomes Completed."""
         _editable(_job_or_404(s, sess, job_id), sess)
         _saved(s, sess, job_id)
+        _complete_if_clean(s, sess, job_id)
         return _public(s.storage.get_job(job_id), sess)
 
     @app.patch("/api/jobs/{job_id}")
@@ -389,14 +473,19 @@ def _routes(app: FastAPI) -> None:
 
     @app.delete("/api/jobs/{job_id}")
     def delete_job(job_id: str, sess: Session = Depends(current_session), s: Services = Depends(svc)):
+        """Design: Deleting a job. Drafts, queued jobs and jobs that need attention or failed; not a running
+        job (cancel it first) or a draft someone else is editing. Allowed even if its runs created records:
+        they stay in CollectionSpace (the BMU never deletes them) and the audit entry lists them."""
         job = _job_or_404(s, sess, job_id)
-        rows = s.storage.get_rows(job_id)
-        if job["status"] == "Running" or any(is_locked(r) for r in rows):
-            raise HTTPException(409, "This job created records in CollectionSpace or is running, so it can't be deleted.")
+        if job["status"] == "Running":
+            raise HTTPException(409, "This job is running. Cancel the run first.")
+        if job["status"] == "Completed":
+            raise HTTPException(409, "Completed jobs are removed on their own 30 days after they finish.")
+        if job["status"] not in ("Draft", "Queued", *FIXABLE):
+            raise HTTPException(409, f"The job is {job['status']} and can't be deleted now.")
         if job.get("editingSession") and job["editingSession"] != sess.key:
             raise HTTPException(409, f"{job.get('editingBy')} is editing this draft, so it can't be deleted.")
-        s.storage.delete_job_and_files(job_id)
-        s.storage.audit(sess.tenant, "Job deleted", sess.user, job_id, f"Deleted “{job['name']}” ({len(rows)} documents); it had created nothing in CollectionSpace.")
+        _delete_job(s, sess, job, s.storage.get_rows(job_id))
         return {"ok": True}
 
     # ---- files: presigned direct upload to S3 -------------------------------------------------
@@ -418,6 +507,8 @@ def _routes(app: FastAPI) -> None:
         for f, name in zip(body.files, names):
             row = new_row(s.tenant, name, f.size, f.type)
             row["s3Key"] = f"jobs/{job_id}/{uuid.uuid4().hex}"  # design: staged files keep random keys, no names
+            if job.get("fixFrom"):
+                row["addedInFix"] = True  # an abandoned fix removes it again
             new.append(row)
         rows = s.storage.add_rows(job_id, new)
         return {"rows": [{**r, "uploadForm": s.storage.presign_upload(r["s3Key"], f.size)}
@@ -435,6 +526,33 @@ def _routes(app: FastAPI) -> None:
         s.storage.put_row(job_id, row)
         return _recheck_after_change(s, sess, job_id, n)
 
+    @app.post("/api/jobs/{job_id}/rows/{n}/replace-file")
+    def replace_file(job_id: str, n: int, body: FileSpec, sess: Session = Depends(current_session), s: Services = Depends(svc)):
+        """A replacement file for a document whose Media record exists but whose file didn't reach CollectionSpace
+        (rejected, or lost). The browser uploads it like any file; the rerun uploads it to the existing Media record."""
+        job = _job_or_404(s, sess, job_id)
+        _editable(job, sess)
+        row = s.storage.get_row(job_id, n) or _404()
+        if not can_replace_file(row):
+            raise HTTPException(409, "Only a document whose Media record exists and whose file didn't reach CollectionSpace "
+                                     "takes a replacement file.")
+        if body.size > s.settings.max_file_bytes:
+            raise HTTPException(413, f"Too large: {body.name}")
+        try:
+            name = clean_filename(body.name)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        _saved(s, sess, job_id)
+        _keep_original(s, job, row)
+        if job.get("fixFrom") and "supersededKey" not in row:
+            row["supersededKey"] = row.get("s3Key")  # kept until the rerun starts, in case the fix is abandoned
+        elif row.get("s3Key"):
+            s.storage.delete_object(row["s3Key"])  # an earlier replacement, never used
+        row.update(file=name, fileOriginal=name, size=body.size, contentType=body.type, upload={"s": "pending"},
+                   s3Key=f"jobs/{job_id}/{uuid.uuid4().hex}", replacedFor=(row.get("result") or {}).get("run"))
+        s.storage.put_row(job_id, row)
+        return {"row": row, "uploadForm": s.storage.presign_upload(row["s3Key"], body.size)}
+
     @app.post("/api/jobs/{job_id}/rows/{n}/upload-failed")
     def upload_failed(job_id: str, n: int, sess: Session = Depends(current_session), s: Services = Depends(svc)):
         _editable(_job_or_404(s, sess, job_id))
@@ -447,14 +565,18 @@ def _routes(app: FastAPI) -> None:
     @app.patch("/api/jobs/{job_id}/rows/{n}")
     def edit_row(job_id: str, n: int, changes: dict[str, Any], sess: Session = Depends(current_session),
                  s: Services = Depends(svc)):
-        _editable(_job_or_404(s, sess, job_id), sess)
+        job = _job_or_404(s, sess, job_id)
+        _editable(job, sess)
         _saved(s, sess, job_id)
         row = s.storage.get_row(job_id, n) or _404()
         others = [r["file"] for r in s.storage.get_rows(job_id) if r["n"] != n] if "file" in changes else []
+        before = copy.deepcopy(row)
         try:
             apply_edit(s.tenant, row, changes, others)
         except ValueError as e:
             raise HTTPException(422, str(e))
+        _note_include(row, bool(before.get("include")), sess.user)
+        _keep_original(s, job, before)
         s.storage.put_row(job_id, row)
         return _recheck_after_change(s, sess, job_id, n)
 
@@ -462,7 +584,8 @@ def _routes(app: FastAPI) -> None:
     def bulk_edit(job_id: str, body: BulkEdit, sess: Session = Depends(current_session), s: Services = Depends(svc)):
         """The bulk-change panel: the same changes to many rows. Never applied partially: if any target row
         can't take a change it would actually change, nothing is saved."""
-        _editable(_job_or_404(s, sess, job_id), sess)
+        job = _job_or_404(s, sess, job_id)
+        _editable(job, sess)
         _saved(s, sess, job_id)
         if "file" in body.changes:
             raise HTTPException(422, "Documents are renamed one at a time.")
@@ -484,7 +607,10 @@ def _routes(app: FastAPI) -> None:
                 apply_edit(s.tenant, r, body.changes)
             except ValueError as e:
                 raise HTTPException(422, f"{e} Nothing was changed.")
+            _note_include(r, bool(originals[len(edited)].get("include")), sess.user)
             edited.append(r)
+        for o in originals:
+            _keep_original(s, job, o)
         s.storage.put_rows_all_or_none(job_id, edited, originals)
         rc = _recheck(s, sess, job_id, targets={r["n"] for r in edited})
         changed = {r["n"] for r in edited} | {r["n"] for r in rc["changed"]}
@@ -492,14 +618,24 @@ def _routes(app: FastAPI) -> None:
 
     @app.delete("/api/jobs/{job_id}/rows/{n}")
     def delete_row(job_id: str, n: int, sess: Session = Depends(current_session), s: Services = Depends(svc)):
-        _editable(_job_or_404(s, sess, job_id), sess)
+        job = _job_or_404(s, sess, job_id)
+        _editable(job, sess)
         _saved(s, sess, job_id)
         row = s.storage.get_row(job_id, n) or _404()
         if is_locked(row):
-            raise HTTPException(409, "This document already created records in CollectionSpace, so it can't be deleted.")
-        if row.get("s3Key"):
-            s.storage.delete_object(row["s3Key"])
+            raise HTTPException(409, "This document already created records in CollectionSpace, so it can't be deleted. "
+                                     "Switch Include off to have the BMU ignore it.")
+        for key in {row.get("s3Key"), row.get("supersededKey")} - {None, ""}:
+            s.storage.delete_object(key)
         s.storage.delete_row(job_id, n)
+        s.storage.drop_fix_original(job_id, n)  # deleting is permanent, even if the fix is abandoned
+        if job.get("run"):  # the next run lists the documents deleted since the last one
+            s.storage.update_job(job_id, {"deletedRows": (job.get("deletedRows") or []) +
+                                          [{"n": n, "file": row["file"], "by": sess.user, "at": now()}]})
+        s.storage.audit(sess.tenant, "Row deleted", sess.user, job_id,
+                        f"Deleted document {n} ({row['file']}) from “{job['name'] or 'Untitled job'}”; it had created nothing in CollectionSpace.")
+        if _complete_if_clean(s, sess, job_id):
+            return {"ok": True, "others": [], "jobStatus": (s.storage.get_job(job_id) or {}).get("status", "Deleted")}
         return {"ok": True, "others": _recheck(s, sess, job_id, targets=set())["changed"]}
 
     # ---- checks and scheduling --------------------------------------------------------------------

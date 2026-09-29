@@ -64,7 +64,7 @@ async function del(j: Job) {
   <div>
     <p class="subtitle">Jobs saved but not scheduled, including incomplete jobs and jobs with problems. Everyone signed in can see and
       edit them, one person at a time; you can take over a draft someone else is editing. A draft that has never run is deleted
-      30 days after it was last changed or saved. Checks are re-run against CollectionSpace each time this list is shown.</p>
+      30 days after it was last changed or saved; a fix of a job that has run is reverted instead, and the job returns to Finished jobs. Checks are re-run against CollectionSpace each time this list is shown.</p>
     <div v-if="error" class="msg msg-block">{{ error }}</div>
     <div class="table-wrap">
       <table>
@@ -73,7 +73,8 @@ async function del(j: Job) {
         <tbody>
           <tr v-if="!drafts.length"><td colspan="7" class="muted" style="text-align:center;padding:18px">No drafts. A job you start in Create / edit job is a draft until you schedule it.</td></tr>
           <tr v-for="j in drafts" :key="j.id">
-            <td>{{ j.name || "Untitled job" }}<div class="sub">created by {{ j.createdBy }}</div></td>
+            <td>{{ j.name || "Untitled job" }}<div class="sub">created by {{ j.createdBy }}</div>
+              <div v-if="j.fixFrom" class="sub">🔧 fixing after run {{ j.fixFrom.run }} ({{ j.fixFrom.status === "Failed" ? "failed" : "needed attention" }})</div></td>
             <td>{{ j.rowCount }}</td>
             <td>
               <span v-if="checks.get(j.id) === 'checking'" class="badge b-muted">Checking…</span>
@@ -84,10 +85,11 @@ async function del(j: Job) {
             <td>{{ formatTime(j.lastSavedAt) }}<div class="sub">by {{ j.lastSavedBy || "—" }}</div></td>
             <td><span v-if="j.editingBy" class="lock" :title="`since ${formatTime(j.editingSince)}`">🔒 {{ j.editingByYou ? "You" : j.editingBy }}</span>
               <span v-else class="sub">—</span></td>
-            <td><span :class="{ soon: expiry(j).soon }">{{ expiry(j).text }}</span><div class="sub">then deleted</div></td>
+            <td><span :class="{ soon: expiry(j).soon }">{{ expiry(j).text }}</span><div class="sub" :title="j.fixFrom ? 'The edits are discarded and the job returns to Finished jobs as it was' : 'The draft is deleted with its files'">{{ j.fixFrom ? "then reverted" : "then deleted" }}</div></td>
             <td>
               <div v-if="confirm?.id === j.id && confirm.kind === 'delete'" class="msg msg-warn">
-                Delete this draft? Its {{ j.rowCount }} documents and uploaded files are removed; nothing in CollectionSpace is touched.
+                Delete this draft? Its {{ j.rowCount }} documents and uploaded files are removed from the BMU; nothing in CollectionSpace is touched<template
+                  v-if="j.run"> (records its earlier runs created stay there, and the audit log lists them)</template>.
                 <button @click="del(j)">Delete</button> <button @click="confirm = null">Cancel</button>
               </div>
               <div v-else-if="confirm?.id === j.id && confirm.kind === 'takeover'" class="msg msg-warn">

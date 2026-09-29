@@ -7,6 +7,15 @@ def new_job(api, name="Test job"):
     return r.json()["id"]
 
 
+def reschedule(api, job):
+    """Fix and reschedule (or Reschedule): to Drafts, then scheduled again."""
+    r = api.post(f"/api/jobs/{job}/fix")
+    assert r.status_code == 200 and r.json()["status"] == "Draft", r.text
+    r = api.post(f"/api/jobs/{job}/schedule")
+    assert r.status_code == 200, r.text
+    return r
+
+
 def test_requires_sign_in_and_csrf_header(api):
     assert api.get("/api/me").status_code == 401
     r = api.post("/api/login", json={"username": "admin", "password": "admin"}, headers={"X-BMU": ""})
@@ -87,13 +96,13 @@ def test_partial_failure_and_rerun_skips_finished_steps(api, login, add_uploaded
     j = api.get(f"/api/jobs/{job}").json()
     row = j["rows"][0]
     assert j["job"]["status"] == "NeedsAttention"
-    assert row["result"]["state"] == "Partial" and row["result"]["error"]["code"] == "server"
+    assert row["result"]["state"] == "Partial" and row["result"]["error"]["code"] == "server_error"
     media_csid = row["result"]["steps"]["media"]["csid"]
     assert services.storage.get_credential(job) is None
     # a Partial row is locked: it can't be edited or deleted
     assert api.delete(f"/api/jobs/{job}/rows/{row['n']}").status_code == 409
     # Reschedule: the rerun reuses the Media record and only adds the relations
-    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    reschedule(api, job)
     worker.tick()
     j = api.get(f"/api/jobs/{job}").json()
     assert j["job"]["status"] == "Completed" and j["job"]["run"] == 2
@@ -114,7 +123,7 @@ def test_rerun_finds_relation_whose_response_was_lost(api, login, add_uploaded, 
     assert j["rows"][0]["result"]["steps"]["relMediaObject"]["s"] == "failed"
     assert j["rows"][0]["result"]["steps"]["relObjectMedia"]["s"] == "done"
     assert len(fake.relations) == 2  # both saved on the server, one despite the error
-    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    reschedule(api, job)
     worker.tick()
     j = api.get(f"/api/jobs/{job}").json()
     steps = j["rows"][0]["result"]["steps"]
@@ -200,7 +209,7 @@ def test_failed_upload_still_relates_and_rerun_reuses_media(api, login, add_uplo
     assert st["upload"]["s"] == "failed" and st["relMediaObject"]["s"] == "done" and st["relObjectMedia"]["s"] == "done"
     media = st["media"]["csid"]
     assert fake.media[media]["blobCsid"] == "" and len(fake.relations) == 2
-    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    reschedule(api, job)
     worker.tick()
     row = api.get(f"/api/jobs/{job}").json()["rows"][0]
     assert row["result"]["state"] == "Done" and row["result"]["steps"]["media"]["csid"] == media
@@ -219,23 +228,24 @@ def test_object_not_found_still_uploads_and_skips_relations(api, login, add_uplo
             o["deleted"] = True
     worker.tick()
     st = api.get(f"/api/jobs/{job}").json()["rows"][0]["result"]
-    assert st["state"] == "Partial" and st["error"]["code"] == "objnotfound"
+    assert st["state"] == "Partial" and st["error"]["code"] == "object_gone"
     assert st["steps"]["upload"]["s"] == "done"
     assert st["steps"]["relMediaObject"] == {"s": "skipped", "after": "findObject"}
+    assert st["steps"]["findObject"]["obj"] == "15-1234"
     assert len(fake.relations) == 0
 
 
-def test_media_failure_skips_upload_and_relations(api, login, add_uploaded, worker, fake):
+def test_media_failure_skips_upload_and_relations(api, login, add_uploaded, worker, fake, fail_on):
     """Design: "Media create fails: the upload and Relations are skipped" -> row Failed."""
     login()
     job = new_job(api)
     add_uploaded(job, ["20-0777.jpg"])
     api.patch(f"/api/jobs/{job}/rows/1", json={"handling": "create"})
     assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
-    fake.fail_next["media"] = 500
+    fail_on("media", status=500)
     worker.tick()
     st = api.get(f"/api/jobs/{job}").json()["rows"][0]["result"]
-    assert st["state"] == "Failed"
+    assert st["state"] == "Failed" and st["error"]["code"] == "server_error"
     assert st["steps"]["upload"] == {"s": "skipped", "after": "media"}
     assert st["steps"]["createObject"]["s"] == "done"  # the Object step doesn't depend on Media
     assert len(fake.blobs) == 0

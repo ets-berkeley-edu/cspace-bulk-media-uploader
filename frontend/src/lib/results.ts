@@ -1,0 +1,163 @@
+/**
+ * Finished jobs: results per document, the failure catalog's wording, and whether a job needs a fix before
+ * it can be rerun (design: Finished jobs and error messages; Fixing a job after a run).
+ */
+import { ref } from "vue";
+import { api } from "../api";
+import type { Created, Failure, Job, ResultCounts, Row, Step } from "../types";
+
+// ---- the failure catalog, loaded once and shared ----------------------------------------------------
+export const failures = ref<Record<string, Failure>>({});
+let loading: Promise<void> | null = null;
+export function loadFailures(): Promise<void> {
+  loading ??= api.failures().then((r) => { failures.value = r.failures; }).catch(() => { loading = null; });
+  return loading;
+}
+
+const UNKNOWN: Failure = {
+  title: "Unexpected problem", level: "any", needs_fix: false,
+  explain: "Something went wrong that the BMU doesn't have a specific message for.",
+  fix: "Reschedule the job. If it happens again, contact support with the technical detail.",
+};
+/** The catalog entry for a code; an unrecognized code reads as "Unexpected problem". */
+export function failureOf(code: string | undefined | null, catalog: Record<string, Failure> = failures.value): Failure {
+  return (code && catalog[code]) || catalog.unknown || UNKNOWN;
+}
+
+// ---- results --------------------------------------------------------------------------------------
+export type ResultState = "Done" | "Partial" | "Failed" | "Not started" | "In progress" | "Disabled";
+
+/** A document's result as the results view shows it: disabled documents that still had work read "Disabled". */
+export function resultState(r: Row): ResultState {
+  const s = r.result?.state ?? "Not started";
+  if (!r.include && s !== "Done") return "Disabled";
+  return s;
+}
+
+export const RESULT_BADGE: Record<ResultState, string> = {
+  Done: "b-ok", Partial: "b-warn", Failed: "b-danger", "Not started": "b-accent", "In progress": "b-accent", Disabled: "b-muted",
+};
+
+export function resultCounts(rows: Row[]): ResultCounts {
+  const c: ResultCounts = { done: 0, partial: 0, failed: 0, notStarted: 0, disabled: 0 };
+  for (const r of rows) {
+    const s = resultState(r);
+    if (s === "Done") c.done++;
+    else if (s === "Partial") c.partial++;
+    else if (s === "Failed") c.failed++;
+    else if (s === "Disabled") c.disabled++;
+    else c.notStarted++;
+  }
+  return c;
+}
+
+export function countsText(c: ResultCounts | undefined): string {
+  if (!c) return "—";
+  const parts: string[] = [];
+  if (c.done) parts.push(`${c.done} done`);
+  if (c.partial) parts.push(`${c.partial} partial`);
+  if (c.failed) parts.push(`${c.failed} failed`);
+  if (c.notStarted) parts.push(`${c.notStarted} not started`);
+  if (c.disabled) parts.push(`${c.disabled} disabled`);
+  return parts.join(" · ") || "no documents";
+}
+
+export const OUTCOME: Record<string, { text: string; cls: string }> = {
+  Completed: { text: "Completed", cls: "b-ok" },
+  NeedsAttention: { text: "Needs attention", cls: "b-warn" },
+  Failed: { text: "Failed", cls: "b-danger" },
+  Running: { text: "Running", cls: "b-accent" },
+};
+
+/** The failure codes recorded on a document's steps (its first error first). */
+export function rowCodes(r: Row): string[] {
+  const codes = Object.values(r.result?.steps ?? {}).filter((s) => s.s === "failed" && s.code).map((s) => s.code!);
+  const first = r.result?.error?.code;
+  return [...new Set(first ? [first, ...codes] : codes)];
+}
+
+/**
+ * Design: the button reads "Fix and reschedule" when any enabled document (or the job) has a failure that needs
+ * a change before it can succeed, or any document fails a blocking check now; "Reschedule" when every failure
+ * only needs another run.
+ */
+export function needsFix(job: Job, rows: Row[], blockingNow: number, catalog: Record<string, Failure> = failures.value): boolean {
+  if (job.code && failureOf(job.code, catalog).needs_fix) return true;
+  if (blockingNow > 0) return true;
+  return rows.some((r) => r.include && r.result?.state !== "Done" && rowCodes(r).some((c) => failureOf(c, catalog).needs_fix));
+}
+
+const RANK: Record<ResultState, number> = { Failed: 0, Partial: 1, "In progress": 2, "Not started": 3, Disabled: 4, Done: 5 };
+/** The documents that matter most, problems first (the expanded job row shows 10). */
+export function importantRows(rows: Row[], n = 10): Row[] {
+  return rows.map((r, i) => ({ r, i })).sort((a, b) => RANK[resultState(a.r)] - RANK[resultState(b.r)] || a.i - b.i)
+    .slice(0, n).map((x) => x.r);
+}
+
+// ---- steps ----------------------------------------------------------------------------------------
+export const STEP_LABEL: Record<string, string> = {
+  media: "Create Media record", findObject: "Find object", createObject: "Find or create object",
+  upload: "Upload file (creates the Blob)", relMediaObject: "Relate Media → Object", relObjectMedia: "Relate Object → Media",
+};
+export const STEP_MARK: Record<Step["s"], string> = { done: "✓", failed: "✗", skipped: "–", "not run": "·", "not needed": "○" };
+
+export function stepList(r: Row): { key: string; label: string; step: Step }[] {
+  return Object.entries(r.result?.steps ?? {}).map(([key, step]) => ({ key, label: STEP_LABEL[key] ?? key, step }));
+}
+
+export function stepNote(key: string, st: Step): string {
+  if (st.s === "skipped") return `skipped: needs ${(STEP_LABEL[st.after ?? ""] ?? st.after ?? "").toLowerCase()}`;
+  if (st.s === "not needed") return "not needed: you stopped linking this document";
+  if (st.s === "not run") return "not run";
+  if (st.s === "done" && st.found) return key === "findObject" || key === "createObject" ? "found" : "existing";
+  return "";
+}
+
+/** "2 Media records (1 with its file), 1 Object and 2 Relations" for the job-deletion warning. */
+export function createdText(c: Created): string {
+  const n = (k: number, one: string, many: string) => `${k} ${k === 1 ? one : many}`;
+  const parts = [`${n(c.media, "Media record", "Media records")} (${c.files} with ${c.files === 1 ? "its file" : "their files"})`];
+  if (c.objects) parts.push(n(c.objects, "Object", "Objects"));
+  if (c.relations) parts.push(n(c.relations, "Relation", "Relations"));
+  return parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}` : parts[0];
+}
+
+// ---- fixing a job after a run: what each document may still change (mirrors backend rows.fix_fields) ------
+const FINISHED_STEP = ["done", "not needed"];
+const OBJ_STEPS = ["findObject", "createObject"];
+const REL_STEPS = ["relMediaObject", "relObjectMedia"];
+const openSteps = (r: Row, names: string[]) =>
+  names.filter((n) => r.result?.steps?.[n] && !FINISHED_STEP.includes(r.result.steps[n].s));
+
+/** The document's Media record exists in CollectionSpace (Partial, or Done). */
+export function mediaCreated(r: Row): boolean {
+  return r.result?.steps?.media?.s === "done";
+}
+
+/** A Failed document whose object step already ran keeps its object: its handling and object number are fixed. */
+export function objectStepRan(r: Row): boolean {
+  return OBJ_STEPS.some((n) => r.result?.steps?.[n]?.s === "done");
+}
+
+/** Created anything in CollectionSpace (finding an existing object doesn't count), so it can't be deleted. */
+export function createdSomething(r: Row): boolean {
+  if (r.result?.state === "In progress") return true;
+  return Object.entries(r.result?.steps ?? {}).some(([k, s]) => k !== "findObject" && !!s.csid && !s.found);
+}
+
+/** What a document whose Media record exists may still change: only what the rerun needs. */
+export function fixFields(r: Row): { obj: boolean; skipLink: boolean } {
+  const steps = r.result?.steps ?? {};
+  const failed = (names: string[]) => names.filter((n) => steps[n]?.s === "failed").map((n) => steps[n].code ?? "");
+  const obj = failed(OBJ_STEPS);
+  const rel = failed(REL_STEPS);
+  return {
+    obj: obj.some((c) => ["object_gone", "object_ambiguous", "object_rejected"].includes(c)) && !r.skipLink,
+    skipLink: openSteps(r, REL_STEPS).length > 0 && (obj.some((c) => c === "object_gone" || c === "object_ambiguous") || rel.includes("no_permission")),
+  };
+}
+
+/** A replacement file is for a document whose Media record exists and whose file didn't reach CollectionSpace. */
+export function canReplaceFile(r: Row): boolean {
+  return mediaCreated(r) && openSteps(r, ["upload"]).length > 0 && r.include;
+}

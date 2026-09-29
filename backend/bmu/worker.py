@@ -1,7 +1,8 @@
 """The BMU worker: runs scheduled jobs one row at a time, one job per tenant at a time.
 
 Every step records the CSID it created, so a rerun skips finished steps and never creates a
-record twice. The job's password is deleted when the run ends, whatever the outcome.
+record twice. The job's password is deleted when the run ends, whatever the outcome. Failures are
+recorded as codes from the failure catalog (failures.yaml); the UI shows their wording.
 
 Run: python -m bmu.worker
 """
@@ -9,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import socket
+import threading
 import time
 import uuid
 
@@ -18,13 +20,16 @@ from .config import Settings, get_settings
 from .crypto import Crypto, make_crypto
 from .cspace import CSpaceClient, CSpaceError
 from .cspace.payloads import media_xml, object_xml, relation_xml
+from .failures import JOB_LEVEL, classify
 from .storage import Storage, now
 from .tenant import Tenant, load_tenant
 
 log = logging.getLogger("bmu.worker")
 
-JOB_LEVEL = {"auth", "account_inactive"}   # stop the whole job
 MAX_CONSECUTIVE_SERVER_ERRORS = 5
+STOPPED_JOB = {"unavailable", "worker_stopped"} | JOB_LEVEL  # these end the job as Failed
+OBJECT_STEPS = ("findObject", "createObject", "relMediaObject", "relObjectMedia")
+FINISHED = ("done", "not needed")
 
 
 class JobStop(Exception):
@@ -60,6 +65,54 @@ def plan_steps(tenant: Tenant, row: dict) -> list[tuple[str, list[str]]]:
     return steps
 
 
+def row_state(res: dict | None, planned: list[str] | None = None) -> str:
+    """Design: Row state. Done: every step done (or no longer needed); Partial: the Media record exists
+    and something else isn't finished; Failed: the Media record wasn't created; Not started otherwise.
+    planned: the row's steps; any not recorded yet count as not run."""
+    steps = dict((res or {}).get("steps") or {})
+    for name in planned or []:
+        steps.setdefault(name, {"s": "not run"})
+    if not steps or all(st.get("s") == "not run" for st in steps.values()):
+        return "Not started"
+    if all(st.get("s") in FINISHED for st in steps.values()):
+        return "Done"
+    if (steps.get("media") or {}).get("s") == "done":
+        return "Partial"
+    return "Failed"
+
+
+def row_counts(rows: list[dict]) -> dict:
+    """Documents by result, as the Finished jobs list shows them."""
+    c = {"done": 0, "partial": 0, "failed": 0, "notStarted": 0, "disabled": 0}
+    key = {"Done": "done", "Partial": "partial", "Failed": "failed"}
+    for r in rows:
+        state = (r.get("result") or {}).get("state") or "Not started"
+        if state == "In progress":
+            state = row_state(r.get("result"))
+        if not r.get("include") and state != "Done":
+            c["disabled"] += 1
+        else:
+            c[key.get(state, "notStarted")] += 1
+    return c
+
+
+class _Heartbeat(threading.Thread):
+    """Renews the running job's heartbeat and the tenant's run lock, even while one long upload runs."""
+
+    def __init__(self, worker: "Worker", job_id: str):
+        super().__init__(daemon=True, name=f"heartbeat-{job_id}")
+        self.w, self.job_id = worker, job_id
+        self.halt = threading.Event()
+
+    def run(self) -> None:
+        while not self.halt.wait(self.w.s.heartbeat_seconds):
+            try:
+                self.w.storage.heartbeat(self.job_id)
+                self.w.storage.renew_lock(self.w.tenant.key, self.w.owner, self.w.s.worker_lock_seconds)
+            except Exception:  # a missed beat is harmless; several in a row let the sweeper stop the job
+                log.exception("heartbeat failed for job %s", self.job_id)
+
+
 class Worker:
     def __init__(self, settings: Settings, storage: Storage, crypto: Crypto, client_factory, tenant: Tenant | None = None):
         self.s = settings
@@ -77,9 +130,17 @@ class Worker:
             try:
                 if not self.tick():
                     time.sleep(self.s.worker_poll_seconds)
-            except Exception:  # keep the worker alive; the job's heartbeat lets another worker resume
+            except Exception:  # keep the worker alive; a stuck job is stopped by the heartbeat check
                 log.exception("worker loop error")
                 time.sleep(self.s.worker_poll_seconds)
+
+    def sweep(self) -> None:
+        """The periodic checks: sign-ins that expired in the queue, expired drafts and fixes, Completed jobs
+        past their 30 days, and running jobs whose worker stopped."""
+        self.sweep_expired_sign_ins()
+        self.sweep_expired_drafts()
+        self.sweep_completed()
+        self.sweep_stopped_jobs()
 
     def sweep_expired_sign_ins(self) -> list[str]:
         """A queued job whose saved sign-in reached its time limit leaves the queue for Drafts (design: State
@@ -98,25 +159,86 @@ class Worker:
         return moved
 
     def sweep_expired_drafts(self) -> list[str]:
-        """Delete drafts that have never run once they expire (design: Drafts, Expiry), with their rows and
-        staged files, and write each to the audit log. Drafts of jobs that have run are never deleted."""
-        gone = []
+        """Drafts past their expiry (design: Drafts, Expiry; State rules, Abandoned fixes). A draft that has
+        never run is deleted with its rows and staged files. A fix of a job that has run is reverted: its
+        edits are discarded and the job returns to Needs attention or Failed with its rows, run history and
+        CSIDs intact. Both are written to the audit log."""
+        done = []
         for j in self.storage.list_jobs(self.tenant.key):
-            if j["status"] == "Draft" and not j.get("run") and j.get("expiresAt") and j["expiresAt"] < now():
+            if j["status"] != "Draft" or not j.get("expiresAt") or j["expiresAt"] >= now():
+                continue
+            if j.get("fixFrom"):
+                if self.revert_fix(j):
+                    done.append(j["id"])
+            elif not j.get("run"):
                 if self.storage.update_job(j["id"], {"status": "Expiring"}, expect_status="Draft"):
                     rows = self.storage.delete_job_and_files(j["id"])
                     self.storage.audit(self.tenant.key, "Draft expired", "BMU", j["id"],
                                        f"Deleted “{j.get('name') or 'Untitled job'}” ({len(rows)} documents), "
                                        f"{self.s.draft_days} days after it was last saved; it had never run.")
+                    done.append(j["id"])
+        return done
+
+    def revert_fix(self, job: dict) -> bool:
+        """Discard a fix's edits: put back every row it changed, remove documents it added, and return the
+        job to the state it came from. Rows deleted during the fix stay deleted (deleting is permanent)."""
+        fix = job["fixFrom"]
+        if not self.storage.update_job(job["id"], {"status": "Reverting"}, expect_status="Draft"):
+            return False
+        current = {r["n"]: r for r in self.storage.get_rows(job["id"])}
+        for orig in self.storage.fix_originals(job["id"]):
+            cur = current.get(orig["n"])
+            if cur is None:
+                continue
+            if cur.get("s3Key") and cur["s3Key"] != orig.get("s3Key"):
+                self.storage.delete_object(cur["s3Key"])  # a replacement file added during the fix
+            self.storage.restore_row(job["id"], orig)
+        added = [r for r in current.values() if r.get("addedInFix")]
+        for r in added:
+            if r.get("s3Key"):
+                self.storage.delete_object(r["s3Key"])
+            self.storage.delete_row(job["id"], r["n"])
+        self.storage.drop_fix_originals(job["id"])
+        self.storage.clear_editing(job["id"])
+        self.storage.update_job(job["id"], {"status": fix["status"], "code": fix.get("code", ""), "fixFrom": None,
+                                            "expiresAt": None, "note": ""})
+        self.storage.audit(self.tenant.key, "Fix reverted", "BMU", job["id"],
+                           f"Fix and reschedule of “{job.get('name') or 'Untitled job'}” was not finished within "
+                           f"{self.s.draft_days} days; the edits were discarded and the job returned to "
+                           f"{'Needs attention' if fix['status'] == 'NeedsAttention' else fix['status']} with its history.")
+        return True
+
+    def sweep_completed(self) -> list[str]:
+        """Completed jobs are removed 30 days after they finish (their run audit entries stay for a year)."""
+        gone = []
+        for j in self.storage.list_jobs(self.tenant.key):
+            if j["status"] == "Completed" and j.get("expiresAt") and j["expiresAt"] < now():
+                if self.storage.update_job(j["id"], {"status": "Expiring"}, expect_status="Completed"):
+                    rows = self.storage.delete_job_and_files(j["id"])
+                    self.storage.audit(self.tenant.key, "Job expired", "BMU", j["id"],
+                                       f"Removed “{j.get('name') or 'Untitled job'}” ({len(rows)} documents), "
+                                       f"{self.s.completed_days} days after it completed.")
                     gone.append(j["id"])
         return gone
+
+    def sweep_stopped_jobs(self) -> list[str]:
+        """A Running job whose heartbeat went stale lost its worker: it stops as Failed with code
+        worker_stopped, and its saved sign-in is deleted. Its rows keep the steps already recorded."""
+        stopped = []
+        limit = now() - self.s.heartbeat_stale_seconds
+        for j in self.storage.list_jobs(self.tenant.key):
+            if j["status"] == "Running" and (j.get("heartbeatAt") or j.get("startedAt") or 0) < limit:
+                if self.storage.update_job(j["id"], {"status": "Stopping"}, expect_status="Running"):
+                    self.storage.delete_credential(j["id"])
+                    self._finish(j["id"], int(j.get("run", 0)), "worker_stopped", j.get("scheduledBy") or "BMU", [])
+                    stopped.append(j["id"])
+        return stopped
 
     def tick(self) -> bool:
         """Run the next job for this tenant, if any. Returns True if a job ran."""
         if now() - self._last_sweep > 60:
             self._last_sweep = now()
-            self.sweep_expired_sign_ins()
-            self.sweep_expired_drafts()
+            self.sweep()
         if not self.storage.acquire_lock(self.tenant.key, self.owner, self.s.worker_lock_seconds):
             return False  # another worker is running this tenant's job
         try:
@@ -129,12 +251,10 @@ class Worker:
             self.storage.release_lock(self.tenant.key, self.owner)
 
     def _next_job(self) -> dict | None:
-        jobs = self.storage.list_jobs(self.tenant.key)
-        # A job left Running by a stopped worker is resumed first (its finished steps are skipped).
-        running = [j for j in jobs if j["status"] == "Running"]
-        if running:
-            return running[0]
-        queued = sorted((j for j in jobs if j["status"] == "Queued"), key=lambda j: (j.get("queuePos", 0), j.get("queuedAt", 0)))
+        # A job left Running by a worker that stopped is not resumed: the heartbeat check stops it as
+        # "worker_stopped", and a user reschedules it (its finished steps are skipped).
+        queued = sorted((j for j in self.storage.list_jobs(self.tenant.key) if j["status"] == "Queued"),
+                        key=lambda j: (j.get("queuePos", 0), j.get("queuedAt", 0)))
         return queued[0] if queued else None
 
     # ---- one job ------------------------------------------------------------------------------
@@ -144,12 +264,17 @@ class Worker:
         if not cred:
             # The 72-hour sign-in limit passed while waiting: back to Drafts, to be scheduled again.
             self.storage.update_job(job_id, {"status": "Draft", "note": "Sign-in expired while waiting in the queue. Schedule it again."},
-                                    expect_status=["Queued", "Running"])
+                                    expect_status=["Queued"])
             self.storage.audit(self.tenant.key, "Run", "BMU", job_id, "Not run: the job's sign-in expired while it waited.")
             return
         run_no = int(job.get("run", 0)) + 1
-        self.storage.update_job(job_id, {"status": "Running", "run": run_no, "startedAt": now(), "code": ""},
-                                expect_status=["Queued", "Running"])
+        t = now()
+        if not self.storage.update_job(job_id, {"status": "Running", "run": run_no, "startedAt": t, "heartbeatAt": t, "code": "",
+                                                "fixFrom": None, "expiresAt": None, "cancelledBy": ""}, expect_status="Queued"):
+            return
+        self._start_run(job, run_no, t)
+        beat = _Heartbeat(self, job_id)
+        beat.start()
         client: CSpaceClient | None = None
         code = ""
         created: list[dict] = []
@@ -162,26 +287,69 @@ class Worker:
             code = e.code
             log.warning("job %s stopped: %s", job_id, e.detail)
         finally:
+            beat.halt.set()
             # Never keep the password after the run.
             self.storage.delete_credential(job_id)
             if client:
                 client.close()
+        self._finish(job_id, run_no, code, cred["user"], created)
+
+    def _start_run(self, job: dict, run_no: int, started: float) -> None:
+        """The run item: who scheduled it and when, and the documents disabled or deleted since the last run.
+        A run that starts also commits the fix it came from: its saved originals are no longer needed."""
+        job_id = job["id"]
+        runs = self.storage.get_runs(job_id)
+        since = runs[-1]["startedAt"] if runs else 0
         rows = self.storage.get_rows(job_id)
+        disabled = [{"n": r["n"], "file": r["file"], "by": r.get("disabledBy", ""), "at": r.get("disabledAt")}
+                    for r in rows if not r.get("include") and (r.get("disabledAt") or 0) >= since
+                    and (r.get("result") or {}).get("state") != "Done"]
+        deleted = [d for d in job.get("deletedRows") or [] if d.get("at", 0) >= since]
+        self.storage.put_run(job_id, {"run": run_no, "scheduledBy": job.get("scheduledBy", ""), "scheduledAt": job.get("queuedAt"),
+                                      "startedAt": started, "outcome": "Running", "disabledBefore": disabled, "deletedBefore": deleted})
+        self.storage.drop_fix_originals(job_id)
+        for r in rows:
+            if r.get("supersededKey") or r.get("addedInFix"):
+                if r.get("supersededKey"):
+                    self._delete_key(r["supersededKey"])
+                r.pop("supersededKey", None)
+                r.pop("addedInFix", None)
+                self.storage.put_row(job_id, r, guard=False)
+
+    def _finish(self, job_id: str, run_no: int, code: str, user: str, created: list[dict]) -> None:
+        """End a run however it ended: settle the rows, set the job's status and counts, complete the run
+        item and write the audit entry. A Completed job gets its 30-day expiry."""
+        rows = self.storage.get_rows(job_id)
+        for r in rows:
+            res = r.get("result")
+            if res and res.get("state") == "In progress":  # the worker stopped while on this row
+                res["state"] = row_state(res, [n for n, _ in plan_steps(self.tenant, r)])
+                self.storage.put_row(job_id, r, guard=False)
         work = [r for r in rows if r.get("include")]
         states = [((r.get("result") or {}).get("state") or "Not started") for r in work]
-        if code in JOB_LEVEL or code == "unavailable":
+        if code in STOPPED_JOB:
             status = "Failed"
         elif all(st == "Done" for st in states):
             status = "Completed"
         else:
             status = "NeedsAttention"
-        cancel = (self.storage.get_job(job_id) or {}).get("cancelRequested") if code == "cancelled" else None
-        self.storage.update_job(job_id, {"status": status, "code": code, "finishedAt": now(), "progress": _progress(rows),
-                                         "currentRow": None, "currentFile": "", "cancelRequested": None,
-                                         "cancelledBy": (cancel or {}).get("by", "")})
-        self.storage.audit(self.tenant.key, "Run", cred["user"], job_id,
+        job = self.storage.get_job(job_id) or {}
+        cancel = job.get("cancelRequested") if code == "cancelled" else None
+        t = now()
+        counts = row_counts(rows)
+        self.storage.update_job(job_id, {
+            "status": status, "code": code, "finishedAt": t, "progress": _progress(rows), "counts": counts,
+            "currentRow": None, "currentFile": "", "cancelRequested": None, "cancelledBy": (cancel or {}).get("by", ""),
+            "runBy": job.get("scheduledBy") or user,
+            "expiresAt": t + self.s.completed_days * 86400 if status == "Completed" else None})
+        run = next((x for x in self.storage.get_runs(job_id) if int(x["run"]) == run_no), {"run": run_no})
+        run.update(outcome=status, code=code, endedAt=t, counts=counts,
+                   cancelledBy=(cancel or {}).get("by", ""), cancelledAt=(cancel or {}).get("at"))
+        self.storage.put_run(job_id, run)
+        self.storage.audit(self.tenant.key, "Run", user, job_id,
                            f"Run {run_no}: {status}" + (f" ({code})" if code else "") +
-                           f" · {states.count('Done')} done, {states.count('Failed') + states.count('Partial')} failed"
+                           f" · {counts['done']} done, {counts['partial']} partial, {counts['failed']} failed, "
+                           f"{counts['notStarted']} not started, {counts['disabled']} disabled"
                            + (f" · cancelled by {cancel.get('by')}" if cancel else ""),
                            created)
 
@@ -193,12 +361,12 @@ class Worker:
             job = self.storage.get_job(job_id)
             if job.get("cancelRequested"):
                 return "cancelled"
-            self.storage.acquire_lock(self.tenant.key, self.owner, self.s.worker_lock_seconds)  # heartbeat
-            self.storage.update_job(job_id, {"currentRow": row["n"], "currentFile": row["file"]})
+            self.storage.acquire_lock(self.tenant.key, self.owner, self.s.worker_lock_seconds)
+            self.storage.update_job(job_id, {"currentRow": row["n"], "currentFile": row["file"], "heartbeatAt": now()})
             err = self.run_row(client, job_id, row, run_no, created)
             if err in JOB_LEVEL:
                 raise JobStop(err, f"row {row['n']}: {err}")
-            server_errors = server_errors + 1 if err in ("server", "unavailable") else 0
+            server_errors = server_errors + 1 if err == "server_error" else 0
             if server_errors >= MAX_CONSECUTIVE_SERVER_ERRORS:
                 raise JobStop("unavailable", "CollectionSpace failed repeatedly")
             self.storage.update_job(job_id, {"progress": _progress(self.storage.get_rows(job_id))})
@@ -208,20 +376,26 @@ class Worker:
     def run_row(self, client: CSpaceClient, job_id: str, row: dict, run_no: int, created: list[dict]) -> str:
         """Run a row's unfinished steps. Returns the first error code, or "" when the row is done.
 
-        Each step ends as done (with its CSID), failed (with a reason) or skipped (naming the step it
-        depended on). A step whose own dependencies are done still runs after another step failed:
-        e.g. a failed upload doesn't stop the Relations. Only a job-level error (401, inactive account)
-        stops the row at once. Each result is written to the row right after its call.
+        Each step ends as done (with its CSID), failed (with a catalog code and the technical detail) or
+        skipped (naming the step it depended on). A step whose own dependencies are done still runs after
+        another step failed: e.g. a failed upload doesn't stop the Relations. Only a job-level error (401,
+        inactive account) stops the row at once. Each result is written to the row right after its call.
+        A row whose user chose "Stop linking" marks its unfinished object and relation steps not needed.
         """
         res = row.get("result") or {}
         res.update(state="In progress", error=None, run=run_no)
+        res.pop("notices", None)
         row["result"] = res
         self.storage.put_row(job_id, row, guard=False)
         first_error = ""
         for name, deps in plan_steps(self.tenant, row):
             st = _step(row, name)
-            if st.get("s") == "done":
+            if st.get("s") in FINISHED:
                 continue  # a rerun never repeats a done step
+            if row.get("skipLink") and name in OBJECT_STEPS:
+                st.clear()
+                st.update(s="not needed")
+                continue
             blocked = next((d for d in deps if _step(row, d).get("s") != "done"), None)
             if blocked:
                 st.clear()
@@ -229,72 +403,94 @@ class Worker:
                 self.storage.put_row(job_id, row, guard=False)
                 continue
             try:
-                csid = self._do(client, name, row)
+                if name == "media":
+                    self._notice_new_duplicates(client, row)
+                csid, found = self._do(client, name, row)
                 st.clear()
                 st.update(s="done", csid=csid, run=run_no)
-                if name not in ("findObject",) and csid:
+                if found:
+                    st["found"] = True  # an existing record, not one this job created
+                if name != "findObject" and not found and csid:
                     created.append({"row": row["n"], "file": row["file"], "step": name, "csid": csid})
                 if name == "upload":
                     self._delete_staged(row)
             except (CSpaceError, _RowError) as e:
+                code, detail = (e.code, e.detail) if isinstance(e, _RowError) else classify(name, e)
                 st.clear()
-                st.update(s="failed", code=e.code, detail=e.detail, run=run_no)
+                st.update(s="failed", code=code, detail=detail, run=run_no)
+                if name in ("findObject", "createObject"):
+                    st["obj"] = row.get("obj", "")  # the object number that failed, so the editor knows if it changed
                 if not first_error:
-                    first_error = e.code
-                    res["error"] = {"code": e.code, "detail": e.detail, "step": name}
-                if e.code in JOB_LEVEL:
+                    first_error = code
+                    res["error"] = {"code": code, "detail": detail, "step": name}
+                if code in JOB_LEVEL:
                     self.storage.put_row(job_id, row, guard=False)
                     break
             finally:
                 self.storage.put_row(job_id, row, guard=False)
-        steps = res["steps"]
-        if all(st.get("s") == "done" for st in steps.values()):
-            res["state"] = "Done"
+        res["state"] = row_state(res)
+        if res["state"] == "Done":
             res["error"] = None
-        elif steps.get("media", {}).get("s") == "done":
-            res["state"] = "Partial"
-        else:
-            res["state"] = "Failed"
-        if res["state"] != "Done" and not res.get("error"):
-            skipped = next(n for n, st in steps.items() if st.get("s") != "done")
-            res["error"] = {"code": "skipped", "detail": f"Step {skipped} didn't run", "step": skipped}
+        elif not res.get("error"):
+            failed = next(((n, st) for n, st in res["steps"].items() if st.get("s") == "failed"), None)
+            res["error"] = ({"code": failed[1].get("code", "unknown"), "detail": failed[1].get("detail", ""), "step": failed[0]}
+                            if failed else None)
         self.storage.put_row(job_id, row, guard=False)
         return first_error
 
+    def _notice_new_duplicates(self, client: CSpaceClient, row: dict) -> None:
+        """Design: duplicate_at_run. A Media record with the same identification number that appeared after
+        scheduling is noted on the row; the row still runs, as it would have after the editor's warning."""
+        idn = row.get("idnum") or ""
+        if not idn:
+            return
+        try:
+            existing = client.find_media(idn)
+        except CSpaceError:
+            return  # only a notice; the create itself reports real failures
+        known = set(((row.get("lookups") or {}).get("media") or {}).get("csids") or [])
+        new = [c for c in existing if c not in known]
+        if new:
+            row["result"]["notices"] = [{"code": "duplicate_at_run",
+                                         "detail": f"GET media?as=identificationNumber = \"{idn}\" found {', '.join(new[:5])}"}]
+
     def _delete_staged(self, row: dict) -> None:
         # the staged file is no longer needed once it is in CollectionSpace
-        try:
-            self.storage.delete_object(row["s3Key"])
-        except ClientError:
-            log.warning("could not delete staged file for row %s", row["n"])
+        self._delete_key(row["s3Key"])
 
-    def _do(self, client: CSpaceClient, name: str, row: dict) -> str:
+    def _delete_key(self, key: str) -> None:
+        try:
+            self.storage.delete_object(key)
+        except ClientError:
+            log.warning("could not delete staged file %s", key)
+
+    def _do(self, client: CSpaceClient, name: str, row: dict) -> tuple[str, bool]:
+        """Run one step. Returns (CSID, found): found is True when an existing record was used."""
         steps = row["result"]["steps"]
         if name == "media":
-            return client.create_media(media_xml(self.tenant, row))
-        if name == "findObject":
+            return client.create_media(media_xml(self.tenant, row)), False
+        if name in ("findObject", "createObject"):
+            # Find or create: a rerun, or an Object added since scheduling, links to the existing record.
             found = client.find_objects(row["obj"])
-            if not found:
-                raise _RowError("objnotfound", f"No object {row['obj']} in CollectionSpace")
             if len(found) > 1:
-                raise _RowError("objamb", f"Object number {row['obj']} matches {len(found)} objects")
-            return found[0]
-        if name == "createObject":
-            if client.find_objects(row["obj"]):
-                raise _RowError("objexists", f"Object {row['obj']} already exists")
-            return client.create_object(object_xml(row["obj"]))
+                raise _RowError("object_ambiguous", f"GET collectionobjects?as=objectNumber = \"{row['obj']}\" found {len(found)} objects")
+            if found:
+                return found[0], True
+            if name == "findObject":
+                raise _RowError("object_gone", f"GET collectionobjects?as=objectNumber = \"{row['obj']}\" found no object")
+            return client.create_object(object_xml(row["obj"])), False
         media = steps["media"]["csid"]
         if name == "upload":
             # An upload retry targets the existing Media record.
             try:
                 body = self.storage.open_object(row["s3Key"], (row.get("upload") or {}).get("version") or None)
             except ClientError as e:
-                raise _RowError("upload", "The staged file is missing; add the file again") from e
+                raise _RowError("file_missing", f"S3 GetObject {e.response['Error'].get('Code', '')}: the staged file is gone") from e
             try:
                 blob = client.upload_file(media, row["file"], body, row.get("contentType") or "application/octet-stream")
             finally:
                 body.close()
-            return blob or client.media_blob_csid(media)
+            return blob or client.media_blob_csid(media), False
         obj = (steps.get("findObject") or steps.get("createObject"))["csid"]
         if name == "relMediaObject":
             subj, subj_type, tgt, tgt_type = media, "Media", obj, "CollectionObject"
@@ -304,8 +500,8 @@ class Worker:
             raise ValueError(name)
         existing = client.find_relations(subj, tgt)  # never create a duplicate relation on a rerun
         if existing:
-            return existing[0]
-        return client.create_relation(relation_xml(subj, subj_type, tgt, tgt_type))
+            return existing[0], False
+        return client.create_relation(relation_xml(subj, subj_type, tgt, tgt_type)), False
 
 
 class _RowError(Exception):
@@ -329,7 +525,7 @@ def main() -> None:
     if s.create_tables:
         storage.create_tables()
     worker = Worker(s, storage, make_crypto(s),
-                    lambda u, p: CSpaceClient(s.cspace_url, u, p, timeout=s.cspace_timeout_seconds))
+                    lambda u, p: CSpaceClient(s.cspace_url, u, p, timeout=s.cspace_timeout_seconds, agent="bmu-worker"))
     worker.run_forever()
 
 

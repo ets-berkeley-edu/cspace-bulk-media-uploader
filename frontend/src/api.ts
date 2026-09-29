@@ -1,4 +1,4 @@
-import type { Check, Job, Me, Row, RowChange, Term } from "./types";
+import type { Check, Created, Failure, Job, Me, Row, RowChange, Run, Term } from "./types";
 
 export class ApiError extends Error {
   constructor(public status: number, message: string, public detail: unknown = null) {
@@ -35,7 +35,13 @@ export const api = {
   logout: () => request("POST", "/api/logout"),
   jobs: () => request<{ jobs: Job[] }>("GET", "/api/jobs"),
   createJob: (name: string) => request<Job>("POST", "/api/jobs", { name }),
-  job: (id: string) => request<{ job: Job; rows: Row[] }>("GET", `/api/jobs/${id}`),
+  job: (id: string) => request<{ job: Job; rows: Row[]; runs: Run[]; created: Created }>("GET", `/api/jobs/${id}`),
+  /** Fix and reschedule (or Reschedule): a job that needs attention or failed moves to Drafts, locked to you. */
+  fix: (id: string) => request<Job>("POST", `/api/jobs/${id}/fix`),
+  /** The failure catalog: title, explanation and what to do for each failure code. */
+  failures: () => request<{ failures: Record<string, Failure> }>("GET", "/api/failures"),
+  replaceFile: (id: string, n: number, f: { name: string; size: number; type: string }) =>
+    request<{ row: Row; uploadForm: { url: string; fields: Record<string, string> } }>("POST", `/api/jobs/${id}/rows/${n}/replace-file`, f),
   renameJob: (id: string, name: string) => request<Job>("PATCH", `/api/jobs/${id}`, { name }),
   deleteJob: (id: string) => request("DELETE", `/api/jobs/${id}`),
   /** Become the draft's editor; with takeOverSince, take over from the editor the user was warned about. */
@@ -55,7 +61,7 @@ export const api = {
   /** The bulk-change panel: the same changes to many rows, never applied partially. */
   bulk: (id: string, rows: number[], changes: Partial<Row>) =>
     request<{ rows: Row[] }>("POST", `/api/jobs/${id}/rows/bulk`, { rows, changes }),
-  deleteRow: (id: string, n: number) => request<{ ok: boolean; others: Row[] }>("DELETE", `/api/jobs/${id}/rows/${n}`),
+  deleteRow: (id: string, n: number) => request<{ ok: boolean; others: Row[]; jobStatus?: string }>("DELETE", `/api/jobs/${id}/rows/${n}`),
   /** Check rows against CollectionSpace: the given rows, or (no rows) any whose lookups are stale. */
   check: (id: string, rows?: number[]) =>
     request<{ rows: Row[]; counts: { block: number; warn: number } }>("POST", `/api/jobs/${id}/check`, rows ? { rows } : {}),

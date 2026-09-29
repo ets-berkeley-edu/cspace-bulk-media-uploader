@@ -33,7 +33,8 @@ class Settings(BaseSettings):
     kms_job_key_id: str | None = None
 
     session_hours: float = 8.0
-    draft_days: int = 30  # a draft that has never run is deleted this long after it was last saved
+    draft_days: int = 30  # a draft that has never run is deleted (a fix is reverted) this long after it was last saved
+    completed_days: int = 30  # a Completed job is removed this long after it finished
     credential_hours: float = 72.0
     cookie_secure: bool = True
     max_file_bytes: int = 2 * 1024**3
@@ -41,6 +42,8 @@ class Settings(BaseSettings):
 
     worker_poll_seconds: float = 2.0
     worker_lock_seconds: int = 120
+    heartbeat_seconds: float = 30.0  # a running job's heartbeat is renewed this often
+    heartbeat_stale_seconds: float = 300.0  # a Running job whose heartbeat is older stops as "worker_stopped"
     static_dir: str | None = None  # serve the built Vue app from here, if set
 
 
