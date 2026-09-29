@@ -105,9 +105,9 @@ def edit_problem(row: dict, changes: dict[str, Any]) -> str | None:
     if (row.get("result") or {}).get("state") == "Done":
         return "done"
     if set(real) == {"include"}:
-        return None  # any row with work left can be disabled or enabled, a Partial one too
+        return None  # any row with work left can be excluded or included again, a Partial one too
     if not row.get("include", True):
-        return "disabled"
+        return "excluded"
     if "group" in real and _group_done(row):
         return "grouped"
     if media_created(row):
@@ -125,7 +125,7 @@ def _group_done(row: dict) -> bool:
 
 PROBLEM_TEXT = {
     "done": "This document is done; there is nothing left to change.",
-    "disabled": "This document is disabled. Enable it first.",
+    "excluded": "This document is excluded from the job. Include it first.",
     "created": "This document's Media record already exists in CollectionSpace, so only what the rerun still needs can "
                "change here. To change the Media record's fields, edit it in CollectionSpace.",
     "handling": "The last run already found or created this document's object, so its handling and object number can't change.",
@@ -154,7 +154,7 @@ def media_created(row: dict) -> bool:
 def fix_fields(row: dict) -> set[str]:
     """What a user may change on a row whose Media record already exists: only what the rerun still needs.
     A corrected object number when the object step failed on its number; stopping the link when the object
-    wasn't found (or matched several) or relations weren't allowed; Include."""
+    wasn't found (or matched several) or relations weren't allowed; Exclude."""
     st = _steps(row)
     allowed = {"include"}
     obj_codes = {st[n].get("code") for n in OBJ_STEPS if n in st and st[n].get("s") == "failed"}
@@ -344,7 +344,7 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
     for r in rows:
         out: list[dict[str, str]] = []
         if not r.get("include"):
-            r["checks"] = [{"level": "info", "text": "Disabled: the BMU ignores this document."}]
+            r["checks"] = [{"level": "info", "text": "Excluded from the job: the BMU ignores this document."}]
             continue
         if (r.get("result") or {}).get("state") == "Done":
             r["checks"] = []

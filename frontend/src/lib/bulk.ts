@@ -7,11 +7,11 @@ import type { Row } from "../types";
 /** The panel's choices; a missing key means "no change". */
 export type BulkChanges = Partial<Pick<Row, "handling" | "restricted" | "type" | "language" | "creator" | "contributor" | "rightsHolder" | "group">>;
 
-type Problem = "done" | "disabled" | "created" | "handling" | "nogroup" | "grouped";
+type Problem = "done" | "excluded" | "created" | "handling" | "nogroup" | "grouped";
 
 const PROBLEM_TEXT: Record<Problem, [string, string]> = { // [plural, singular]
   done: ["are already done", "is already done"],
-  disabled: ["are disabled (enable them first)", "is disabled (enable it first)"],
+  excluded: ["are excluded from the job (include them first)", "is excluded from the job (include it first)"],
   created: ["already created their records in CollectionSpace", "already created its records in CollectionSpace"],
   handling: ["keep their handling because the last run already found or created their objects (🔒)",
              "keeps its handling because the last run already found or created its object (🔒)"],
@@ -46,7 +46,7 @@ export function rowChanges(r: Row, c: BulkChanges): boolean {
 function rowProblem(r: Row, c: BulkChanges, linking?: Set<string>): Problem | null {
   if (!rowChanges(r, c)) return null;
   if (isDone(r)) return "done";
-  if (!r.include) return "disabled";
+  if (!r.include) return "excluded";
   if (c.group !== undefined && c.group !== (r.group ?? true) && r.result?.steps?.addToGroup?.s === "done") return "grouped";
   if (isLocked(r)) return "created";
   if (c.handling !== undefined && c.handling !== r.handling && objectStepRan(r)) return "handling";
@@ -54,7 +54,7 @@ function rowProblem(r: Row, c: BulkChanges, linking?: Set<string>): Problem | nu
   return null;
 }
 
-/** Apply to all: every document that still has work to do, skipping Done, Partial and disabled rows. */
+/** Apply to all: every document that still has work to do, skipping Done, Partial and excluded rows. */
 export function applyAllTargets(rows: Row[]): Row[] {
   return rows.filter((r) => r.include && !isDone(r) && !isLocked(r));
 }
@@ -70,7 +70,7 @@ export interface BulkVerdict {
 export function bulkCheck(targets: Row[], c: BulkChanges, all: boolean, linking?: Set<string>): BulkVerdict {
   if (!Object.keys(c).length) return { ok: false, picked: false, why: "Choose a change first." };
   if (!targets.length) {
-    return { ok: false, picked: true, why: all ? "No documents still to run: every document is done or disabled." : "No documents to change." };
+    return { ok: false, picked: true, why: all ? "No documents still to run: every document is done or excluded." : "No documents to change." };
   }
   const counts = new Map<Problem, number>();
   targets.forEach((r) => { const p = rowProblem(r, c, linking); if (p) counts.set(p, (counts.get(p) ?? 0) + 1); });
@@ -93,7 +93,7 @@ export function bulkCheck(targets: Row[], c: BulkChanges, all: boolean, linking?
     why: lead + parts + (all ? ". Change your choice, or select the documents it fits." : `. Deselect ${bad === 1 ? "it" : "them"} or change your choice.`) };
 }
 
-/** Disable selected / Enable selected: the selected rows with work left whose Include would change. */
+/** Exclude selected / Include selected: the selected rows with work left whose exclusion would change. */
 export function includeTargets(selected: Row[], include: boolean): Row[] {
   return selected.filter((r) => !isDone(r) && r.include !== include);
 }

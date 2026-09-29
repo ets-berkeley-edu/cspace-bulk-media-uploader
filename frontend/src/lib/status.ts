@@ -13,7 +13,7 @@ export function rowStatus(r: Row, tenant: TenantInfo, checking = false): Badge {
     if (r.upload.s === "verifying") return { text: "Verifying…", cls: "b-accent" };
     if (r.upload.s === "failed") return { text: "Upload failed", cls: "b-danger" };
   }
-  if (!r.include) return { text: "Disabled — ignored", cls: "b-accent" };
+  if (!r.include) return { text: "Excluded — ignored", cls: "b-accent" };
   if (r.result?.state === "Done") return { text: "Done in last run", cls: "b-ok" };
   if (r.result?.state === "Partial") {
     if (worstLevel(r) === "block") return { text: "Needs fixing", cls: "b-danger" };

@@ -169,7 +169,7 @@ def _keep_original(s: "Services", job: dict, row: dict) -> None:
 
 
 def _note_include(row: dict, before: bool, user: str) -> None:
-    """Record who disabled a row and when; the next run lists it (design: Disabling rows)."""
+    """Record who excluded a row from the job and when; the next run lists it (design: Excluding documents)."""
     if before and not row.get("include"):
         row["disabledBy"], row["disabledAt"] = user, now()
     elif row.get("include"):
@@ -179,7 +179,7 @@ def _note_include(row: dict, before: bool, user: str) -> None:
 
 def _complete_if_clean(s: "Services", sess: "Session", job_id: str) -> bool:
     """A job that has run becomes Completed, with its 30-day expiry, as soon as every row is done or
-    disabled, also when that happens in a draft (design: Job states). With no rows left, it is deleted."""
+    excluded, also when that happens in a draft (design: Job states). With no rows left, it is deleted."""
     job = s.storage.get_job(job_id)
     if not job or job["status"] != "Draft" or not job.get("run"):
         return False
@@ -195,7 +195,7 @@ def _complete_if_clean(s: "Services", sess: "Session", job_id: str) -> bool:
     s.storage.clear_editing(job_id)
     s.storage.drop_fix_originals(job_id)
     s.storage.audit(sess.tenant, "Completed", sess.user, job_id,
-                    f"“{job['name'] or 'Untitled job'}” completed: every document is done or disabled.")
+                    f"“{job['name'] or 'Untitled job'}” completed: every document is done or excluded.")
     return True
 
 
@@ -496,7 +496,7 @@ def _routes(app: FastAPI) -> None:
     @app.post("/api/jobs/{job_id}/save")
     def save_draft(job_id: str, sess: Session = Depends(current_session), s: Services = Depends(svc)):
         """Save draft: every change is already saved; this confirms it and restarts the draft's expiry. A job
-        that has run and has every document done or disabled becomes Completed."""
+        that has run and has every document done or excluded becomes Completed."""
         _editable(_job_or_404(s, sess, job_id), sess)
         _saved(s, sess, job_id)
         _complete_if_clean(s, sess, job_id)
@@ -762,7 +762,7 @@ def _routes(app: FastAPI) -> None:
         row = s.storage.get_row(job_id, n) or _404()
         if is_locked(row):
             raise HTTPException(409, "This document already created records in CollectionSpace, so it can't be deleted. "
-                                     "Switch Include off to have the BMU ignore it.")
+                                     "Check Exclude to have the BMU ignore it.")
         for key in {row.get("s3Key"), row.get("supersededKey")} - {None, ""}:
             s.storage.delete_object(key)
         s.storage.delete_row(job_id, n)
@@ -801,7 +801,7 @@ def _routes(app: FastAPI) -> None:
         result = _recheck(s, sess, job_id, targets=None, refresh=True)
         work = [r for r in result["rows"] if r.get("include") and (r.get("result") or {}).get("state") != "Done"]
         if not work:
-            raise HTTPException(409, "Nothing to run: every document is done or disabled.")
+            raise HTTPException(409, "Nothing to run: every document is done or excluded.")
         blocked = [r["n"] for r in work if worst(r) == "block"]
         if blocked:
             raise HTTPException(409, {"message": f"{len(blocked)} documents need fixing first.", "rows": blocked})

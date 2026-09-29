@@ -25,17 +25,17 @@ export function failureOf(code: string | undefined | null, catalog: Record<strin
 }
 
 // ---- results --------------------------------------------------------------------------------------
-export type ResultState = "Done" | "Partial" | "Failed" | "Not started" | "In progress" | "Disabled";
+export type ResultState = "Done" | "Partial" | "Failed" | "Not started" | "In progress" | "Excluded";
 
-/** A document's result as the results view shows it: disabled documents that still had work read "Disabled". */
+/** A document's result as the results view shows it: excluded documents that still had work read "Excluded". */
 export function resultState(r: Row): ResultState {
   const s = r.result?.state ?? "Not started";
-  if (!r.include && s !== "Done") return "Disabled";
+  if (!r.include && s !== "Done") return "Excluded";
   return s;
 }
 
 export const RESULT_BADGE: Record<ResultState, string> = {
-  Done: "b-ok", Partial: "b-warn", Failed: "b-danger", "Not started": "b-accent", "In progress": "b-accent", Disabled: "b-muted",
+  Done: "b-ok", Partial: "b-warn", Failed: "b-danger", "Not started": "b-accent", "In progress": "b-accent", Excluded: "b-muted",
 };
 
 export function resultCounts(rows: Row[]): ResultCounts {
@@ -45,7 +45,7 @@ export function resultCounts(rows: Row[]): ResultCounts {
     if (s === "Done") c.done++;
     else if (s === "Partial") c.partial++;
     else if (s === "Failed") c.failed++;
-    else if (s === "Disabled") c.disabled++;
+    else if (s === "Excluded") c.disabled++;
     else c.notStarted++;
   }
   return c;
@@ -58,7 +58,7 @@ export function countsText(c: ResultCounts | undefined): string {
   if (c.partial) parts.push(`${c.partial} partial`);
   if (c.failed) parts.push(`${c.failed} failed`);
   if (c.notStarted) parts.push(`${c.notStarted} not started`);
-  if (c.disabled) parts.push(`${c.disabled} disabled`);
+  if (c.disabled) parts.push(`${c.disabled} excluded`);
   return parts.join(" · ") || "no documents";
 }
 
@@ -77,7 +77,7 @@ export function rowCodes(r: Row): string[] {
 }
 
 /**
- * Design: the button reads "Fix and reschedule" when any enabled document (or the job) has a failure that needs
+ * Design: the button reads "Fix and reschedule" when any included document (or the job) has a failure that needs
  * a change before it can succeed, or any document fails a blocking check now; "Reschedule" when every failure
  * only needs another run.
  */
@@ -87,7 +87,7 @@ export function needsFix(job: Job, rows: Row[], blockingNow: number, catalog: Re
   return rows.some((r) => r.include && r.result?.state !== "Done" && rowCodes(r).some((c) => failureOf(c, catalog).needs_fix));
 }
 
-const RANK: Record<ResultState, number> = { Failed: 0, Partial: 1, "In progress": 2, "Not started": 3, Disabled: 4, Done: 5 };
+const RANK: Record<ResultState, number> = { Failed: 0, Partial: 1, "In progress": 2, "Not started": 3, Excluded: 4, Done: 5 };
 /** The documents that matter most, problems first (the expanded job row shows 10). */
 export function importantRows(rows: Row[], n = 10): Row[] {
   return rows.map((r, i) => ({ r, i })).sort((a, b) => RANK[resultState(a.r)] - RANK[resultState(b.r)] || a.i - b.i)

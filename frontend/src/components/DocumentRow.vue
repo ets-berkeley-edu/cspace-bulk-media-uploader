@@ -53,7 +53,7 @@ const handling = computed(() => props.tenant.handling.find((h) => h.id === props
 const RUN_BADGE: Record<string, string> = { "In progress": "b-accent", Done: "b-ok", Partial: "b-warn", Failed: "b-danger", "Not started": "b-muted" };
 const status = computed(() => {
   if (props.runView) {
-    if (!props.row.include) return { text: "Disabled — ignored", cls: "b-accent" };
+    if (!props.row.include) return { text: "Excluded — ignored", cls: "b-accent" };
     const s = props.row.result?.state ?? "Not started";
     return { text: s === "In progress" ? "▶ In progress" : s, cls: RUN_BADGE[s] ?? "b-muted" };
   }
@@ -119,8 +119,9 @@ function text(field: keyof Row, e: Event) {
       </div>
     </td>
     <td class="keep">
-      <label v-if="row.result?.state !== 'Done'" class="sub"><input type="checkbox" :checked="row.include" :disabled="readonly"
-        @change="emit('edit', { include: ($event.target as HTMLInputElement).checked })" /> Include</label>
+      <input v-if="row.result?.state !== 'Done'" type="checkbox" :checked="!row.include" :disabled="readonly"
+             :aria-label="`Exclude ${row.file} from the job`" title="Checked: the BMU ignores this document"
+             @change="emit('edit', { include: !($event.target as HTMLInputElement).checked })" />
     </td>
   </tr>
   <tr v-if="expanded" class="detail">
@@ -197,11 +198,11 @@ function text(field: keyof Row, e: Event) {
       <div v-for="(c, i) in row.checks" :key="i" class="msg" :class="`msg-${c.level}`"><strong>{{ PREFIX[c.level] }}</strong>{{ c.text }}</div>
       <div v-if="!readonly && row.include && !createdSomething(row)" style="margin-top:6px">
         <template v-if="!confirmRemove"><button class="link" @click="confirmRemove = true">Delete document</button>
-          <span class="field-note" style="display:inline">Permanent, unlike Include off. Only for documents that haven't created anything in CollectionSpace.</span></template>
+          <span class="field-note" style="display:inline">Permanent, unlike Exclude. Only for documents that haven't created anything in CollectionSpace.</span></template>
         <div v-else class="msg msg-warn">Delete “{{ row.file }}” from this job permanently? Its uploaded file is removed; nothing in CollectionSpace is touched.
           <button @click="confirmRemove = false; emit('remove')">Delete document</button> <button @click="confirmRemove = false">Cancel</button></div></div>
       <div v-else-if="!readonly && createdSomething(row) && !done" class="field-note" style="margin-top:6px">This document already created records in
-        CollectionSpace, so it can't be deleted from the job; switch Include off to have the BMU ignore it.</div>
+        CollectionSpace, so it can't be deleted from the job; check Exclude to have the BMU ignore it.</div>
     </td>
   </tr>
 </template>

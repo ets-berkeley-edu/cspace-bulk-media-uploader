@@ -348,7 +348,7 @@ class Worker:
         self._finish(job_id, run_no, code, cred["user"], created)
 
     def _start_run(self, job: dict, run_no: int, started: float) -> None:
-        """The run item: who scheduled it and when, and the documents disabled or deleted since the last run.
+        """The run item: who scheduled it and when, and the documents excluded or deleted since the last run.
         A run that starts also commits the fix it came from: its saved originals are no longer needed."""
         job_id = job["id"]
         runs = self.storage.get_runs(job_id)
@@ -406,7 +406,7 @@ class Worker:
         # Design (Retention and audit): each run's entry holds, for every row, its filename, object number, CSIDs and
         # error codes; for large runs that detail is a JSON object in S3 and the entry points to it.
         detail = [{"n": r["n"], "file": r["file"], "obj": r.get("obj", ""), "idnum": r.get("idnum", ""),
-                   "state": (r.get("result") or {}).get("state") or ("Disabled" if not r.get("include") else "Not started"),
+                   "state": (r.get("result") or {}).get("state") or ("Excluded" if not r.get("include") else "Not started"),
                    "csids": {k: v["csid"] for k, v in ((r.get("result") or {}).get("steps") or {}).items() if v.get("csid") and v.get("s") == "done"},
                    "errors": sorted({v["code"] for v in ((r.get("result") or {}).get("steps") or {}).values() if v.get("s") == "failed" and v.get("code")})}
                   for r in rows]
@@ -415,7 +415,7 @@ class Worker:
         self.storage.audit(self.tenant.key, "Run", user, job_id,
                            f"Run {run_no}: {status}" + (f" ({code})" if code else "") +
                            f" · {counts['done']} done, {counts['partial']} partial, {counts['failed']} failed, "
-                           f"{counts['notStarted']} not started, {counts['disabled']} disabled"
+                           f"{counts['notStarted']} not started, {counts['disabled']} excluded"
                            + (f" · cancelled by {cancel.get('by')}" if cancel else ""),
                            created if "rows" in where else [], run=run_no, jobName=job.get("name", ""), counts=counts, **where)
 

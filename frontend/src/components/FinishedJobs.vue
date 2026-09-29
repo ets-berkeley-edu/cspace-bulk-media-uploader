@@ -126,7 +126,7 @@ function removedOn(j: Job) {
 }
 function mainMessage(r: Row): string {
   const s = resultState(r);
-  if (s === "Disabled") return `Disabled by ${r.disabledBy || "a user"}`;
+  if (s === "Excluded") return `Excluded by ${r.disabledBy || "a user"}`;
   if (s === "Done") return "Created in CollectionSpace";
   if (s === "Not started") return "Not reached before the job stopped";
   const code = rowCodes(r)[0];

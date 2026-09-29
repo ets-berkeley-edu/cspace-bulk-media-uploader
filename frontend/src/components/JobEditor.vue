@@ -53,7 +53,7 @@ function docFilter(r: Row, f: string): boolean {
     case "block": return r.include && lv === "block";
     case "warn": return r.include && lv === "warn";
     case "protected": return !!r.protected;
-    case "disabled": return !r.include;
+    case "excluded": return !r.include;
     case "selected": return selected.has(r.n);
     default: return true;
   }
@@ -62,7 +62,7 @@ const view = computed(() => tableView(rows.value, table, docKeys, docFilter));
 const docFilters = computed<[string, string][]>(() => {
   const n = (f: string) => rows.value.filter((r) => docFilter(r, f)).length;
   return [["all", `All documents (${rows.value.length})`], ["problems", `With problems (${n("problems")})`], ["block", `Need fixing (${n("block")})`],
-    ["warn", `With warnings (${n("warn")})`], ["protected", `Protected (${n("protected")})`], ["disabled", `Disabled (${n("disabled")})`],
+    ["warn", `With warnings (${n("warn")})`], ["protected", `Protected (${n("protected")})`], ["excluded", `Excluded (${n("excluded")})`],
     ["selected", `Selected (${selected.size})`]];
 });
 const pageSelected = computed(() => view.value.shown.length > 0 && view.value.shown.every((r) => selected.has(r.n)));
@@ -103,9 +103,9 @@ async function setGroup(fields: { groupOn?: boolean; groupTitle?: string }) {
 const scheduleBlocked = computed(() => {
   const c = counts.value;
   if (job.value?.groupOn && !job.value.groupTitle?.trim()) return "Enter a group title, or turn off the job's group";
-  if (c.block) return "Fix or disable the documents marked Needs fixing first";
+  if (c.block) return "Fix or exclude the documents marked Needs fixing first";
   if (c.uploading) return "Wait until every file is uploaded and verified";
-  if (!c.work) return "Nothing left to run: every document is done or disabled";
+  if (!c.work) return "Nothing left to run: every document is done or excluded";
   if (checking.size) return "Checking against CollectionSpace…";
   return "";
 });
@@ -172,10 +172,10 @@ async function failed(e: unknown) {
   if (e instanceof ApiError && e.status === 409 && (e.detail as { code?: string } | null)?.code === "not_editing") await refreshJob();
 }
 
-/** A job that has run becomes Completed as soon as every document is done or disabled (design: Job states). */
+/** A job that has run becomes Completed as soon as every document is done or excluded (design: Job states). */
 function completedNote() {
   if (job.value?.status === "Completed") {
-    message.value = { cls: "msg-info", text: "Every document is now done or disabled, so the job is Completed. It's under Finished jobs and is removed 30 days from now." };
+    message.value = { cls: "msg-info", text: "Every document is now done or excluded, so the job is Completed. It's under Finished jobs and is removed 30 days from now." };
     return true;
   }
   return false;
@@ -546,7 +546,7 @@ function toggle(n: number) {
                   title="Whether this image will appear on the museum's public portal, combining the object's sensitivity and the image's own setting" />
           <SortTh v-if="job?.groupOn" :state="table" sort-key="group" label="Group" style="width:70px" />
           <SortTh :state="table" sort-key="status" label="Status" style="width:150px" />
-          <SortTh :state="table" sort-key="include" label="Include" style="width:90px" title="Turn off to have the BMU ignore a document" />
+          <SortTh :state="table" sort-key="include" label="Exclude" style="width:80px" title="To exclude a document from a job, check the box." />
         </tr></thead>
         <tbody>
           <tr v-if="!rows.length"><td :colspan="job?.groupOn ? 10 : 9" class="muted" style="text-align:center;padding:18px">No documents yet. Drop files in the box above, or browse, to add them to this job.</td></tr>
@@ -565,7 +565,7 @@ function toggle(n: number) {
     </div>
 
     <div class="schedule-bar">
-      <span><strong>{{ counts.total }} documents<template v-if="counts.disabled"> ({{ counts.disabled }} disabled)</template></strong>
+      <span><strong>{{ counts.total }} documents<template v-if="counts.disabled"> ({{ counts.disabled }} excluded)</template></strong>
         · {{ counts.block ? `${counts.block} ${counts.block === 1 ? "needs" : "need"} fixing` : "nothing to fix" }}
         <template v-if="counts.warn"> · {{ counts.warn }} {{ counts.warn === 1 ? "has" : "have" }} warnings</template></span>
       <span class="spacer"></span>
