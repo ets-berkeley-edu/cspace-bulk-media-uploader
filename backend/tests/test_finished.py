@@ -403,3 +403,11 @@ def test_only_one_person_fixes_a_job(api, login, add_uploaded, worker, services,
     assert api.post(f"/api/jobs/{job}/fix").status_code == 200
     r = api.post(f"/api/jobs/{job}/fix")
     assert r.status_code == 409 and "already fixing" in r.json()["detail"]
+
+
+def test_ids_shared_within_the_job_are_not_reported_as_new_duplicates(api, login, add_uploaded, worker):
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["12-5678_1.jpg", "12-5678_2.jpg"])  # the same identification number, warned in the editor
+    rows = run_once(api, job, worker)["rows"]
+    assert all(not r["result"].get("notices") for r in rows)

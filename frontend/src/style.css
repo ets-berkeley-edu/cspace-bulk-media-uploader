@@ -23,7 +23,7 @@ body {
   background: var(--surface-0); color: var(--text-primary);
   margin: 0; padding: 1.5rem 1rem 4rem; line-height: 1.5; font-size: 14px;
 }
-.page { max-width: 1200px; margin: 0 auto; }
+.page { max-width: 1400px; margin: 0 auto; }
 h1 { font-size: 22px; font-weight: 600; margin: 0 0 4px; }
 .subtitle { font-size: 13px; color: var(--text-secondary); margin: 0 0 14px; }
 .card { background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; margin-bottom: 1.25rem; }

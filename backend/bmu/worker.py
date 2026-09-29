@@ -125,6 +125,7 @@ class Worker:
         self.tenant = tenant or load_tenant(settings.tenant)
         self.owner = f"{socket.gethostname()}-{uuid.uuid4().hex[:6]}"
         self._last_sweep = 0.0
+        self._job_media: set[str] = set()  # Media records the running job has created
 
     # ---- scheduling ------------------------------------------------------------------------
     def run_forever(self) -> None:
@@ -384,6 +385,8 @@ class Worker:
 
     def _run_rows(self, job_id: str, client: CSpaceClient, run_no: int, created: list[dict]) -> str:
         server_errors = 0
+        self._job_media = {((r.get("result") or {}).get("steps") or {}).get("media", {}).get("csid")
+                           for r in self.storage.get_rows(job_id)} - {None}
         for row in self.storage.get_rows(job_id):
             if not row.get("include") or (row.get("result") or {}).get("state") == "Done":
                 continue
@@ -447,6 +450,8 @@ class Worker:
                 csid, found = self._do(client, name, row)
                 st.clear()
                 st.update(s="done", csid=csid, run=run_no)
+                if name == "media":
+                    self._job_media.add(csid)
                 if found:
                     st["found"] = True  # an existing record, not one this job created
                 if name != "findObject" and not found and csid:
@@ -540,6 +545,7 @@ class Worker:
         except CSpaceError:
             return  # only a notice; the create itself reports real failures
         known = set(((row.get("lookups") or {}).get("media") or {}).get("csids") or [])
+        known |= self._job_media  # Media records this job created aren't news: the editor warned about IDs shared in the job
         new = [c for c in existing if c not in known]
         if new:
             row["result"]["notices"] = [{"code": "duplicate_at_run",
