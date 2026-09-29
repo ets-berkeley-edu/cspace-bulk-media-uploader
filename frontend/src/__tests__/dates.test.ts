@@ -39,4 +39,18 @@ describe("structured dates (design: Structured dates)", () => {
       group: { dateEarliestSingleYear: "1920", dateLatestYear: "1929" } } } });
     expect(w.text()).toContain("Earliest 1920 · latest 1929");
   });
+
+  it("says the date came from EXIF, and offers it back once edited or cleared", async () => {
+    const w = mount(DateInput, { props: { modelValue: "2025-11-04", exif: "2025-11-04" } });
+    expect(w.text()).toContain("(from EXIF)");
+    expect(w.find("button").exists()).toBe(false);
+    await w.setProps({ modelValue: "1920s" });
+    expect(w.text()).toContain("(edited — EXIF date 2025-11-04)");
+    await w.setProps({ modelValue: "" });
+    expect(w.text()).toContain("(cleared — EXIF date 2025-11-04)");
+    await w.find("button").trigger("click");
+    expect(w.emitted("update:modelValue")?.at(-1)).toEqual(["2025-11-04"]);
+    const plain = mount(DateInput, { props: { modelValue: "1920s" } });
+    expect(plain.text()).not.toContain("EXIF");
+  });
 });

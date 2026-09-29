@@ -82,7 +82,7 @@ def new_row(tenant: Tenant, filename: str, size: int, content_type: str, date: s
     row: dict[str, Any] = {
         "file": filename, "fileOriginal": filename, "size": size, "contentType": content_type or "",
         "handling": tenant.handling[0].id, "objParsed": p["obj"], "obj": p["obj"], "img": p["img"], "parseOk": p["ok"],
-        "idnum": "", "date": date, "orientation": orientation, "restricted": bool(tenant.publish.get("default", False)),
+        "idnum": "", "date": date, "dateExif": date, "orientation": orientation, "restricted": bool(tenant.publish.get("default", False)),
         "type": [], "language": [tenant.language_default], "creator": "", "contributor": "", "rightsHolder": "", "description": "", "copyright": "",
         "include": True, "group": True, "upload": {"s": "pending"}, "checks": [], "result": None, "touched": [],
     }
@@ -289,7 +289,8 @@ LOOKUP_TTL_SECONDS = 600
 
 
 def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: dict[str, bool],
-               targets: set[int] | None = None, refresh: bool = False, group_on: bool = False) -> set[int]:
+               targets: set[int] | None = None, refresh: bool = False, group_on: bool = False,
+               set_publish: bool = True) -> set[int]:
     """Set each row's checks: [{level: block|warn|info, text}]. "block" rows must be fixed before scheduling.
 
     The editor calls this for the rows that just changed (targets) and re-evaluates every row, because some
@@ -297,6 +298,8 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
     kept on the row under "lookups" and reused while the searched value is unchanged: only target rows
     whose lookup is missing, for a different value or older than LOOKUP_TTL_SECONDS query CollectionSpace.
     targets=None means every row may query; refresh=True ignores stored lookups (used at scheduling).
+    set_publish=False (a job that isn't a draft): a newly protected file is reported, but its publish setting
+    is left as the user scheduled it.
     Returns the rows whose lookups weren't known, so their checks are partial and must not be saved.
     """
     now = time.time()
@@ -421,7 +424,7 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
                 sens = None
                 out.append({"level": "warn", "text": f"Couldn't read object {r.get('obj')}'s sensitivity in CollectionSpace ({e.code})."})
             if sens is not None:
-                apply_sensitivity(tenant, r, sens)
+                apply_sensitivity(tenant, r, sens, set_publish=set_publish)
         out += sensitivity_checks(tenant, r)
         idn = r.get("idnum") or ""
         if not idn:
@@ -441,6 +444,8 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
                 out.append({"level": "warn", "text": f"A Media record with ID {idn} already exists in CollectionSpace "
                                                      f"(CSID {', '.join(existing[:5])}{' …' if len(existing) > 5 else ''})."})
         out += authority_read_checks(r, perms)
+        if not [x for x in r.get("language") or [] if x]:  # design: Language is required; what's shown is what's sent
+            out.append({"level": "block", "text": "Choose at least one language."})
         if r.get("date") and not perms.get("readDates", True):
             out.append({"level": "block", "text": "Your account can't use CollectionSpace's date parser (read on structureddates), "
                                                   "so the date can't be checked. Clear the date, or ask for the permission."})
@@ -513,13 +518,16 @@ def object_checks(tenant: Tenant, behavior: str, num: str, found: list[str], per
     return []
 
 
-def apply_sensitivity(tenant: Tenant, r: dict, sens: dict) -> None:
+def apply_sensitivity(tenant: Tenant, r: dict, sens: dict, set_publish: bool = True) -> None:
     """Set the row's automatic protected-file flag from its Object (design: Setting the flag): users never
-    set or clear it. A protected file defaults to not published (Restricted), unless the user chose."""
+    set or clear it. A protected file defaults to not published (Restricted), unless the user chose.
+    set_publish=False leaves the publish setting alone (only a draft's rows change)."""
     was = r.get("protected")
     r["protected"] = {"reason": "; ".join(sens["protect"]), "hides": bool(sens["hides"])} if sens["protect"] else None
     r["softSignals"] = list(sens.get("warn") or [])
     user_chose = "restricted" in (r.get("touched") or [])
+    if not set_publish:
+        return
     if r["protected"] and not user_chose and not r.get("restricted") and tenant.publish.get("invert"):
         r["restricted"], r["restrictedAuto"] = True, True
     elif not r["protected"] and was and r.get("restrictedAuto") and not user_chose:

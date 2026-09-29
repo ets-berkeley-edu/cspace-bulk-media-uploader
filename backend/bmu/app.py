@@ -777,6 +777,11 @@ def _routes(app: FastAPI) -> None:
                                           [{"n": n, "file": row["file"], "by": sess.user, "at": now()}]})
         s.storage.audit(sess.tenant, "Row deleted", sess.user, job_id,
                         f"Deleted document {n} ({row['file']}) from “{job['name'] or 'Untitled job'}”; it had created nothing in CollectionSpace.")
+        if not s.storage.get_rows(job_id):  # design: deleting the last document deletes the job, run or not
+            fresh = s.storage.get_job(job_id)
+            if fresh:
+                _delete_job(s, sess, fresh, [])
+            return {"ok": True, "others": [], "jobStatus": "Deleted"}
         if _complete_if_clean(s, sess, job_id):
             return {"ok": True, "others": [], "jobStatus": (s.storage.get_job(job_id) or {}).get("status", "Deleted")}
         return {"ok": True, "others": _recheck(s, sess, job_id, targets=set())["changed"]}
@@ -841,15 +846,23 @@ def _refresh_permissions(s: Services, sess: Session) -> Session:
 
 
 def _recheck(s: Services, sess: Session, job_id: str, targets: set[int] | None, refresh: bool = False) -> dict:
-    """Re-run the checks on every row (see check_rows) and save the rows whose checks or lookups changed."""
+    """Re-run the checks on every row (see check_rows) and save the rows whose checks or lookups changed.
+
+    Only a draft's rows are saved (design: the web app writes rows only while a job is editable). For a queued,
+    running or finished job the checks are shown but nothing is written, so a job never changes after it was
+    scheduled; a document that became protected meanwhile is reported, and the user edits the job to act on it.
+    The one exception is protective: the stored thumbnail of a newly protected file is deleted at once."""
     rows = s.storage.get_rows(job_id)
-    group_on = bool((s.storage.get_job(job_id) or {}).get("groupOn"))
+    job = s.storage.get_job(job_id) or {}
+    group_on = bool(job.get("groupOn"))
+    editable = job.get("status") == "Draft"
     # a real copy: check_rows updates each row's lookups in place
     auto = ("checks", "lookups", "protected", "softSignals", "restricted", "restrictedAuto", "thumbKey")
     before = {r["n"]: copy.deepcopy(tuple(r.get(k) for k in auto)) for r in rows}
     client = sess.client(s)
     try:
-        partial = check_rows(s.tenant, rows, client, sess.perms, targets=targets, refresh=refresh, group_on=group_on)
+        partial = check_rows(s.tenant, rows, client, sess.perms, targets=targets, refresh=refresh, group_on=group_on,
+                             set_publish=editable)
     except CSpaceError as e:
         raise _cspace_http(e)
     finally:
@@ -865,9 +878,19 @@ def _recheck(s: Services, sess: Session, job_id: str, targets: set[int] | None, 
             # Design: if a row becomes protected after its thumbnail was stored, the thumbnail is deleted at once.
             s.storage.delete_object(r["thumbKey"])
             r["thumbKey"] = None
+            if not editable:
+                s.storage.clear_thumbnail(job_id, r["n"])
+        if not editable:
+            was_protected = before[r["n"]][auto.index("protected")]
+            if r.get("protected") and not was_protected and r.get("include"):
+                r["checks"].append({"level": "warn", "text": f"Object {r.get('obj')} became protected after this job was "
+                                    "scheduled, and this document's publish setting wasn't changed. To change it, "
+                                    "edit the job."})
+            continue
         if before[r["n"]] != tuple(r.get(k) for k in auto) and s.storage.save_checks(job_id, r):
             changed.append(r)
-    _note_protected(s, job_id, rows)
+    if editable:
+        _note_protected(s, job_id, rows)
     counts = {"block": 0, "warn": 0}
     for r in rows:
         w = worst(r)

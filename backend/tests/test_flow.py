@@ -515,7 +515,8 @@ def test_repeating_fields_accept_only_listed_values(api, login, add_uploaded):
     assert api.patch(f"/api/jobs/{job}/rows/{n}", json={"type": ["photograph"]}).status_code == 422
     assert api.patch(f"/api/jobs/{job}/rows/{n}", json={"type": "image"}).status_code == 422
     assert api.patch(f"/api/jobs/{job}/rows/{n}", json={"language": ["English"]}).status_code == 422
-    assert api.patch(f"/api/jobs/{job}/rows/{n}", json={"language": []}).status_code == 200  # the default is sent then
+    r = api.patch(f"/api/jobs/{job}/rows/{n}", json={"language": []})
+    assert r.status_code == 200 and "Choose at least one language." in _checks(r.json()["row"], "block")  # required
 
 
 def test_bulk_media_type_replaces_the_list(api, login, add_uploaded):
@@ -902,3 +903,34 @@ def test_the_exif_date_and_orientation_arrive_with_the_documents(api, login):
     assert not any("Orientation" in c["text"] for c in rows["15-1234_b.wav"]["checks"])
     bad = api.post(f"/api/jobs/{job}/files", json={"files": [{"name": "x.jpg", "size": 1, "exifDate": "May 17"}]})
     assert bad.status_code == 422
+
+
+
+def test_checking_a_queued_job_changes_nothing_and_reports_a_newly_protected_file(api, login, add_uploaded, services, fake):
+    login()
+    job = _queued_job(api, add_uploaded, ["15-1234_a.jpg"])
+    before = services.storage.get_row(job, 1)
+    assert not before["restricted"] and not before.get("protected")
+    # after scheduling, the object gets a NAGPRA status in CollectionSpace
+    obj = next(o for o in fake.objects.values() if o["objectNumber"] == "15-1234" and not o["deleted"])
+    obj["sensitivity"] = {"nagpraStatus": "under NAGPRA review"}
+    row = dict(before); row.pop("lookups", None)  # as if the stored lookups had aged out
+    services.storage.put_row(job, row, guard=False)
+    stored = services.storage.get_row(job, 1)
+    r = api.post(f"/api/jobs/{job}/check").json()["rows"][0]
+    assert r["protected"] and not r["restricted"]  # shown as protected, but its publish setting isn't changed
+    assert any("became protected after this job was scheduled" in t for t in _checks(r, "warn"))
+    after = services.storage.get_row(job, 1)
+    assert after == stored and services.storage.get_job(job)["status"] == "Queued"  # nothing written
+    # editing the job makes it a draft again, and then the automatic default applies as usual
+    api.post(f"/api/jobs/{job}/edit")
+    r = api.post(f"/api/jobs/{job}/check").json()["rows"][0]
+    assert r["protected"] and r["restricted"] and services.storage.get_row(job, 1)["restricted"]
+
+
+def test_deleting_the_last_document_of_a_new_draft_deletes_the_draft(api, login, add_uploaded, services):
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_a.jpg"])
+    r = api.delete(f"/api/jobs/{job}/rows/1").json()
+    assert r["jobStatus"] == "Deleted" and services.storage.get_job(job) is None

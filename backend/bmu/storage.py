@@ -423,6 +423,11 @@ class Storage:
                     pass  # changed again in the meantime: the newer save stands
             raise
 
+    def clear_thumbnail(self, job_id: str, n: int) -> None:
+        """Forget a row's stored thumbnail (already deleted from S3), whatever the job's state."""
+        self.jobs.update_item(Key={"PK": f"JOB#{job_id}", "SK": f"ROW#{n:05d}"}, UpdateExpression="REMOVE thumbKey",
+                              ConditionExpression=Attr("PK").exists())
+
     def save_checks(self, job_id: str, row: dict) -> bool:
         """Save a row's checks and lookups, and what they set automatically (the protected-file flag and the
         publish default it implies), only if its data hasn't changed since they were computed (same "v");

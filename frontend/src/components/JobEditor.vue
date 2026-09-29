@@ -572,7 +572,7 @@ function toggle(n: number) {
           <tr v-else-if="!view.shown.length"><td :colspan="job?.groupOn ? 10 : 9" class="muted" style="text-align:center;padding:18px">No documents match this filter.</td></tr>
           <DocumentRow v-for="r in view.shown" :key="r.n" :row="r" :tenant="me.tenant" :perms="me.perms" :checking="checking.has(r.n)" :preview="previews.get(r.n)"
                        :expanded="expanded.has(r.n)" :readonly="readonly || !editable" :selected="selected.has(r.n)" :languages="languages"
-                       :other-names="rows.filter((x) => x.n !== r.n).map((x) => x.file)"
+                       :other-names="rows.filter((x) => x.n !== r.n).map((x) => x.file)" :last="rows.length === 1"
                        :uploading-here="uploadingHere.has(r.n)" :group-on="!!job?.groupOn" :job-id="job?.id" :run-view="job?.status === 'Running'"
                        @toggle="toggle(r.n)" @edit="edit(r, $event)" @remove="remove(r)" @select="select(r.n, $event)" @replace="replaceFile(r, $event)"
                        @retry="retry(r)" />

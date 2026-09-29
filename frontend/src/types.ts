@@ -132,6 +132,8 @@ export interface Row {
   parseOk: boolean;
   /** Fields the user has edited; presets (such as the default language) no longer apply to them. */
   touched?: string[];
+  /** The date the browser read from the file's EXIF when it was added, if any (the Date field says so). */
+  dateExif?: string;
   idnum: string;
   date: string;
   restricted: boolean;

@@ -21,7 +21,7 @@ const CATALOG: Record<string, Failure> = {
 failures.value = CATALOG;
 
 const tenant: TenantInfo = {
-  key: "pahma", name: "PAHMA", filenameHint: "hint", filenamePattern: "^(?P<obj>[A-Za-z0-9][A-Za-z0-9.-]*?)(?:_(?P<suffix>[A-Za-z0-9-]+))?$",
+  key: "pahma", name: "PAHMA", filenameHint: "hint", filenamePattern: "^(?P<obj>[A-Za-z0-9][A-Za-z0-9.-]*)(?:_(?P<suffix>[A-Za-z0-9._-]+))?$",
   mediaTypes: [], languageDefault: "", authorityFields: {}, publish: { field: "approvedForWeb", header: "Restricted", invert: true },
   handling: [{ id: "link", label: "Link to existing object", object: "existing", id_rule: "object" }],
 };

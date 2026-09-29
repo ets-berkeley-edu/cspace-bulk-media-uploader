@@ -42,7 +42,7 @@ describe("AuthorityInput", () => {
 });
 
 const tenant: TenantInfo = {
-  key: "pahma", name: "PAHMA", filenameHint: "hint", filenamePattern: "^(?P<obj>[A-Za-z0-9][A-Za-z0-9.-]*?)(?:_(?P<suffix>[A-Za-z0-9-]+))?$", mediaTypes: [{ value: "image", label: "image" }, { value: "slide", label: "slide" }], languageDefault: "", authorityFields: {},
+  key: "pahma", name: "PAHMA", filenameHint: "hint", filenamePattern: "^(?P<obj>[A-Za-z0-9][A-Za-z0-9.-]*)(?:_(?P<suffix>[A-Za-z0-9._-]+))?$", mediaTypes: [{ value: "image", label: "image" }, { value: "slide", label: "slide" }], languageDefault: "", authorityFields: {},
   publish: { field: "approvedForWeb", header: "Restricted", invert: true },
   handling: [{ id: "link", label: "Link to existing object", object: "existing", id_rule: "object" },
              { id: "create", label: "Create new object + link", object: "create", id_rule: "object" }],
@@ -137,6 +137,14 @@ describe("DocumentRow checks", () => {
     expect(labels[at("Language")]).toContain("PRESET");
     const chosen = mountRow({ tenant: t, row: row({ language: [eng], touched: ["language"] }) });
     expect(chosen.text()).not.toContain("PRESET");
+  });
+  it("warns that deleting the job's last document deletes the job", async () => {
+    const w = mountRow({ last: true });
+    await w.findAll("button").find((b) => b.text() === "Delete document")!.trigger("click");
+    expect(w.text()).toContain("This is the job's last document, so the job is deleted too.");
+    const other = mountRow({});
+    await other.findAll("button").find((b) => b.text() === "Delete document")!.trigger("click");
+    expect(other.text()).not.toContain("last document");
   });
   it("offers Retry and Remove for a failed upload, or one this page isn't sending", async () => {
     const failed = mountRow({ row: row({ upload: { s: "failed" } }) });

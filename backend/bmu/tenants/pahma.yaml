@@ -33,9 +33,12 @@ publish:
   invert: true
   default: false              # not restricted
 
+# Legacy getNumber.py rule for the object number: the text before the first _ (any further _ parts are allowed).
+# The image number, used by "Media only", is the whole name without its extension; legacy cut it at the first
+# ".", which truncated dotted PAHMA numbers (9-12345.1.2_3 became 9-12345), so that part is deliberately changed.
 filename:
-  hint: "Object number, optionally followed by _ and a suffix, e.g. 15-1234_a.jpg"
-  pattern: '^(?P<obj>[A-Za-z0-9][A-Za-z0-9.-]*?)(?:_(?P<suffix>[A-Za-z0-9-]+))?$'
+  hint: "Object number, optionally followed by _ and anything else, e.g. 15-1234_a.jpg or 1-2345_01_b.tif"
+  pattern: '^(?P<obj>[A-Za-z0-9][A-Za-z0-9.-]*)(?:_(?P<suffix>[A-Za-z0-9._-]+))?$'
 
 # Media type option list (PAHMA's pahmaMediaTypes): the value is stored, the label shown. Entries can be
 # written as {value: still_image, label: still image} where they differ; PAHMA's values are their labels.
