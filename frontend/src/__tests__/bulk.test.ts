@@ -22,7 +22,7 @@ describe("bulk rules (design: Bulk-change panel)", () => {
     expect(v.ok).toBe(false);
     expect(v.why).toContain("2 of the 3 selected documents can’t take this change");
     expect(v.why).toContain("1 already created its records in CollectionSpace");
-    expect(v.why).toContain("1 is disabled (enable it first)");
+    expect(v.why).toContain("1 is excluded from the job (include it first)");
   });
 
   it("treats a value a document already has as no change, even on a locked row", () => {
@@ -69,7 +69,7 @@ describe("BulkPanel", () => {
     expect(w.emitted("apply")?.[0]).toEqual([[1], { restricted: true }]);
   });
 
-  it("offers Apply to all when nothing is selected, and Disable selected for selected rows", async () => {
+  it("offers Apply to all when nothing is selected, and Exclude selected for selected rows", async () => {
     const w = mount(BulkPanel, { props: { rows: [row(), row({ n: 2 })], selected: new Set<number>(), tenant, perms, readonly: false, busy: false } });
     await w.findAll("select")[1].setValue("yes");
     const all = w.findAll("button").find((b) => b.text() === "Apply to all")!;
@@ -77,7 +77,7 @@ describe("BulkPanel", () => {
     await all.trigger("click");
     expect(w.emitted("apply")?.[0]).toEqual([[1, 2], { restricted: true }]);
     await w.setProps({ selected: new Set([2]) });
-    await w.findAll("button").find((b) => b.text() === "Disable selected")!.trigger("click");
+    await w.findAll("button").find((b) => b.text() === "Exclude selected")!.trigger("click");
     expect(w.emitted("include")?.[0]).toEqual([[2], false]);
   });
 });

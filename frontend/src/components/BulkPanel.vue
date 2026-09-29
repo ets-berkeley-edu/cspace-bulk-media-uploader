@@ -53,8 +53,8 @@ const linking = computed(() => new Set(props.tenant.handling.filter((h) => h.obj
 const verdict = computed(() => anySelected.value
   ? bulkCheck(selectedRows.value, changes.value, false, linking.value)
   : bulkCheck(applyAllTargets(props.rows), changes.value, true, linking.value));
-const toDisable = computed(() => includeTargets(selectedRows.value, false));
-const toEnable = computed(() => includeTargets(selectedRows.value, true));
+const toExclude = computed(() => includeTargets(selectedRows.value, false));
+const toInclude = computed(() => includeTargets(selectedRows.value, true));
 const hasField = (f: string) => (props.tenant.authorityFields[f] ?? []).length > 0;
 
 function applySelected() {
@@ -131,9 +131,9 @@ function applyAll() {
           <div v-if="verdict.picked && !verdict.ok" class="bulk-note" :class="{ neutral: verdict.neutral }" role="status">{{ verdict.why }}</div>
         </div>
         <div class="bulk-group divided">
-          <button :disabled="readonly || busy || !toDisable.length" title="Have the BMU ignore the selected documents"
-                  @click="emit('include', toDisable.map((r) => r.n), false)">Disable selected</button>
-          <button :disabled="readonly || busy || !toEnable.length" @click="emit('include', toEnable.map((r) => r.n), true)">Enable selected</button>
+          <button :disabled="readonly || busy || !toExclude.length" title="Have the BMU ignore the selected documents"
+                  @click="emit('include', toExclude.map((r) => r.n), false)">Exclude selected</button>
+          <button :disabled="readonly || busy || !toInclude.length" @click="emit('include', toInclude.map((r) => r.n), true)">Include selected</button>
         </div>
       </div>
       <button v-if="collapsed" class="bulk-rail" tabindex="-1" aria-hidden="true" title="Show panel" @click="toggle(true)">

@@ -46,11 +46,11 @@ const notRun = row({ n: 4, file: "12-5678_1.jpg" });
 const disabled = row({ n: 5, file: "9-9999.jpg", include: false, disabledBy: "jdoe", disabledAt: 1 });
 
 describe("results helpers (design: Finished jobs and error messages)", () => {
-  it("counts documents by result, disabled ones apart", () => {
+  it("counts documents by result, excluded ones apart", () => {
     const rows = [done(1, "a.jpg"), tooLarge, gone, notRun, disabled];
     expect(resultCounts(rows)).toEqual({ done: 1, partial: 2, failed: 0, notStarted: 1, disabled: 1 });
-    expect(countsText(resultCounts(rows))).toBe("1 done · 2 partial · 1 not started · 1 disabled");
-    expect(resultState(disabled)).toBe("Disabled");
+    expect(countsText(resultCounts(rows))).toBe("1 done · 2 partial · 1 not started · 1 excluded");
+    expect(resultState(disabled)).toBe("Excluded");
     expect(importantRows(rows, 3).map((r) => r.n)).toEqual([2, 3, 4]);
   });
 
@@ -99,14 +99,14 @@ describe("JobResults", () => {
     const w = mount(JobResults, { props: { job, rows: [done(1, "a.jpg"), tooLarge, gone, notRun, disabled], runs, tenant } });
     const history = w.findAll(".runs .msg").map((m) => m.text());
     expect(history[0]).toContain("Run 2: Needs attention");
-    expect(history[0]).toContain("9-9999.jpg disabled by jdoe");
+    expect(history[0]).toContain("9-9999.jpg excluded by jdoe");
     expect(history[1]).toContain("Run 1: Failed — Sign-in failed");
     expect(w.findAll("tbody tr")).toHaveLength(5);
     await w.find("select").setValue("partial");
     expect(w.findAll("tbody tr").map((r) => r.text()).join()).toContain("1-2345.jpg");
     expect(w.findAll("tbody tr")).toHaveLength(2);
-    await w.find("select").setValue("disabled");
-    expect(w.text()).toContain("Disabled by jdoe");
+    await w.find("select").setValue("excluded");
+    expect(w.text()).toContain("Excluded by jdoe");
   });
 });
 

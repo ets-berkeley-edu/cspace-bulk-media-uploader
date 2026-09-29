@@ -2,7 +2,7 @@
 /**
  * View results (design: Results view): every document with its result, each step's outcome and the CSIDs
  * created, the run that did each step, and for each failure what happened and what to do. The run history
- * lists every run, newest first, with the documents disabled or deleted before it.
+ * lists every run, newest first, with the documents excluded or deleted before it.
  */
 import { computed } from "vue";
 import { formatTime } from "../lib/files";
@@ -16,16 +16,16 @@ import { tableState, tableView } from "../lib/table";
 
 const props = defineProps<{ job: Job; rows: Row[]; runs: Run[]; tenant: TenantInfo }>();
 
-type Filter = "all" | "problems" | "failed" | "partial" | "notStarted" | "disabled" | "done";
+type Filter = "all" | "problems" | "failed" | "partial" | "notStarted" | "excluded" | "done";
 const table = tableState();
 const c = computed(() => resultCounts(props.rows));
 const FILTERS = computed<[Filter, string][]>(() => [
   ["all", `All documents (${props.rows.length})`],
   ["problems", `Not finished (${c.value.failed + c.value.partial + c.value.notStarted})`],
   ["failed", `Failed (${c.value.failed})`], ["partial", `Partial (${c.value.partial})`],
-  ["notStarted", `Not started (${c.value.notStarted})`], ["disabled", `Disabled (${c.value.disabled})`], ["done", `Done (${c.value.done})`],
+  ["notStarted", `Not started (${c.value.notStarted})`], ["excluded", `Excluded (${c.value.disabled})`], ["done", `Done (${c.value.done})`],
 ]);
-const RANK: Record<string, number> = { Failed: 0, Partial: 1, "In progress": 2, "Not started": 2, Disabled: 3, Done: 4 };
+const RANK: Record<string, number> = { Failed: 0, Partial: 1, "In progress": 2, "Not started": 2, Excluded: 3, Done: 4 };
 const keys = {
   n: (r: Row) => r.n,
   file: (r: Row) => r.file,
@@ -40,7 +40,7 @@ const view = computed(() => tableView(props.rows, table, keys, (r, f) => {
     case "failed": return s === "Failed";
     case "partial": return s === "Partial";
     case "notStarted": return s === "Not started" || s === "In progress";
-    case "disabled": return s === "Disabled";
+    case "excluded": return s === "Excluded";
     case "done": return s === "Done";
     default: return true;
   }
@@ -64,7 +64,7 @@ const earlierProblem = (r: Row) => r.result?.error?.code;
           · started {{ formatTime(rn.startedAt) }} · ended {{ rn.endedAt ? formatTime(rn.endedAt) : "—" }}</div>
         <div v-if="rn.cancelledBy" class="sub">Cancelled by {{ rn.cancelledBy }}<template v-if="rn.cancelledAt"> ({{ formatTime(rn.cancelledAt) }})</template></div>
         <div v-if="rn.disabledBefore?.length || rn.deletedBefore?.length" class="sub">Before this run:
-          <template v-for="(d, i) in rn.disabledBefore ?? []" :key="'d' + i">{{ i ? "; " : "" }}{{ d.file }} disabled by {{ d.by || "a user" }}</template>
+          <template v-for="(d, i) in rn.disabledBefore ?? []" :key="'d' + i">{{ i ? "; " : "" }}{{ d.file }} excluded by {{ d.by || "a user" }}</template>
           <template v-for="(d, i) in rn.deletedBefore ?? []" :key="'x' + i">{{ i || rn.disabledBefore?.length ? "; " : "" }}{{ d.file }} deleted by {{ d.by }}</template>
         </div>
       </div>
@@ -85,7 +85,7 @@ const earlierProblem = (r: Row) => r.result?.error?.code;
           <SortTh :state="table" sort-key="what" label="What happened" /></tr></thead>
         <tbody>
           <tr v-if="!view.shown.length"><td colspan="6" class="muted" style="text-align:center;padding:18px">No documents match this filter.</td></tr>
-          <tr v-for="r in view.shown" :key="r.n" :class="{ disabled: resultState(r) === 'Disabled' }">
+          <tr v-for="r in view.shown" :key="r.n" :class="{ disabled: resultState(r) === 'Excluded' }">
             <td class="keep"><ThumbCell :job-id="job.id" :row="r" /></td>
             <td class="keep">{{ r.n }}</td>
             <td>{{ r.file }}<div class="sub">{{ handlingLabel(r) }}<template v-if="r.skipLink"> · not linked (stopped)</template></div></td>
@@ -100,7 +100,7 @@ const earlierProblem = (r: Row) => r.result?.error?.code;
               <span v-if="!stepList(r).length" class="sub">—</span>
             </td>
             <td class="keep">
-              <span v-if="resultState(r) === 'Disabled'" class="sub">Disabled by {{ r.disabledBy || "a user" }}<template v-if="r.disabledAt"> ({{ formatTime(r.disabledAt) }})</template>; the BMU ignored it.
+              <span v-if="resultState(r) === 'Excluded'" class="sub">Excluded by {{ r.disabledBy || "a user" }}<template v-if="r.disabledAt"> ({{ formatTime(r.disabledAt) }})</template>; the BMU ignored it.
                 <template v-if="earlierProblem(r)"> Earlier problem: {{ failureOf(earlierProblem(r)).title }}.</template>
                 <template v-if="r.result?.steps?.media?.s === 'done'"> Its Media record from an earlier run ({{ r.result.steps.media.csid }}) stays in CollectionSpace, unfinished.</template></span>
               <ErrorBox v-else-if="r.result?.error" :code="r.result.error.code" :detail="r.result.error.detail" />
