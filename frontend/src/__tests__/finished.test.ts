@@ -79,6 +79,8 @@ describe("results helpers (design: Finished jobs and error messages)", () => {
     expect(canReplaceFile(gone)).toBe(false);
     expect(createdSomething(tooLarge)).toBe(true);
     expect(createdSomething(notRun)).toBe(false);
+    // the worker stopped on it: a create may have reached CollectionSpace unrecorded, so it counts as having created something
+    expect(createdSomething({ ...notRun, result: { state: "Not started" as const, steps: {}, interrupted: 1 } })).toBe(true);
     expect(createdText({ media: 2, files: 1, objects: 1, relations: 2, unfinished: 1 })).toBe("2 Media records (1 with its file), 1 Object and 2 Relations");
   });
 });

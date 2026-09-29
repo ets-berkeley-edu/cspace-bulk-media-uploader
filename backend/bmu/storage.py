@@ -524,6 +524,18 @@ class Storage:
                        "Item": _dyn({"PK": f"JOB#{job_id}", "user": user, "token": token, "expires": int(expires)})}}
         return self._transact([put, update])
 
+    def begin_delete(self, job_id: str, statuses: list[str], session: str) -> bool:
+        """Start deleting a job (design: Deleting a job): in one write, set it to Deleting, only if it is still in
+        one of these statuses and no other session is editing it, and delete its saved sign-in. From then on the
+        worker can't claim it (claim_job needs Queued and a sign-in), so its files are never used by a run."""
+        allowed = ", ".join(f":c_s{i}" for i in range(len(statuses)))
+        update = self._job_update(job_id, {"status": "Deleting", "deletingSince": now()},
+                                  f"#c_status IN ({allowed}) AND (attribute_not_exists(#c_ed) OR #c_ed = :c_ed)",
+                                  {**{f":c_s{i}": st for i, st in enumerate(statuses)}, ":c_ed": session},
+                                  {"#c_status": "status", "#c_ed": "editingSession"})
+        delete = {"Delete": {"TableName": self.credentials.name, "Key": _dyn({"PK": f"JOB#{job_id}"})}}
+        return self._transact([update, delete])
+
     def claim_job(self, job_id: str, fields: dict) -> bool:
         """The worker claims a queued job, only if it is still Queued and its sign-in is still stored and valid."""
         check = {"ConditionCheck": {"TableName": self.credentials.name, "Key": _dyn({"PK": f"JOB#{job_id}"}),

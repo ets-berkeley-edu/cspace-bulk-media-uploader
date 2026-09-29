@@ -217,8 +217,9 @@ function text(field: keyof Row, e: Event) {
         <div v-else class="msg msg-warn">Delete “{{ row.file }}” from this job permanently? Its uploaded file is removed; nothing in CollectionSpace is touched.<template v-if="last">
           This is the job's last document, so the job is deleted too.</template>
           <button @click="confirmRemove = false; emit('remove')">Delete document</button> <button @click="confirmRemove = false">Cancel</button></div></div>
-      <div v-else-if="!readonly && createdSomething(row) && !done" class="field-note" style="margin-top:6px">This document already created records in
-        CollectionSpace, so it can't be deleted from the job; check Exclude to have the BMU ignore it.</div>
+      <div v-else-if="!readonly && createdSomething(row) && !done" class="field-note" style="margin-top:6px">{{ row.result?.interrupted
+        ? "The last run stopped while working on this document, so it may have created a record in CollectionSpace that the BMU couldn't record. It can't be deleted from the job; check Exclude to have the BMU ignore it, or reschedule to finish it."
+        : "This document already created records in CollectionSpace, so it can't be deleted from the job; check Exclude to have the BMU ignore it." }}</div>
     </td>
   </tr>
 </template>

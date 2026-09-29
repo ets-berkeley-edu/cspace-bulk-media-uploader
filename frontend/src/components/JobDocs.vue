@@ -6,6 +6,8 @@
 import { computed } from "vue";
 import { formatTime } from "../lib/files";
 import { rowStatus, worstLevel } from "../lib/status";
+import { tableState, tableView } from "../lib/table";
+import SortTh from "./SortTh.vue";
 import type { Job, Row, TenantInfo } from "../types";
 import ThumbCell from "./ThumbCell.vue";
 
@@ -24,6 +26,11 @@ const RANK = { block: 0, warn: 1, ok: 2 } as const;
 const top = computed(() => (props.rows ?? []).map((r, i) => ({ r, i }))
   .sort((a, b) => (a.r.include ? RANK[worstLevel(a.r)] : 3) - (b.r.include ? RANK[worstLevel(b.r)] : 3) || a.i - b.i)
   .slice(0, 10).map((x) => x.r));
+// Sortable like every table (design: User interface); unsorted, problems come first.
+const table = tableState();
+const sorted = computed(() => tableView(top.value, table, {
+  n: (r) => r.n, name: (r) => r.file, status: (r) => rowStatus(r, props.tenant).text, message: (r) => message(r),
+}, undefined, false).shown);
 const message = (r: Row) => r.checks.find((c) => c.level === "block")?.text ?? r.checks.find((c) => c.level === "warn")?.text ?? "";
 </script>
 
@@ -46,8 +53,11 @@ const message = (r: Row) => r.checks.find((c) => c.level === "block")?.text ?? r
     </div>
     <p v-if="!rows" class="muted">Loading…</p>
     <table v-else class="inner">
+      <thead><tr><th style="width:64px"></th><SortTh :state="table" sort-key="n" label="#" style="width:36px" />
+        <SortTh :state="table" sort-key="name" label="Document" /><SortTh :state="table" sort-key="status" label="Status" style="width:170px" />
+        <SortTh :state="table" sort-key="message" label="Problem" /></tr></thead>
       <tbody>
-        <tr v-for="r in top" :key="r.n" :class="{ disabled: !r.include }">
+        <tr v-for="r in sorted" :key="r.n" :class="{ disabled: !r.include }">
           <td style="width:64px"><ThumbCell :job-id="job.id" :row="r" /></td><td style="width:36px">{{ r.n }}</td><td>{{ r.file }}</td>
           <td style="width:170px"><span class="badge" :class="rowStatus(r, tenant).cls">{{ rowStatus(r, tenant).text }}</span></td>
           <td class="sub">{{ message(r) }}</td>

@@ -145,7 +145,8 @@ export function objectStepRan(r: Row): boolean {
 
 /** Created anything in CollectionSpace (finding an existing object doesn't count), so it can't be deleted. */
 export function createdSomething(r: Row): boolean {
-  if (r.result?.state === "In progress") return true;
+  // A document the worker was on when a run stopped may have created a record whose CSID wasn't recorded.
+  if (r.result?.state === "In progress" || r.result?.interrupted) return true;
   return Object.entries(r.result?.steps ?? {}).some(([k, s]) => k !== "findObject" && !!s.csid && !s.found && !s.sameAs);
 }
 

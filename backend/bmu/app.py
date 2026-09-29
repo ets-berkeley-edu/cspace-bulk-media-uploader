@@ -18,6 +18,7 @@ from .config import Settings, get_settings
 from .crypto import Crypto, make_crypto
 from .cspace import CSpaceClient, CSpaceError
 from .failures import catalog
+from .filetypes import content_type, unsupported
 from .rows import (PROBLEM_TEXT, apply_edit, can_replace_file, check_rows, clean_filename, created_records, edit_problem,
                    is_locked, media_created, new_row, worst)
 from .storage import RowChanged, Storage, now
@@ -201,7 +202,13 @@ def _complete_if_clean(s: "Services", sess: "Session", job_id: str) -> bool:
 
 def _delete_job(s: "Services", sess: "Session", job: dict, rows: list[dict]) -> None:
     """Delete a job and its staged files. Records its runs created stay in CollectionSpace; the audit entry
-    lists every one, by row and record type, so they can still be found and finished there."""
+    lists every one, by row and record type, so they can still be found and finished there.
+    First one write marks it Deleting and removes its sign-in, so the worker can't start it meanwhile; if the job
+    changed since it was read (claimed, or taken over), nothing is deleted."""
+    statuses = ["Draft", "Queued", *FIXABLE]
+    if job.get("status") not in statuses or not s.storage.begin_delete(job["id"], statuses, sess.key):
+        raise HTTPException(409, "This job changed while deleting it (it may have started running); nothing was deleted. "
+                                 "Reload and try again.")
     created = created_records(rows, job)
     s.storage.delete_job_and_files(job["id"])
     c = created["counts"]
@@ -564,18 +571,22 @@ def _routes(app: FastAPI) -> None:
         too_big = [f.name for f in body.files if f.size > s.settings.max_file_bytes]
         if too_big:
             raise HTTPException(413, f"Too large: {', '.join(too_big[:5])}")
+        # Design (Supported file types): the browser skips other files; the server refuses them too, before signing
+        refused = unsupported([f.name for f in body.files])
+        if refused:
+            raise HTTPException(422, refused)
         try:  # design: filenames are cleaned once, on the server, when the browser first reports them
             names = [clean_filename(f.name) for f in body.files]
         except ValueError as e:
             raise HTTPException(422, str(e))
         new = []
         for f, name in zip(body.files, names):
-            row = new_row(s.tenant, name, f.size, f.type, date=f.exifDate, orientation=f.orientation)
+            row = new_row(s.tenant, name, f.size, content_type(name) or f.type, date=f.exifDate, orientation=f.orientation)
             if job.get("fixFrom"):
                 row["addedInFix"] = True  # an abandoned fix removes it again
             new.append(row)
         rows = s.storage.add_rows(job_id, new)
-        return {"rows": [{**r, "uploadForm": s.storage.presign_upload(r["s3Key"], f.size, f.type)}
+        return {"rows": [{**r, "uploadForm": s.storage.presign_upload(r["s3Key"], f.size, r["contentType"])}
                          for r, f in zip(rows, body.files)]}
 
     @app.post("/api/jobs/{job_id}/rows/{n}/uploaded")
@@ -648,6 +659,8 @@ def _routes(app: FastAPI) -> None:
                                      "takes a replacement file.")
         if body.size > s.settings.max_file_bytes:
             raise HTTPException(413, f"Too large: {body.name}")
+        if (refused := unsupported([body.name])):
+            raise HTTPException(422, refused)
         try:
             name = clean_filename(body.name)
         except ValueError as e:
@@ -661,10 +674,10 @@ def _routes(app: FastAPI) -> None:
         if row.get("thumbKey"):
             s.storage.delete_object(row["thumbKey"])
             row["thumbKey"] = None
-        row.update(file=name, fileOriginal=name, size=body.size, contentType=body.type, upload={"s": "pending"},
+        row.update(file=name, fileOriginal=name, size=body.size, contentType=content_type(name) or body.type, upload={"s": "pending"},
                    s3Key=s.storage.staging_key(job_id, n), replacedFor=(row.get("result") or {}).get("run"))
         s.storage.put_row(job_id, row)
-        return {"row": row, "uploadForm": s.storage.presign_upload(row["s3Key"], body.size, body.type)}
+        return {"row": row, "uploadForm": s.storage.presign_upload(row["s3Key"], body.size, row["contentType"])}
 
     @app.post("/api/jobs/{job_id}/rows/{n}/retry-upload")
     def retry_upload(job_id: str, n: int, body: FileSpec, sess: Session = Depends(current_session), s: Services = Depends(svc)):
@@ -689,10 +702,10 @@ def _routes(app: FastAPI) -> None:
         for key in {row.get("s3Key"), row.get("thumbKey")} - {None, ""}:
             s.storage.delete_object(key)  # whatever part of the failed upload arrived, and its old thumbnail
         row["thumbKey"] = None
-        row.update(size=body.size, contentType=body.type or row.get("contentType", ""), upload={"s": "pending"},
+        row.update(size=body.size, contentType=content_type(name) or body.type or row.get("contentType", ""), upload={"s": "pending"},
                    s3Key=s.storage.staging_key(job_id, n))
         s.storage.put_row(job_id, row)
-        return {"row": row, "uploadForm": s.storage.presign_upload(row["s3Key"], body.size, body.type)}
+        return {"row": row, "uploadForm": s.storage.presign_upload(row["s3Key"], body.size, row["contentType"])}
 
     @app.post("/api/jobs/{job_id}/rows/{n}/upload-failed")
     def upload_failed(job_id: str, n: int, sess: Session = Depends(current_session), s: Services = Depends(svc)):

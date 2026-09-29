@@ -73,6 +73,8 @@ export interface RowResult {
   error?: { code: string; detail: string; step: string } | null;
   notices?: { code: string; detail: string }[];
   run?: number;
+  /** The run in which the worker stopped while on this document: a create may have reached CollectionSpace. */
+  interrupted?: number;
 }
 
 /** One entry of the failure catalog (design: Finished jobs and error messages). */

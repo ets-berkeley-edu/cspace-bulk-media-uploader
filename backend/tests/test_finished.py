@@ -311,6 +311,29 @@ def test_a_running_job_whose_worker_stopped_fails_as_worker_stopped(api, login, 
     assert api.delete(f"/api/jobs/{job}/rows/1").status_code == 409
 
 
+def test_a_row_the_worker_stopped_on_before_recording_a_csid_stays_undeletable(api, login, add_uploaded, worker, services):
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_1.jpg"])
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    # the worker died during "create the Media record": nothing recorded, but the create may have reached CollectionSpace
+    row = services.storage.get_row(job, 1)
+    row["result"] = {"state": "In progress", "steps": {}, "run": 1}
+    services.storage.put_row(job, row, guard=False)
+    services.storage.put_run(job, {"run": 1, "startedAt": now() - 900, "outcome": "Running"})
+    services.storage.update_job(job, {"status": "Running", "run": 1, "startedAt": now() - 900, "heartbeatAt": now() - 600})
+    worker.tick()
+    res = api.get(f"/api/jobs/{job}").json()["rows"][0]["result"]
+    assert res["state"] == "Not started" and res["interrupted"] == 1
+    api.post(f"/api/jobs/{job}/fix")
+    r = api.delete(f"/api/jobs/{job}/rows/1")
+    assert r.status_code == 409 and "can't be deleted" in r.json()["detail"]
+    # a later run that finishes the row clears the mark
+    api.post(f"/api/jobs/{job}/schedule")
+    worker.tick()
+    assert "interrupted" not in services.storage.get_row(job, 1)["result"]
+
+
 def test_cancelled_run_is_recorded_in_the_run_history(api, login, add_uploaded, worker, services):
     login()
     job = new_job(api)
@@ -530,3 +553,49 @@ def test_periodic_checks_also_run_between_documents_of_a_running_job(api, login,
     assert "Running" in seen
     assert services.storage.get_job(stale) is None
     assert api.get(f"/api/jobs/{job}").json()["job"]["status"] == "Completed"
+
+
+
+def test_only_a_success_resets_the_failed_request_count(fake):
+    import pytest
+    from bmu.cspace import CSpaceError
+    from conftest import factory
+    c = factory("admin", "admin")
+    c.failures_in_a_row = 3
+    with pytest.raises(CSpaceError):
+        c._request("GET", "media/no-such-csid")  # a 404: an answer about one record, not an outage
+    assert c.failures_in_a_row == 3
+    c.find_objects("15-1234")
+    assert c.failures_in_a_row == 0
+
+
+
+def test_deleting_a_queued_job_first_takes_it_out_of_the_workers_reach(api, login, add_uploaded, worker, services, monkeypatch):
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_1.jpg"])
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    # the worker claims the job between the web app's read and its delete: the delete must not go ahead
+    real = services.storage.begin_delete
+    def claimed_first(*a, **k):
+        assert services.storage.claim_job(job, {"status": "Running"})
+        return real(*a, **k)
+    monkeypatch.setattr(services.storage, "begin_delete", claimed_first)
+    assert api.delete(f"/api/jobs/{job}").status_code == 409
+    assert services.storage.get_job(job)["status"] == "Running" and services.storage.get_rows(job)
+    monkeypatch.undo()
+    # the other way round: once deletion has begun, the worker can't claim it
+    job2 = new_job(api)
+    add_uploaded(job2, ["1-2345_1.jpg"])
+    api.post(f"/api/jobs/{job2}/schedule")
+    assert services.storage.begin_delete(job2, ["Queued"], "any")
+    assert services.storage.get_credential(job2) is None
+    assert not services.storage.claim_job(job2, {"status": "Running"})
+
+
+def test_a_deletion_that_stopped_part_way_is_finished_by_the_sweep(api, login, add_uploaded, worker, services):
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_1.jpg"])
+    services.storage.update_job(job, {"status": "Deleting", "deletingSince": now() - 700})
+    assert worker.sweep_unfinished_deletions() == [job] and services.storage.get_job(job) is None

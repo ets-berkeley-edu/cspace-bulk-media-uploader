@@ -153,11 +153,24 @@ class Worker:
         self.sweep_expired_drafts()
         self.sweep_completed()
         self.sweep_stopped_jobs()
+        self.sweep_unfinished_deletions()
         self.sweep_protected_staged()
         self.storage.sweep_sessions(self.s.session_idle_minutes * 60)
         if now() - self._last_abandoned_sweep > 3600:  # hourly is plenty for a one-day limit
             self._last_abandoned_sweep = now()
             self.sweep_abandoned_uploads()
+
+    def sweep_unfinished_deletions(self) -> list[str]:
+        """A deletion that stopped half way (the web app was stopped after marking the job Deleting) is finished
+        after ten minutes; its sign-in is already gone and the audit entry was not written, so it is written here."""
+        done = []
+        for j in self.storage.list_jobs(self.tenant.key):
+            if j["status"] == "Deleting" and float(j.get("deletingSince") or 0) < now() - 600:
+                self.storage.delete_job_and_files(j["id"])
+                self.storage.audit(self.tenant.key, "Job deleted", "BMU", j["id"],
+                                   f"Finished deleting “{j.get('name') or 'Untitled job'}”, whose deletion had stopped part way.")
+                done.append(j["id"])
+        return done
 
     def sweep_expired_sign_ins(self) -> list[str]:
         """A queued job whose saved sign-in reached its time limit leaves the queue for Drafts (design: State
@@ -408,6 +421,9 @@ class Worker:
             res = r.get("result")
             if res and res.get("state") == "In progress":  # the worker stopped while on this row
                 res["state"] = row_state(res, [n for n, _ in plan_steps(self.tenant, r, job_before)])
+                # A create may have reached CollectionSpace before its CSID was recorded, so the row stays
+                # undeletable (design: Deleting a row) until a later run finishes it.
+                res["interrupted"] = run_no
                 self.storage.put_row(job_id, r, guard=False)
         work = [r for r in rows if r.get("include")]
         states = [((r.get("result") or {}).get("state") or "Not started") for r in work]
@@ -477,6 +493,7 @@ class Worker:
         res = row.get("result") or {}
         res.update(state="In progress", error=None, run=run_no)
         res.pop("notices", None)
+        res.pop("interrupted", None)  # settled again below, or by _finish if this run stops too
         row["result"] = res
         self.storage.put_row(job_id, row, guard=False)
         first_error = ""
@@ -488,6 +505,11 @@ class Worker:
                 st.clear()
                 st.update(s="not needed")  # e.g. the job's group was turned off, or the row left it, while fixing
         for name, deps in plan:
+            # Design: five requests in a row with a 5xx or no answer stop the job; the row in progress is settled
+            # by _finish, and the documents not reached stay not started. Checked before every step, so no step
+            # (the group steps included) is skipped by the count.
+            if getattr(client, "failures_in_a_row", 0) >= MAX_CONSECUTIVE_SERVER_ERRORS:
+                raise JobStop("unavailable", f"{client.failures_in_a_row} requests in a row to CollectionSpace failed")
             st = _step(row, name)
             if st.get("s") in FINISHED:
                 continue  # a rerun never repeats a done step
@@ -532,10 +554,8 @@ class Worker:
                     break
             finally:
                 self.storage.put_row(job_id, row, guard=False)
-            # Design: five requests in a row with a 5xx or no answer stop the job; the row in progress is settled
-            # by _finish, and the documents not reached stay not started.
-            if getattr(client, "failures_in_a_row", 0) >= MAX_CONSECUTIVE_SERVER_ERRORS:
-                raise JobStop("unavailable", f"{client.failures_in_a_row} requests in a row to CollectionSpace failed")
+        if getattr(client, "failures_in_a_row", 0) >= MAX_CONSECUTIVE_SERVER_ERRORS:
+            raise JobStop("unavailable", f"{client.failures_in_a_row} requests in a row to CollectionSpace failed")
         res["state"] = row_state(res)
         if res["state"] == "Done":
             res["error"] = None

@@ -32,6 +32,17 @@ const busy = ref(false);
 let timer: ReturnType<typeof setInterval> | undefined;
 
 const table = tableState();
+// Each expanded job's 10 most important documents, sortable like every table (design: User interface)
+const innerTables = new Map<string, ReturnType<typeof tableState>>();
+function innerTable(id: string) {
+  if (!innerTables.has(id)) innerTables.set(id, tableState());
+  return innerTables.get(id)!;
+}
+function innerRows(id: string): Row[] {
+  return tableView(importantRows(details.get(id)!.rows), innerTable(id), {
+    n: (r) => r.n, name: (r) => r.file, result: (r) => resultState(r), message: (r) => mainMessage(r),
+  }, undefined, false).shown;
+}
 const OUT_RANK: Record<string, number> = { Failed: 0, NeedsAttention: 1, Completed: 2 };
 const newestFirst = computed(() => [...jobs.value].sort((a, b) => (b.finishedAt ?? b.updated) - (a.finishedAt ?? a.updated)));
 const sorted = computed(() => tableView(newestFirst.value, table, {
@@ -201,8 +212,11 @@ function mainMessage(r: Row): string {
                     <template v-if="j.cancelledBy"> · cancelled by {{ j.cancelledBy }}</template></div>
                   <p v-if="!details.get(j.id)" class="muted">Loading…</p>
                   <table v-else class="inner">
+                    <thead><tr><th style="width:64px"></th><SortTh :state="innerTable(j.id)" sort-key="n" label="#" style="width:36px" />
+                      <SortTh :state="innerTable(j.id)" sort-key="name" label="Document" /><SortTh :state="innerTable(j.id)" sort-key="result" label="Result" style="width:110px" />
+                      <SortTh :state="innerTable(j.id)" sort-key="message" label="Problem" /></tr></thead>
                     <tbody>
-                      <tr v-for="r in importantRows(details.get(j.id)!.rows)" :key="r.n">
+                      <tr v-for="r in innerRows(j.id)" :key="r.n">
                         <td style="width:64px"><ThumbCell :job-id="j.id" :row="r" /></td><td style="width:36px">{{ r.n }}</td><td>{{ r.file }}</td>
                         <td style="width:110px"><span class="badge" :class="RESULT_BADGE[resultState(r)]">{{ resultState(r) }}</span></td>
                         <td class="sub">{{ mainMessage(r) }}</td>

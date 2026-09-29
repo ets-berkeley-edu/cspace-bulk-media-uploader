@@ -314,10 +314,20 @@ def test_existing_media_warning_names_the_csid(api, login, add_uploaded, fake):
     assert any(csid in t for t in _checks(row, "warn"))
 
 
-def test_unsupported_file_type_blocks(api, login, add_uploaded):
+def test_unsupported_file_types_are_refused_and_the_row_check_is_a_backstop(api, login, add_uploaded, services):
     login()
     job = new_job(api)
-    row = add_uploaded(job, ["15-1234_a.docx"])[0]
+    r = api.post(f"/api/jobs/{job}/files", json={"files": [{"name": "15-1234_a.docx", "size": 10, "type": "application/x"},
+                                                           {"name": "15-1234_b.jpg", "size": 10, "type": "image/jpeg"}]})
+    assert r.status_code == 422 and "15-1234_a.docx" in r.json()["detail"] and "PDF" in r.json()["detail"]
+    assert services.storage.get_rows(job) == []  # nothing added, nothing signed
+    # the upload is signed for the type its extension says, whatever the browser reported
+    row = api.post(f"/api/jobs/{job}/files", json={"files": [{"name": "15-1234_b.jpg", "size": 10, "type": "text/plain"}]}).json()["rows"][0]
+    assert row["contentType"] == "image/jpeg" and row["uploadForm"]["fields"]["Content-Type"] == "image/jpeg"
+    # backstop: a row with an unsupported type (e.g. from before the check existed) still can't be scheduled
+    stored = services.storage.get_row(job, row["n"])
+    stored["file"] = "15-1234_a.docx"
+    services.storage.put_row(job, stored, guard=False)
     chk = api.post(f"/api/jobs/{job}/check").json()["rows"][0]
     assert any("doesn't accept .docx" in t for t in _checks(chk, "block"))
 

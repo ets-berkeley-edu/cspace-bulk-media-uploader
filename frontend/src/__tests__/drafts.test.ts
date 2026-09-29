@@ -81,3 +81,17 @@ describe("Drafts tab (design: Drafts)", () => {
     w.unmount();
   });
 });
+
+
+describe("expanded job documents (design: every table sorts)", () => {
+  it("sorts the listed documents by a column heading", async () => {
+    const JobDocs = (await import("../components/JobDocs.vue")).default;
+    const mk = (n: number, file: string) => ({ n, file, handling: "link", include: true, checks: [], upload: { s: "done" }, result: null }) as never;
+    const w = mount(JobDocs, { props: { job: { id: "j", name: "x", status: "Queued", rowCount: 2 } as never, rows: [mk(1, "b.jpg"), mk(2, "a.jpg")],
+      tenant, kind: "queue" }, global: { stubs: { ThumbCell: true } } });
+    const names = () => w.findAll("tbody tr").map((t) => t.findAll("td")[2].text());
+    expect(names()).toEqual(["b.jpg", "a.jpg"]);
+    await w.find('button[aria-label="Sort by Document"]').trigger("click");
+    expect(names()).toEqual(["a.jpg", "b.jpg"]);
+  });
+});

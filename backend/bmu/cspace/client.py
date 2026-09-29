@@ -134,7 +134,12 @@ class CSpaceClient:
         except httpx.TransportError as e:  # network problem, DNS, timeout
             self.failures_in_a_row += 1
             raise CSpaceError("unavailable", f"{method} {path}: {e.__class__.__name__}") from e
-        self.failures_in_a_row = self.failures_in_a_row + 1 if r.status_code >= 500 else 0
+        # Only a success resets the count (design: five failed requests in a row); a 4xx is an answer about one
+        # record, neither an outage nor a success, so it leaves the count as it was.
+        if r.status_code >= 500:
+            self.failures_in_a_row += 1
+        elif r.status_code < 400:
+            self.failures_in_a_row = 0
         if r.status_code >= 400:
             raise CSpaceError(_code_for_status(r.status_code), f"{method} {path} returned {r.status_code}", r.status_code)
         return r

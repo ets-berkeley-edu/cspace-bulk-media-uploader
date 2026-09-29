@@ -95,7 +95,7 @@ async function del(j: Job) {
   <div>
     <p class="subtitle">Jobs saved but not scheduled, including incomplete jobs and jobs with problems. Everyone signed in can see and
       edit them, one person at a time; you can take over a draft someone else is editing. A draft that has never run is deleted
-      30 days after it was last changed or saved; a fix of a job that has run is reverted instead, and the job returns to Finished jobs. Checks are re-run against CollectionSpace each time this list is shown.</p>
+      30 days after it was last changed or saved (7 days if it has protected files); a fix of a job that has run is reverted instead, and the job returns to Finished jobs. Checks are re-run against CollectionSpace each time this list is shown.</p>
     <div v-if="error" class="msg msg-block">{{ error }}</div>
     <div v-if="drafts.length" class="list-tools"><button class="link" @click="expandAll(true)">Expand all</button> ·
       <button class="link" @click="expandAll(false)">Collapse all</button></div>

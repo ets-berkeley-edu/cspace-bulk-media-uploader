@@ -253,7 +253,7 @@ def is_locked(row: dict) -> bool:
     so it can't be deleted (design: Deleting a row). A row the worker was on when it stopped counts too: a
     create may have reached CollectionSpace before it was recorded."""
     res = row.get("result") or {}
-    if res.get("state") == "In progress":
+    if res.get("state") == "In progress" or res.get("interrupted"):
         return True
     return any(st.get("csid") and not st.get("found") and not st.get("sameAs")
                for name, st in (res.get("steps") or {}).items() if name != "findObject")
