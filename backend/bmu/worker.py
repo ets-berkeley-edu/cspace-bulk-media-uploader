@@ -68,6 +68,7 @@ class Worker:
         self.client_factory = client_factory
         self.tenant = tenant or load_tenant(settings.tenant)
         self.owner = f"{socket.gethostname()}-{uuid.uuid4().hex[:6]}"
+        self._last_sweep = 0.0
 
     # ---- scheduling ------------------------------------------------------------------------
     def run_forever(self) -> None:
@@ -80,8 +81,25 @@ class Worker:
                 log.exception("worker loop error")
                 time.sleep(self.s.worker_poll_seconds)
 
+    def sweep_expired_drafts(self) -> list[str]:
+        """Delete drafts that have never run once they expire (design: Drafts, Expiry), with their rows and
+        staged files, and write each to the audit log. Drafts of jobs that have run are never deleted."""
+        gone = []
+        for j in self.storage.list_jobs(self.tenant.key):
+            if j["status"] == "Draft" and not j.get("run") and j.get("expiresAt") and j["expiresAt"] < now():
+                if self.storage.update_job(j["id"], {"status": "Expiring"}, expect_status="Draft"):
+                    rows = self.storage.delete_job_and_files(j["id"])
+                    self.storage.audit(self.tenant.key, "Draft expired", "BMU", j["id"],
+                                       f"Deleted “{j.get('name') or 'Untitled job'}” ({len(rows)} documents), "
+                                       f"{self.s.draft_days} days after it was last saved; it had never run.")
+                    gone.append(j["id"])
+        return gone
+
     def tick(self) -> bool:
         """Run the next job for this tenant, if any. Returns True if a job ran."""
+        if now() - self._last_sweep > 60:
+            self._last_sweep = now()
+            self.sweep_expired_drafts()
         if not self.storage.acquire_lock(self.tenant.key, self.owner, self.s.worker_lock_seconds):
             return False  # another worker is running this tenant's job
         try:

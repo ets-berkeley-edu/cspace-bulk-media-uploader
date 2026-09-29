@@ -30,7 +30,7 @@ const sorted = computed(() => [...jobs.value].sort((a, b) => b.updated - a.updat
 
 async function refresh() {
   try {
-    jobs.value = (await api.jobs()).jobs;
+    jobs.value = (await api.jobs()).jobs.filter((j) => j.status !== "Draft"); // drafts are in the Drafts tab
     if (openId.value) openRows.value = (await api.job(openId.value)).rows;
     error.value = "";
   } catch (e) {
@@ -52,7 +52,7 @@ const pct = (j: Job, k: "done" | "failed") => (j.progress?.total ? (100 * (j.pro
 
 <template>
   <div>
-    <p class="subtitle">Jobs for this tenant. Jobs run one at a time, in the order they were scheduled; this list refreshes every few seconds.</p>
+    <p class="subtitle">Scheduled, running and finished jobs for this tenant (drafts are in the Drafts tab). Jobs run one at a time, in the order they were scheduled; this list refreshes every few seconds.</p>
     <div v-if="error" class="msg msg-block">{{ error }}</div>
     <div class="table-wrap">
       <table>
@@ -73,8 +73,7 @@ const pct = (j: Job, k: "done" | "failed") => (j.progress?.total ? (100 * (j.pro
               <td class="hide-narrow">{{ j.rowCount }}</td>
               <td class="hide-narrow">{{ j.scheduledBy || j.createdBy }}</td>
               <td class="hide-narrow">{{ formatTime(j.updated) }}</td>
-              <td><button v-if="['Draft', 'NeedsAttention', 'Failed'].includes(j.status)" @click="emit('open', j.id)">
-                {{ j.status === "Draft" ? "Edit" : "Open to reschedule" }}</button></td>
+              <td><button v-if="['NeedsAttention', 'Failed'].includes(j.status)" @click="emit('open', j.id)">Open to reschedule</button></td>
             </tr>
             <tr v-if="openId === j.id" class="detail">
               <td colspan="7">

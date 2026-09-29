@@ -1,15 +1,15 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { api, ApiError } from "../api";
-import { canPreview, readExifDate, uploadToS3 } from "../lib/files";
+import { canPreview, formatTime, readExifDate, uploadToS3 } from "../lib/files";
 import { jobCounts, worstLevel } from "../lib/status";
 import type { Job, Me, Option, Row, RowChange } from "../types";
 import type { BulkChanges } from "../lib/bulk";
 import BulkPanel from "./BulkPanel.vue";
 import DocumentRow from "./DocumentRow.vue";
 
-const props = defineProps<{ me: Me; jobId: string | null }>();
-const emit = defineEmits<{ scheduled: [job: Job]; opened: [id: string] }>();
+const props = defineProps<{ me: Me; jobId: string | null; mode?: "edit" | "preview"; takeOverSince?: number | null }>();
+const emit = defineEmits<{ scheduled: [job: Job]; opened: [id: string]; close: [] }>();
 
 const job = ref<Job | null>(null);
 const rows = ref<Row[]>([]);
@@ -31,7 +31,12 @@ const drag = ref(false);
 const fileInput = ref<HTMLInputElement | null>(null);
 
 const readonly = computed(() => !!job.value && !["Draft", "NeedsAttention", "Failed"].includes(job.value.status));
-const editable = computed(() => !job.value || job.value.status === "Draft");
+// Drafts have one editor at a time: this page can change the job only while it is the draft's editor.
+const editable = computed(() => !job.value || (job.value.status === "Draft" && !!job.value.editingByYou));
+const lockedBy = computed(() => job.value?.status === "Draft" && job.value.editingBy && !job.value.editingByYou
+  ? { who: job.value.editingBy, since: job.value.editingSince } : null);
+const confirmTakeOver = ref(false);
+const savedNote = ref("");
 const counts = computed(() => jobCounts(rows.value));
 const scheduleBlocked = computed(() => {
   const c = counts.value;
@@ -58,8 +63,43 @@ async function load(id: string | null) {
   job.value = r.job;
   rows.value = r.rows;
   name.value = r.job.name;
+  if (r.job.status === "Draft" && !r.job.editingByYou && props.mode !== "preview") await openForEditing(props.takeOverSince ?? undefined);
   // Design: checks reflect CollectionSpace as it is now. Rows whose lookups are stale are checked again.
   if (!readonly.value) void runChecks(r.rows.map((x) => x.n), false);
+}
+
+/** Become this draft's editor (or take over); if someone else is editing it, the page stays a preview. */
+async function openForEditing(takeOverSince?: number) {
+  if (!job.value) return;
+  try {
+    job.value = await api.openJob(job.value.id, takeOverSince);
+    confirmTakeOver.value = false;
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 409) await refreshJob();
+    else message.value = { cls: "msg-block", text: (e as Error).message };
+  }
+}
+
+async function refreshJob() {
+  if (job.value) job.value = (await api.job(job.value.id)).job;
+}
+
+/** Show an error; if someone took the draft over, the page becomes a read-only preview (nothing is lost). */
+async function failed(e: unknown) {
+  message.value = { cls: "msg-block", text: (e as Error).message };
+  if (e instanceof ApiError && e.status === 409 && (e.detail as { code?: string } | null)?.code === "not_editing") await refreshJob();
+}
+
+async function saveDraft() {
+  if (!job.value) return;
+  try {
+    job.value = await api.saveDraft(job.value.id);
+    const exp = job.value.expiresAt ? new Date(job.value.expiresAt * 1000).toLocaleDateString(undefined, { dateStyle: "medium" }) : "";
+    savedNote.value = `Draft saved at ${formatTime(job.value.lastSavedAt)}` + (counts.value.block ? `; ${counts.value.block} document(s) still need fixing before it can be scheduled` : "")
+      + (exp ? `. Unless it's changed or saved again, it expires on ${exp}.` : ".");
+  } catch (e) {
+    await failed(e);
+  }
 }
 
 /** Check rows against CollectionSpace in the background; the whole job's checks come back. */
@@ -100,7 +140,13 @@ async function rename() {
     if (name.value.trim()) await ensureJob();
     return;
   }
-  if (name.value.trim() !== job.value.name && editable.value) job.value = await api.renameJob(job.value.id, name.value.trim());
+  if (name.value.trim() !== job.value.name && editable.value) {
+    try {
+      job.value = await api.renameJob(job.value.id, name.value.trim());
+    } catch (e) {
+      await failed(e);
+    }
+  }
 }
 
 /** Take the server's copy of a row, keeping the browser's upload progress while a file is still on its way. */
@@ -133,7 +179,7 @@ async function addFiles(list: FileList | File[] | null) {
     };
     await Promise.all([worker(), worker(), worker(), checks]);
   } catch (e) {
-    message.value = { cls: "msg-block", text: (e as Error).message };
+    await failed(e);
   }
 }
 
@@ -162,13 +208,14 @@ async function edit(row: Row, changes: Partial<Row>) {
   try {
     apply(await api.editRow(job.value.id, row.n, changes));
   } catch (e) {
-    message.value = { cls: "msg-block", text: (e as Error).message };
+    await failed(e);
   }
 }
 
 async function remove(row: Row) {
   if (!job.value) return;
-  const r = await api.deleteRow(job.value.id, row.n);
+  const r = await api.deleteRow(job.value.id, row.n).catch(failed);
+  if (!r) return;
   rows.value = rows.value.filter((x) => x.n !== row.n);
   selected.delete(row.n);
   r.others.forEach((o) => replace(o));
@@ -195,7 +242,7 @@ async function bulk(targets: number[], changes: BulkChanges | Partial<Row>, rese
     r.rows.forEach((row) => replace(row));
     if (resetPanel) bulkPanel.value?.reset();
   } catch (e) {
-    message.value = { cls: "msg-block", text: (e as Error).message };
+    await failed(e);
   } finally {
     busy.value = false;
   }
@@ -215,8 +262,8 @@ async function schedule() {
     const j = await api.schedule(job.value.id);
     emit("scheduled", j);
   } catch (e) {
-    message.value = { cls: "msg-block", text: (e as Error).message };
-    if (e instanceof ApiError && e.status === 409) {
+    await failed(e);
+    if (e instanceof ApiError && e.status === 409 && editable.value) {
       // Scheduling checked the whole job again (with fresh permissions): show what it found.
       rows.value = (await api.job(job.value.id)).rows;
       showProblems();
@@ -234,6 +281,20 @@ function toggle(n: number) {
 
 <template>
   <div>
+    <div v-if="lockedBy" class="banner">
+      <strong>Read-only preview.</strong> {{ lockedBy.who }} is editing this draft (since {{ formatTime(lockedBy.since) }}).
+      <template v-if="!confirmTakeOver"> <button @click="confirmTakeOver = true">Take over…</button></template>
+      <div v-else class="msg msg-warn" style="margin-top:6px">
+        If you take over, {{ lockedBy.who }}'s editing ends and their page becomes read-only; everything they changed so far
+        is already saved. <button @click="openForEditing(lockedBy.since)">Take over and edit</button>
+        <button @click="confirmTakeOver = false">Cancel</button>
+      </div>
+    </div>
+    <div v-else-if="job && job.status === 'Draft' && job.editingByYou" class="banner">
+      Editing draft <strong>{{ job.name || "Untitled job" }}</strong>. Others in {{ me.tenant.name }} see it under Drafts as being
+      edited by you. Changes are saved as you make them. Schedule job moves it to the job queue.
+      <button class="link" @click="emit('close')">Close this draft and start a new job</button>
+    </div>
     <div v-if="job && job.status !== 'Draft'" class="msg msg-info">
       This job is {{ job.status }}.
       <template v-if="job.status === 'NeedsAttention' || job.status === 'Failed'">Reschedule reruns only what's unfinished; finished steps are skipped.</template>
@@ -289,9 +350,12 @@ function toggle(n: number) {
         <template v-if="counts.warn"> · {{ counts.warn }} {{ counts.warn === 1 ? "has" : "have" }} warnings</template></span>
       <span class="spacer"></span>
       <button v-if="counts.block || counts.warn" @click="showProblems">Show documents with problems</button>
-      <button class="primary" :disabled="!job || busy || !!scheduleBlocked || readonly"
+      <button v-if="job?.status === 'Draft'" :disabled="!editable || busy" title="Every change is already saved; this confirms it and restarts the draft's 30-day expiry"
+              @click="saveDraft">Save draft</button>
+      <button class="primary" :disabled="!job || busy || !!scheduleBlocked || readonly || (job.status === 'Draft' && !editable)"
               :title="scheduleBlocked || 'Check the whole job again, then add it to the job queue'" @click="schedule">
         {{ job && job.status !== "Draft" ? "Reschedule" : "Schedule job" }}</button>
+      <div v-if="savedNote" class="result">{{ savedNote }}</div>
     </div>
   </div>
 </template>

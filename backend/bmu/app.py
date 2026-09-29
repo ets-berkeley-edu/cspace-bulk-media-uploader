@@ -123,9 +123,27 @@ def _job_or_404(s: Services, sess: Session, job_id: str) -> dict:
     return job
 
 
-def _editable(job: dict) -> None:
+def _editable(job: dict, sess: "Session | None" = None) -> None:
+    """Changes are made to drafts only, and (with sess) only by the session that is editing the draft."""
     if job["status"] != "Draft":
         raise HTTPException(409, f"The job is {job['status']}; only jobs being prepared can be changed.")
+    if sess is not None and job.get("editingSession") != sess.key:
+        who = job.get("editingBy")
+        raise HTTPException(409, {"code": "not_editing", "editingBy": who or "",
+                                  "message": f"{who} is editing this draft now, so your change wasn't saved. Everything you "
+                                             "changed before was saved." if who else "Open this draft for editing first."})
+
+
+def _saved(s: "Services", sess: "Session", job_id: str) -> None:
+    """A change to a draft was saved: record who saved it and restart its expiry."""
+    s.storage.mark_saved(job_id, sess.user, sess.key, s.settings.draft_days)
+
+
+def _public(job: dict, sess: "Session") -> dict:
+    """A job as the API shows it: whether this session is its editor, not the other session's key."""
+    out = {k: v for k, v in job.items() if k != "editingSession"}
+    out["editingByYou"] = bool(job.get("editingSession")) and job.get("editingSession") == sess.key
+    return out
 
 
 def _cspace_http(e: CSpaceError) -> HTTPException:
@@ -163,6 +181,10 @@ class AddFiles(BaseModel):
 class BulkEdit(BaseModel):
     rows: list[int] = Field(min_length=1, max_length=1000)
     changes: dict[str, Any] = Field(min_length=1)
+
+
+class OpenDraft(BaseModel):
+    takeOverSince: float | None = None  # take over from the editor the user was warned about
 
 
 class CheckRequest(BaseModel):
@@ -203,7 +225,13 @@ def _routes(app: FastAPI) -> None:
     def logout(response: Response, request: Request, s: Services = Depends(svc)):
         token = request.cookies.get(COOKIE)
         if token:
-            s.storage.delete_session(_hash(token))
+            key = _hash(token)
+            item = s.storage.get_session(key)
+            if item:  # stop editing any draft this session had open, so others can edit it without taking over
+                for j in s.storage.list_jobs(item["tenant"]):
+                    if j.get("editingSession") == key:
+                        s.storage.close_draft(j["id"], key)
+            s.storage.delete_session(key)
         response.delete_cookie(COOKIE, path="/")
         return {"ok": True}
 
@@ -269,22 +297,52 @@ def _routes(app: FastAPI) -> None:
     # ---- jobs --------------------------------------------------------------------------------
     @app.get("/api/jobs")
     def list_jobs(sess: Session = Depends(current_session), s: Services = Depends(svc)):
-        return {"jobs": s.storage.list_jobs(sess.tenant)}
+        return {"jobs": [_public(j, sess) for j in s.storage.list_jobs(sess.tenant)]}
 
     @app.post("/api/jobs")
     def create_job(body: NewJob, sess: Session = Depends(current_session), s: Services = Depends(svc)):
-        return s.storage.create_job(sess.tenant, sess.user, body.name.strip())
+        return _public(s.storage.create_job(sess.tenant, sess.user, body.name.strip(), sess.key, s.settings.draft_days), sess)
 
     @app.get("/api/jobs/{job_id}")
     def get_job(job_id: str, sess: Session = Depends(current_session), s: Services = Depends(svc)):
         job = _job_or_404(s, sess, job_id)
-        return {"job": job, "rows": s.storage.get_rows(job_id)}
+        return {"job": _public(job, sess), "rows": s.storage.get_rows(job_id)}
+
+    # ---- drafts: open for editing (one editor at a time), take over, close, save -------------
+    @app.post("/api/jobs/{job_id}/open")
+    def open_draft(job_id: str, body: OpenDraft | None = None, sess: Session = Depends(current_session), s: Services = Depends(svc)):
+        job = _job_or_404(s, sess, job_id)
+        if job["status"] != "Draft":
+            raise HTTPException(409, f"The job is {job['status']}; only drafts can be edited.")
+        take = body.takeOverSince if body else None
+        if not s.storage.open_draft(job_id, sess.user, sess.key, take):
+            job = s.storage.get_job(job_id)
+            raise HTTPException(409, {"code": "locked", "editingBy": job.get("editingBy", ""), "editingSince": job.get("editingSince"),
+                                      "message": f"{job.get('editingBy')} is editing this draft."})
+        if take is not None:
+            s.storage.audit(sess.tenant, "Draft taken over", sess.user, job_id,
+                            f"Took over “{job['name']}” from {job.get('editingBy')}.")
+        return _public(s.storage.get_job(job_id), sess)
+
+    @app.post("/api/jobs/{job_id}/close")
+    def close_draft(job_id: str, sess: Session = Depends(current_session), s: Services = Depends(svc)):
+        _job_or_404(s, sess, job_id)
+        s.storage.close_draft(job_id, sess.key)
+        return {"ok": True}
+
+    @app.post("/api/jobs/{job_id}/save")
+    def save_draft(job_id: str, sess: Session = Depends(current_session), s: Services = Depends(svc)):
+        """Save draft: every change is already saved; this confirms it and restarts the draft's expiry."""
+        _editable(_job_or_404(s, sess, job_id), sess)
+        _saved(s, sess, job_id)
+        return _public(s.storage.get_job(job_id), sess)
 
     @app.patch("/api/jobs/{job_id}")
     def rename_job(job_id: str, body: JobPatch, sess: Session = Depends(current_session), s: Services = Depends(svc)):
-        _editable(_job_or_404(s, sess, job_id))
+        _editable(_job_or_404(s, sess, job_id), sess)
         s.storage.update_job(job_id, {"name": body.name.strip()}, expect_status="Draft")
-        return s.storage.get_job(job_id)
+        _saved(s, sess, job_id)
+        return _public(s.storage.get_job(job_id), sess)
 
     @app.delete("/api/jobs/{job_id}")
     def delete_job(job_id: str, sess: Session = Depends(current_session), s: Services = Depends(svc)):
@@ -292,12 +350,9 @@ def _routes(app: FastAPI) -> None:
         rows = s.storage.get_rows(job_id)
         if job["status"] == "Running" or any(is_locked(r) for r in rows):
             raise HTTPException(409, "This job created records in CollectionSpace or is running, so it can't be deleted.")
-        for r in rows:
-            if r.get("s3Key"):
-                s.storage.delete_object(r["s3Key"])
-            s.storage.delete_row(job_id, r["n"])
-        s.storage.delete_credential(job_id)
-        s.storage.jobs.delete_item(Key={"PK": f"JOB#{job_id}", "SK": "META"})
+        if job.get("editingSession") and job["editingSession"] != sess.key:
+            raise HTTPException(409, f"{job.get('editingBy')} is editing this draft, so it can't be deleted.")
+        s.storage.delete_job_and_files(job_id)
         s.storage.audit(sess.tenant, "Job deleted", sess.user, job_id, f"Deleted “{job['name']}” ({len(rows)} documents); it had created nothing in CollectionSpace.")
         return {"ok": True}
 
@@ -305,7 +360,8 @@ def _routes(app: FastAPI) -> None:
     @app.post("/api/jobs/{job_id}/files")
     def add_files(job_id: str, body: AddFiles, sess: Session = Depends(current_session), s: Services = Depends(svc)):
         job = _job_or_404(s, sess, job_id)
-        _editable(job)
+        _editable(job, sess)
+        _saved(s, sess, job_id)
         if job["rowCount"] + len(body.files) > s.settings.max_rows:
             raise HTTPException(413, f"A job holds at most {s.settings.max_rows} documents.")
         too_big = [f.name for f in body.files if f.size > s.settings.max_file_bytes]
@@ -348,7 +404,8 @@ def _routes(app: FastAPI) -> None:
     @app.patch("/api/jobs/{job_id}/rows/{n}")
     def edit_row(job_id: str, n: int, changes: dict[str, Any], sess: Session = Depends(current_session),
                  s: Services = Depends(svc)):
-        _editable(_job_or_404(s, sess, job_id))
+        _editable(_job_or_404(s, sess, job_id), sess)
+        _saved(s, sess, job_id)
         row = s.storage.get_row(job_id, n) or _404()
         others = [r["file"] for r in s.storage.get_rows(job_id) if r["n"] != n] if "file" in changes else []
         try:
@@ -362,7 +419,8 @@ def _routes(app: FastAPI) -> None:
     def bulk_edit(job_id: str, body: BulkEdit, sess: Session = Depends(current_session), s: Services = Depends(svc)):
         """The bulk-change panel: the same changes to many rows. Never applied partially: if any target row
         can't take a change it would actually change, nothing is saved."""
-        _editable(_job_or_404(s, sess, job_id))
+        _editable(_job_or_404(s, sess, job_id), sess)
+        _saved(s, sess, job_id)
         if "file" in body.changes:
             raise HTTPException(422, "Documents are renamed one at a time.")
         by_n = {r["n"]: r for r in s.storage.get_rows(job_id)}
@@ -391,7 +449,8 @@ def _routes(app: FastAPI) -> None:
 
     @app.delete("/api/jobs/{job_id}/rows/{n}")
     def delete_row(job_id: str, n: int, sess: Session = Depends(current_session), s: Services = Depends(svc)):
-        _editable(_job_or_404(s, sess, job_id))
+        _editable(_job_or_404(s, sess, job_id), sess)
+        _saved(s, sess, job_id)
         row = s.storage.get_row(job_id, n) or _404()
         if is_locked(row):
             raise HTTPException(409, "This document already created records in CollectionSpace, so it can't be deleted.")
@@ -416,6 +475,8 @@ def _routes(app: FastAPI) -> None:
         job = _job_or_404(s, sess, job_id)
         if job["status"] not in RESCHEDULABLE:
             raise HTTPException(409, f"The job is {job['status']} and can't be scheduled.")
+        if job["status"] == "Draft":
+            _editable(job, sess)  # only the draft's editor schedules it
         # Roles can change during a session: fetch the permissions again, then check the whole job afresh.
         sess = _refresh_permissions(s, sess)
         result = _recheck(s, sess, job_id, targets=None, refresh=True)
@@ -435,8 +496,9 @@ def _routes(app: FastAPI) -> None:
                                     expect_status=list(RESCHEDULABLE)):
             s.storage.delete_credential(job_id)
             raise HTTPException(409, "The job changed while scheduling; reload and try again.")
+        s.storage.close_draft(job_id, sess.key)  # it leaves Drafts
         s.storage.audit(sess.tenant, "Scheduled", sess.user, job_id, f"Scheduled “{job['name']}” with {len(work)} documents.")
-        return s.storage.get_job(job_id)
+        return _public(s.storage.get_job(job_id), sess)
 
 
 def _refresh_permissions(s: Services, sess: Session) -> Session:
