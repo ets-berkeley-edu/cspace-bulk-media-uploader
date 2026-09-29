@@ -30,7 +30,7 @@ const sorted = computed(() => [...jobs.value].sort((a, b) => b.updated - a.updat
 
 async function refresh() {
   try {
-    jobs.value = (await api.jobs()).jobs.filter((j) => j.status !== "Draft"); // drafts are in the Drafts tab
+    jobs.value = (await api.jobs()).jobs.filter((j) => ["Completed", "NeedsAttention", "Failed"].includes(j.status)); // finished jobs
     if (openId.value) openRows.value = (await api.job(openId.value)).rows;
     error.value = "";
   } catch (e) {
@@ -52,7 +52,7 @@ const pct = (j: Job, k: "done" | "failed") => (j.progress?.total ? (100 * (j.pro
 
 <template>
   <div>
-    <p class="subtitle">Scheduled, running and finished jobs for this tenant (drafts are in the Drafts tab). Jobs run one at a time, in the order they were scheduled; this list refreshes every few seconds.</p>
+    <p class="subtitle">Jobs that have run, newest first, with every document's steps and the CSIDs created. This list refreshes every few seconds.</p>
     <div v-if="error" class="msg msg-block">{{ error }}</div>
     <div class="table-wrap">
       <table>

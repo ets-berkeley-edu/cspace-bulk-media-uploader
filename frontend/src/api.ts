@@ -42,6 +42,10 @@ export const api = {
   openJob: (id: string, takeOverSince?: number) =>
     request<Job>("POST", `/api/jobs/${id}/open`, takeOverSince !== undefined ? { takeOverSince } : {}),
   closeJob: (id: string) => request("POST", `/api/jobs/${id}/close`),
+  /** The job queue: move a queued job (0 = next to run), take it back to Drafts to edit, cancel a run. */
+  moveJob: (id: string, toIndex: number) => request<{ jobs: Job[] }>("POST", `/api/jobs/${id}/move`, { toIndex }),
+  editQueued: (id: string) => request<Job>("POST", `/api/jobs/${id}/edit`),
+  cancelRun: (id: string) => request<Job>("POST", `/api/jobs/${id}/cancel`),
   saveDraft: (id: string) => request<Job>("POST", `/api/jobs/${id}/save`),
   addFiles: (id: string, files: { name: string; size: number; type: string }[]) =>
     request<{ rows: Row[] }>("POST", `/api/jobs/${id}/files`, { files }),

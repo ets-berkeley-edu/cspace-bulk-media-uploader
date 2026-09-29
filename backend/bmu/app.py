@@ -183,6 +183,10 @@ class BulkEdit(BaseModel):
     changes: dict[str, Any] = Field(min_length=1)
 
 
+class MoveJob(BaseModel):
+    toIndex: int = Field(ge=0)  # new place among the queued jobs, 0 = next to run
+
+
 class OpenDraft(BaseModel):
     takeOverSince: float | None = None  # take over from the editor the user was warned about
 
@@ -307,6 +311,45 @@ def _routes(app: FastAPI) -> None:
     def get_job(job_id: str, sess: Session = Depends(current_session), s: Services = Depends(svc)):
         job = _job_or_404(s, sess, job_id)
         return {"job": _public(job, sess), "rows": s.storage.get_rows(job_id)}
+
+    # ---- the job queue (design: The job queue; State rules) ---------------------------------------
+    @app.post("/api/jobs/{job_id}/move")
+    def move_job(job_id: str, body: MoveJob, sess: Session = Depends(current_session), s: Services = Depends(svc)):
+        """Change a queued job's place in the queue. Running jobs stay first and can't be moved."""
+        job = _job_or_404(s, sess, job_id)
+        if job["status"] != "Queued":
+            raise HTTPException(409, "Only queued jobs can be moved.")
+        queued = sorted((j for j in s.storage.list_jobs(sess.tenant) if j["status"] == "Queued"),
+                        key=lambda j: (j.get("queuePos", 0), j.get("queuedAt", 0)))
+        order = [j for j in queued if j["id"] != job_id]
+        order.insert(min(body.toIndex, len(order)), job)
+        for i, j in enumerate(order, start=1):  # positions 1..n in the new order
+            if j.get("queuePos") != i:
+                s.storage.update_job(j["id"], {"queuePos": i}, expect_status="Queued")
+        return {"jobs": [_public(s.storage.get_job(j["id"]), sess) for j in order]}
+
+    @app.post("/api/jobs/{job_id}/edit")
+    def edit_queued(job_id: str, sess: Session = Depends(current_session), s: Services = Depends(svc)):
+        """Edit a queued job: it leaves the queue for Drafts, locked to you, and its saved sign-in is deleted.
+        It goes to the end of the queue when it is scheduled again."""
+        job = _job_or_404(s, sess, job_id)
+        if not s.storage.update_job(job_id, {"status": "Draft", "queuePos": None, "note": "", "lastSavedBy": sess.user,
+                                             "lastSavedAt": now(), "expiresAt": now() + s.settings.draft_days * 86400},
+                                    expect_status="Queued"):
+            raise HTTPException(409, f"The job is {s.storage.get_job(job_id)['status']}; only queued jobs can be edited this way.")
+        s.storage.delete_credential(job_id)
+        s.storage.open_draft(job_id, sess.user, sess.key)
+        s.storage.audit(sess.tenant, "Moved to Drafts", sess.user, job_id,
+                        f"Took “{job['name']}” out of the queue to edit it; its saved sign-in was deleted.")
+        return _public(s.storage.get_job(job_id), sess)
+
+    @app.post("/api/jobs/{job_id}/cancel")
+    def cancel_run(job_id: str, sess: Session = Depends(current_session), s: Services = Depends(svc)):
+        """Cancel run: the worker finishes the document in progress, then stops (Needs attention, cancelled)."""
+        _job_or_404(s, sess, job_id)
+        if not s.storage.update_job(job_id, {"cancelRequested": {"by": sess.user, "at": now()}}, expect_status="Running"):
+            raise HTTPException(409, "Only a running job can be cancelled.")
+        return _public(s.storage.get_job(job_id), sess)
 
     # ---- drafts: open for editing (one editor at a time), take over, close, save -------------
     @app.post("/api/jobs/{job_id}/open")
@@ -491,8 +534,10 @@ def _routes(app: FastAPI) -> None:
         expires = now() + s.settings.credential_hours * 3600
         s.storage.put_credential(job_id, sess.user,
                                  s.crypto.encrypt("job", pw, {"user": sess.user, "job": job_id}), expires)
-        if not s.storage.update_job(job_id, {"status": "Queued", "queuedAt": now(), "scheduledBy": sess.user,
-                                             "credentialExpires": int(expires), "progress": {"total": len(work), "done": 0, "failed": 0}},
+        t = now()
+        if not s.storage.update_job(job_id, {"status": "Queued", "queuedAt": t, "queuePos": t, "scheduledBy": sess.user, "note": "",
+                                             "credentialExpires": int(expires), "checksAtSchedule": result["counts"],
+                                             "progress": {"total": len(work), "done": 0, "failed": 0}},
                                     expect_status=list(RESCHEDULABLE)):
             s.storage.delete_credential(job_id)
             raise HTTPException(409, "The job changed while scheduling; reload and try again.")

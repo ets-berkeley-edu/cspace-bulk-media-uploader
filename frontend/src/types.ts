@@ -129,6 +129,13 @@ export interface Job {
   lastSavedBy?: string;
   lastSavedAt?: number;
   expiresAt?: number;
+  // the job queue (design: The job queue)
+  queuePos?: number | null;
+  checksAtSchedule?: { block: number; warn: number };
+  credentialExpires?: number;
+  cancelRequested?: { by: string; at: number } | null;
+  cancelledBy?: string;
+  currentFile?: string;
 }
 
 export interface Term {

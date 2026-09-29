@@ -81,6 +81,22 @@ class Worker:
                 log.exception("worker loop error")
                 time.sleep(self.s.worker_poll_seconds)
 
+    def sweep_expired_sign_ins(self) -> list[str]:
+        """A queued job whose saved sign-in reached its time limit leaves the queue for Drafts (design: State
+        rules, Sign-in expired while waiting); anyone can schedule it again with their own sign-in."""
+        moved = []
+        for j in self.storage.list_jobs(self.tenant.key):
+            if j["status"] == "Queued" and j.get("credentialExpires") and j["credentialExpires"] < now():
+                if self.storage.update_job(j["id"], {"status": "Draft", "queuePos": None, "lastSavedAt": now(),
+                                                     "expiresAt": now() + self.s.draft_days * 86400,
+                                                     "note": "Sign-in expired while waiting in the queue; schedule it again to run it with your sign-in."},
+                                           expect_status="Queued"):
+                    self.storage.delete_credential(j["id"])
+                    self.storage.audit(self.tenant.key, "Sign-in expired", "BMU", j["id"],
+                                       f"“{j.get('name') or 'Untitled job'}” moved to Drafts: its saved sign-in expired while it waited.")
+                    moved.append(j["id"])
+        return moved
+
     def sweep_expired_drafts(self) -> list[str]:
         """Delete drafts that have never run once they expire (design: Drafts, Expiry), with their rows and
         staged files, and write each to the audit log. Drafts of jobs that have run are never deleted."""
@@ -99,6 +115,7 @@ class Worker:
         """Run the next job for this tenant, if any. Returns True if a job ran."""
         if now() - self._last_sweep > 60:
             self._last_sweep = now()
+            self.sweep_expired_sign_ins()
             self.sweep_expired_drafts()
         if not self.storage.acquire_lock(self.tenant.key, self.owner, self.s.worker_lock_seconds):
             return False  # another worker is running this tenant's job
@@ -158,11 +175,14 @@ class Worker:
             status = "Completed"
         else:
             status = "NeedsAttention"
-        self.storage.update_job(job_id, {"status": status, "code": code, "finishedAt": now(),
-                                         "progress": _progress(rows)})
+        cancel = (self.storage.get_job(job_id) or {}).get("cancelRequested") if code == "cancelled" else None
+        self.storage.update_job(job_id, {"status": status, "code": code, "finishedAt": now(), "progress": _progress(rows),
+                                         "currentRow": None, "currentFile": "", "cancelRequested": None,
+                                         "cancelledBy": (cancel or {}).get("by", "")})
         self.storage.audit(self.tenant.key, "Run", cred["user"], job_id,
                            f"Run {run_no}: {status}" + (f" ({code})" if code else "") +
-                           f" · {states.count('Done')} done, {states.count('Failed') + states.count('Partial')} failed",
+                           f" · {states.count('Done')} done, {states.count('Failed') + states.count('Partial')} failed"
+                           + (f" · cancelled by {cancel.get('by')}" if cancel else ""),
                            created)
 
     def _run_rows(self, job_id: str, client: CSpaceClient, run_no: int, created: list[dict]) -> str:
@@ -174,7 +194,7 @@ class Worker:
             if job.get("cancelRequested"):
                 return "cancelled"
             self.storage.acquire_lock(self.tenant.key, self.owner, self.s.worker_lock_seconds)  # heartbeat
-            self.storage.update_job(job_id, {"currentRow": row["n"]})
+            self.storage.update_job(job_id, {"currentRow": row["n"], "currentFile": row["file"]})
             err = self.run_row(client, job_id, row, run_no, created)
             if err in JOB_LEVEL:
                 raise JobStop(err, f"row {row['n']}: {err}")
