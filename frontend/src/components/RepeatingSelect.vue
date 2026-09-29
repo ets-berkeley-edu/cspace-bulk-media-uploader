@@ -7,7 +7,7 @@ import { computed, ref, watch } from "vue";
 import { displayName } from "../lib/refname";
 import type { Option } from "../types";
 
-const props = defineProps<{ modelValue: string[]; options: Option[]; label: string; word: string; disabled?: boolean }>();
+const props = defineProps<{ modelValue: string[]; options: Option[]; label: string; word: string; disabled?: boolean; preset?: boolean }>();
 const emit = defineEmits<{ "update:modelValue": [value: string[]] }>();
 
 const draft = ref<string[]>([]);
@@ -37,8 +37,8 @@ function remove(j: number) {
 </script>
 
 <template>
-  <div class="field repeating">
-    <span>{{ label }}</span>
+  <div class="field repeating" :class="{ 'field-preset': preset }">
+    <span>{{ label }}<em v-if="preset" class="preset-tag" title="Filled in automatically; it stays until you change it">PRESET</em></span>
     <div v-for="(v, j) in draft" :key="j" class="rep-row">
       <select :value="v" :disabled="disabled" :aria-label="`${label} ${j + 1}`" @change="set(j, ($event.target as HTMLSelectElement).value)">
         <option value="">—</option>

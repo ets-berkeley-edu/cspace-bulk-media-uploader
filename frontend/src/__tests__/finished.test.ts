@@ -66,10 +66,16 @@ describe("results helpers (design: Finished jobs and error messages)", () => {
   });
 
   it("knows what a document whose Media record exists may still change", () => {
-    expect(fixFields(tooLarge)).toEqual({ obj: false, skipLink: false });
+    expect(fixFields(tooLarge)).toEqual({ obj: false, skipLink: false, handling: false });
     expect(canReplaceFile(tooLarge)).toBe(true);
-    expect(fixFields(gone)).toEqual({ obj: true, skipLink: true });
-    expect(fixFields({ ...gone, skipLink: true })).toEqual({ obj: false, skipLink: true });
+    expect(fixFields(gone)).toEqual({ obj: true, skipLink: true, handling: false });
+    expect(fixFields({ ...gone, skipLink: true })).toEqual({ obj: false, skipLink: true, handling: false });
+    // "Create new object + link" found its object already there: the handling may switch to linking (option A)
+    const exists = { ...gone, handling: "create", result: { state: "Partial" as const, steps: {
+      media: { s: "done" as const, csid: "m1" }, createObject: { s: "failed" as const, code: "object_exists" },
+      upload: { s: "done" as const, csid: "b1" }, relMediaObject: { s: "skipped" as const, after: "createObject" },
+      relObjectMedia: { s: "skipped" as const, after: "createObject" } } } };
+    expect(fixFields(exists)).toEqual({ obj: true, skipLink: true, handling: true });
     expect(canReplaceFile(gone)).toBe(false);
     expect(createdSomething(tooLarge)).toBe(true);
     expect(createdSomething(notRun)).toBe(false);
@@ -189,7 +195,7 @@ describe("Finished jobs tab", () => {
     await flushPromises();
     await rowOf(w, "needs a fix").findAll("button").find((b) => b.text() === "Delete")!.trigger("click");
     await flushPromises();
-    expect(w.text()).toContain("Its runs created 2 Media records (1 with its file) and 4 Relations, including 1 unfinished document(s)");
+    expect(w.text()).toContain("Its runs created 2 Media records (1 with its file) and 4 Relations, including 1 unfinished document");
     expect(w.text()).toContain("They stay in CollectionSpace");
     await w.findAll("button").find((b) => b.text() === "Cancel")!.trigger("click");
     await rowOf(w, "needs a fix").findAll("button").find((b) => b.text() === "Fix and reschedule")!.trigger("click");

@@ -1,7 +1,7 @@
 export interface Handling {
   id: string;
   label: string;
-  object: "existing" | "create" | "none";
+  object: "existing" | "create" | "either" | "none"; // either: link to the object, or create it if missing
   id_rule: "object" | "image";
 }
 
@@ -127,6 +127,8 @@ export interface Row {
   objParsed: string;
   img: string;
   parseOk: boolean;
+  /** Fields the user has edited; presets (such as the default language) no longer apply to them. */
+  touched?: string[];
   idnum: string;
   date: string;
   restricted: boolean;

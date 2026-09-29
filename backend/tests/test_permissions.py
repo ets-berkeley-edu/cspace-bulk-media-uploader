@@ -75,3 +75,20 @@ def test_idle_sessions_are_signed_out_but_polling_is_not_activity(api, login, se
     r = api.get("/api/jobs")
     assert r.status_code == 401 and "30 minutes without activity" in r.json()["detail"]
     assert services.storage.get_session(key) is None
+
+
+def test_the_sweep_deletes_idle_and_expired_sessions_with_their_passwords(api, login, services, worker):
+    """Design: expiry deletes the session record. An abandoned tab never makes the request that would notice."""
+    login()
+    login("limited")
+    login("reader")
+    keys = {i["user"]: i["PK"] for i in services.storage.sessions.scan()["Items"]}
+    services.storage.touch_session(keys["admin"], now() - 31 * 60)  # idle
+    services.storage.sessions.update_item(Key={"PK": keys["limited"]}, UpdateExpression="SET expires = :e",
+                                          ExpressionAttributeValues={":e": int(now()) - 10})  # past the 8 hours
+    assert services.storage.get_session(keys["limited"]) is None  # an expired session read is deleted at once
+    assert services.storage.sweep_sessions(30 * 60) == 1
+    left = {i["user"] for i in services.storage.sessions.scan()["Items"]}
+    assert left == {"reader"}
+    worker.sweep()  # the worker's periodic checks include it
+    assert {i["user"] for i in services.storage.sessions.scan()["Items"]} == {"reader"}

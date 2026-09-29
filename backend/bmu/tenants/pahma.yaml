@@ -11,10 +11,14 @@ handling:
     legacy: media+accession
     object: existing          # the object must already exist (legacy alwayscreatemedia = False)
     id_rule: object           # Media identificationNumber = object number
+  - id: linkorcreate
+    label: Link to object (create if missing)
+    object: either            # link to the object if it exists; otherwise create a skeletal Object record
+    id_rule: object
   - id: create
     label: Create new object + link
     legacy: media+create+accession
-    object: create            # a skeletal Object record is created
+    object: create            # always a new skeletal Object record; an object that already exists must be fixed
     id_rule: object
   - id: mediaonly
     label: Media only (no object)

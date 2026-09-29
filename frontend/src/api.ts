@@ -79,7 +79,7 @@ export const api = {
   editQueued: (id: string) => request<Job>("POST", `/api/jobs/${id}/edit`),
   cancelRun: (id: string) => request<Job>("POST", `/api/jobs/${id}/cancel`),
   saveDraft: (id: string) => request<Job>("POST", `/api/jobs/${id}/save`),
-  addFiles: (id: string, files: { name: string; size: number; type: string }[]) =>
+  addFiles: (id: string, files: { name: string; size: number; type: string; exifDate?: string; orientation?: string }[]) =>
     request<{ rows: Row[] }>("POST", `/api/jobs/${id}/files`, { files }),
   uploaded: (id: string, n: number) => request<RowChange>("POST", `/api/jobs/${id}/rows/${n}/uploaded`),
   uploadFailed: (id: string, n: number) => request<RowChange>("POST", `/api/jobs/${id}/rows/${n}/upload-failed`),

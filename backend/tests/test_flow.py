@@ -1,4 +1,5 @@
 """End-to-end run path against the simulated CollectionSpace and mocked AWS."""
+from bmu.storage import now
 
 
 def new_job(api, name="Test job"):
@@ -802,3 +803,91 @@ def test_abandoned_staged_files_are_deleted_after_a_day(api, login, add_uploaded
     monkeypatch.setattr(worker.s, "abandoned_upload_hours", -1)
     assert worker.sweep_abandoned_uploads() == [stray]
     assert services.storage.head_object(kept) is not None and services.storage.head_object(stray) is None
+
+
+# ---- object behavior per handling (design: Handling per document) --------------------------------------
+def test_editor_checks_for_each_object_behavior(api, login, add_uploaded):
+    """Link: exactly one object. Create new: none may exist yet. Link or create: at most one."""
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["12-5678_1.jpg", "9-9999_1.jpg", "20-0777_1.jpg", "12-5678_2.jpg", "9-9999_2.jpg", "20-0778_1.jpg"])
+    for n in (1, 2, 3):
+        api.patch(f"/api/jobs/{job}/rows/{n}", json={"handling": "create"})
+    for n in (4, 5, 6):
+        api.patch(f"/api/jobs/{job}/rows/{n}", json={"handling": "linkorcreate"})
+    by = {r["file"]: [c for c in r["checks"] if c["level"] == "block"] for r in api.post(f"/api/jobs/{job}/check").json()["rows"]}
+    exists = by["12-5678_1.jpg"][0]["text"]
+    assert "Object 12-5678 already exists" in exists and "“Link to existing object” or “Link to object (create if missing)”" in exists
+    assert "already exists" in by["9-9999_1.jpg"][0]["text"]  # several existing objects: still "already exists"
+    assert by["20-0777_1.jpg"] == []  # create: nothing there yet
+    assert by["12-5678_2.jpg"] == []  # link or create: links to the one object
+    assert "matches 2 objects" in by["9-9999_2.jpg"][0]["text"]
+    assert by["20-0778_1.jpg"] == []  # link or create: creates it
+    tenant = api.get("/api/me").json()["tenant"]
+    assert [h["label"] for h in tenant["handling"]] == ["Link to existing object", "Link to object (create if missing)",
+                                                        "Create new object + link", "Media only (no object)"]
+
+
+def test_link_or_create_needs_create_permission_only_when_the_object_is_missing(api, login, add_uploaded):
+    login("limited")
+    job = new_job(api)
+    add_uploaded(job, ["12-5678_1.jpg", "20-0779_1.jpg"])
+    for n in (1, 2):
+        api.patch(f"/api/jobs/{job}/rows/{n}", json={"handling": "linkorcreate"})
+    by = {r["file"]: [c["text"] for c in r["checks"] if c["level"] == "block"] for r in api.post(f"/api/jobs/{job}/check").json()["rows"]}
+    assert by["12-5678_1.jpg"] == []
+    assert len(by["20-0779_1.jpg"]) == 1 and "can't create Object records" in by["20-0779_1.jpg"][0]
+
+
+# ---- writes that must happen together (design: State rules; Deleting a row) ------------------------------
+def test_a_row_is_deleted_only_while_the_job_is_still_this_sessions_draft(api, login, add_uploaded, services):
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_a.jpg", "15-1234_b.jpg"])
+    row = services.storage.get_row(job, 1)
+    assert services.storage.delete_row_if_unchanged(job, row, "another-session") is False  # someone else is editing
+    assert services.storage.get_row(job, 1) is not None
+    row["v"] = int(row.get("v", 0)) + 5  # a stale copy: the row changed since it was read
+    assert services.storage.delete_row_if_unchanged(job, row, services.storage.get_job(job)["editingSession"]) is False
+    assert services.storage.get_row(job, 1) is not None and services.storage.get_job(job)["rowCount"] == 2
+    assert api.delete(f"/api/jobs/{job}/rows/1").status_code == 200
+    assert services.storage.get_row(job, 1) is None and services.storage.get_job(job)["rowCount"] == 1
+
+
+def test_scheduling_stores_the_sign_in_and_queues_the_job_together(api, login, add_uploaded, services):
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_a.jpg"])
+    session = services.storage.get_job(job)["editingSession"]
+    # the job is no longer a draft this session edits: nothing is stored
+    assert not services.storage.queue_with_credential(job, "admin", "tok", now() + 60, {"status": "Queued"}, ["Draft"], "other")
+    assert services.storage.get_credential(job) is None and services.storage.get_job(job)["status"] == "Draft"
+    assert services.storage.queue_with_credential(job, "admin", "tok", now() + 60, {"status": "Queued"}, ["Draft"], session)
+    assert services.storage.get_credential(job)["token"] == "tok" and services.storage.get_job(job)["status"] == "Queued"
+
+
+def test_the_worker_claims_a_job_only_with_its_sign_in(api, login, add_uploaded, services):
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_a.jpg"])
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    services.storage.delete_credential(job)
+    assert services.storage.claim_job(job, {"status": "Running"}) is False
+    assert services.storage.get_job(job)["status"] == "Queued"
+
+
+def test_the_exif_date_and_orientation_arrive_with_the_documents(api, login):
+    """Design: the browser reads the capture date and orientation before the upload; the date is pre-filled."""
+    login()
+    job = new_job(api)
+    r = api.post(f"/api/jobs/{job}/files", json={"files": [
+        {"name": "15-1234_a.jpg", "size": 10, "type": "image/jpeg", "exifDate": "2024-05-17", "orientation": "portrait"},
+        {"name": "15-1234_b.wav", "size": 10, "type": "audio/wav"}]})
+    assert r.status_code == 200
+    a, b = r.json()["rows"]
+    assert a["date"] == "2024-05-17" and a["orientation"] == "portrait" and b["date"] == "" and b["orientation"] == ""
+    rows = {x["file"]: x for x in api.post(f"/api/jobs/{job}/check").json()["rows"]}
+    assert {"level": "info", "text": "Orientation: portrait."} in rows["15-1234_a.jpg"]["checks"]
+    assert not any("Orientation" in c["text"] for c in rows["15-1234_b.wav"]["checks"])
+    bad = api.post(f"/api/jobs/{job}/files", json={"files": [{"name": "x.jpg", "size": 1, "exifDate": "May 17"}]})
+    assert bad.status_code == 422

@@ -7,6 +7,7 @@
   --bg-success: #eaf3de; --text-success: #27500a;
   --bg-warning: #faeeda; --text-warning: #854f0b;
   --bg-danger: #fbe7e5; --text-danger: #8a1f14;
+  --bg-preset: #f1ecf9; --text-preset: #4b2a7d;
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
@@ -15,6 +16,7 @@
     --text-primary: #ecebe6; --text-secondary: #b9b8b1; --text-muted: #8d8c85;
     --bg-accent: #16324d; --text-accent: #a9cdf2; --bg-success: #22361a; --text-success: #b7d99a;
     --bg-warning: #3d2e13; --text-warning: #f0c983; --bg-danger: #43201c; --text-danger: #f3b0a8;
+    --bg-preset: #2e2540; --text-preset: #cdb8f0;
   }
 }
 * { box-sizing: border-box; }
@@ -158,6 +160,7 @@ div.field > label > span { display: block; margin-bottom: 2px; }
 .schedule-bar .result { flex-basis: 100%; font-size: 12px; color: var(--text-secondary); }
 .lock { font-size: 11px; color: var(--text-warning); font-weight: 600; }
 .soon { color: var(--text-warning); font-weight: 600; }
+.sub.note { color: var(--text-warning); }
 .actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
 
 /* job queue */
@@ -215,3 +218,8 @@ table.inner td { background: var(--surface-2); }
 .lightbox img { max-width: 100%; max-height: 75vh; display: block; margin: 0 auto; }
 .lightbox figcaption { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 8px; font-size: 13px; }
 .login-notice { max-width: 380px; margin: 8vh auto -6vh; }
+
+/* PRESET: a value filled in automatically (the tenant's default language) that the user hasn't changed. */
+.field-preset > span { color: var(--text-preset); }
+.preset-tag { font-size: 9px; font-weight: 600; font-style: normal; padding: 1px 5px; border-radius: 10px; margin-left: 4px;
+  background: var(--bg-preset); color: var(--text-preset); }

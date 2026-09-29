@@ -8,8 +8,9 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { api } from "../api";
 import { formatTime } from "../lib/files";
-import { countsText, createdText, failureOf, importantRows, loadFailures, needsFix, OUTCOME, RESULT_BADGE, resultState, rowCodes } from "../lib/results";
+import { countsText, failureOf, importantRows, loadFailures, needsFix, OUTCOME, RESULT_BADGE, resultState, rowCodes } from "../lib/results";
 import type { Created, Job, Row, Run, TenantInfo } from "../types";
+import DeleteJobConfirm from "./DeleteJobConfirm.vue";
 import JobResults from "./JobResults.vue";
 import ThumbCell from "./ThumbCell.vue";
 import SortTh from "./SortTh.vue";
@@ -146,14 +147,8 @@ function mainMessage(r: Row): string {
       <div class="schedule-bar">
         <span class="spacer"></span>
         <template v-if="open.status !== 'Completed'">
-          <div v-if="confirmDelete === open.id" class="msg msg-warn delete-confirm">
-            <template v-if="details.get(open.id)?.created && (details.get(open.id)!.created.media || details.get(open.id)!.created.objects)">
-              Delete this job from the BMU? Its runs created {{ createdText(details.get(open.id)!.created) }}<template v-if="details.get(open.id)!.created.unfinished">, including {{ details.get(open.id)!.created.unfinished }} unfinished document(s)</template>.
-              They stay in CollectionSpace; the BMU never deletes records. The audit log keeps every CSID.
-            </template>
-            <template v-else>Delete this job? It created nothing in CollectionSpace.</template>
-            <button @click="del(open)">Delete job</button> <button @click="confirmDelete = null">Cancel</button>
-          </div>
+          <DeleteJobConfirm v-if="confirmDelete === open.id" :job="open" :created="details.get(open.id)?.created"
+                            @confirm="del(open)" @cancel="confirmDelete = null" />
           <template v-else>
             <button class="primary" :disabled="busy" :title="fixTitle(open)" @click="fix(open)">{{ fixLabel(open) }}</button>
             <button @click="askDelete(open)">Delete</button>
@@ -188,14 +183,8 @@ function mainMessage(r: Row): string {
                 <td>{{ countsText(j.counts) }}</td>
                 <td class="hide-narrow" :title="`run by ${j.runBy || j.scheduledBy || '—'}`">{{ formatTime(j.finishedAt) }}<div class="sub">by {{ j.runBy || j.scheduledBy || "—" }}</div></td>
                 <td>
-                  <div v-if="confirmDelete === j.id" class="msg msg-warn delete-confirm">
-                    <template v-if="details.get(j.id)?.created && (details.get(j.id)!.created.media || details.get(j.id)!.created.objects)">
-                      Delete this job from the BMU? Its runs created {{ createdText(details.get(j.id)!.created) }}<template v-if="details.get(j.id)!.created.unfinished">, including {{ details.get(j.id)!.created.unfinished }} unfinished document(s)</template>.
-                      They stay in CollectionSpace; the BMU never deletes records. The audit log keeps every CSID.
-                    </template>
-                    <template v-else>Delete this job? It created nothing in CollectionSpace.</template>
-                    <button @click="del(j)">Delete job</button> <button @click="confirmDelete = null">Cancel</button>
-                  </div>
+                  <DeleteJobConfirm v-if="confirmDelete === j.id" :job="j" :created="details.get(j.id)?.created"
+                                    @confirm="del(j)" @cancel="confirmDelete = null" />
                   <div v-else class="actions">
                     <button @click="viewResults(j)">View results</button>
                     <template v-if="j.status !== 'Completed'">

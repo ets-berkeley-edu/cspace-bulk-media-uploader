@@ -119,6 +119,9 @@ class CSpaceClient:
         self._http = http or httpx.Client(timeout=timeout, follow_redirects=False)
         self._auth = httpx.BasicAuth(username, password)
         self._headers = {"User-Agent": agent}
+        # Consecutive requests that got a 5xx or no answer at all; any other answer resets it. The worker stops a
+        # job as "unavailable" when it reaches five (design: Job-level failures).
+        self.failures_in_a_row = 0
 
     def close(self) -> None:
         self._http.close()
@@ -129,7 +132,9 @@ class CSpaceClient:
             headers = {**self._headers, **kw.pop("headers", {})}
             r = self._http.request(method, self.base + path, auth=self._auth, headers=headers, **kw)
         except httpx.TransportError as e:  # network problem, DNS, timeout
+            self.failures_in_a_row += 1
             raise CSpaceError("unavailable", f"{method} {path}: {e.__class__.__name__}") from e
+        self.failures_in_a_row = self.failures_in_a_row + 1 if r.status_code >= 500 else 0
         if r.status_code >= 400:
             raise CSpaceError(_code_for_status(r.status_code), f"{method} {path} returned {r.status_code}", r.status_code)
         return r

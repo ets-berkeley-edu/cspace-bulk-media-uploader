@@ -1,22 +1,14 @@
-/** Browser-side file helpers: EXIF capture date, previews and the direct upload to S3. */
+/** Browser-side file helpers: previews and the direct upload to S3. (EXIF: see imageinfo.ts.) */
 
-const EXIF_DATE = /(\d{4}):(\d{2}):(\d{2}) (\d{2}):(\d{2}):(\d{2})/;
-
-/** Find an EXIF date (YYYY:MM:DD HH:MM:SS) near the start of the file; "" if none. Returns YYYY-MM-DD. */
-export async function readExifDate(file: Blob): Promise<string> {
-  try {
-    const buf = new Uint8Array(await file.slice(0, 256 * 1024).arrayBuffer());
-    return exifDateFromBytes(buf);
-  } catch {
-    return "";
-  }
-}
-
-export function exifDateFromBytes(bytes: Uint8Array): string {
-  let text = "";
-  for (let i = 0; i < bytes.length; i += 8192) text += String.fromCharCode(...bytes.subarray(i, i + 8192));
-  const m = EXIF_DATE.exec(text);
-  return m ? `${m[1]}-${m[2]}-${m[3]}` : "";
+/** Run fn over items, at most limit at a time, keeping the results in order. */
+export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const lane = async () => {
+    for (let i = next++; i < items.length; i = next++) out[i] = await fn(items[i]);
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, lane));
+  return out;
 }
 
 export function canPreview(file: File): boolean {

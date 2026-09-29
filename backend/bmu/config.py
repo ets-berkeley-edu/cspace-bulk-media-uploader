@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     heartbeat_stale_seconds: float = 300.0  # a Running job whose heartbeat is older stops as "worker_stopped"
     static_dir: str | None = None  # serve the built Vue app from here, if set
 
+    def draft_days_for(self, job: dict | None) -> int:
+        """A draft's expiry period: 7 days if any of its documents is a protected file (excluded ones too), 30
+        otherwise (design: Drafts, Expiry)."""
+        return self.protected_draft_days if (job or {}).get("protectedCount") else self.draft_days
+
 
 @lru_cache
 def get_settings() -> Settings:

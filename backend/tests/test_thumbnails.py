@@ -93,3 +93,16 @@ def test_after_the_upload_the_thumbnail_comes_from_collectionspace(api, login, s
     assert after["thumbKey"] is None and services.storage.head_object(key) is None  # deleted with the staged file
     got = api.get(f"/api/jobs/{job}/rows/{row['n']}/thumbnail?size=large")
     assert got.status_code == 200 and got.content == data  # the simulator serves the file as its derivative
+
+
+def test_deleting_a_document_deletes_its_thumbnail(api, login, add_uploaded, services):
+    """Design (Deleting a row): the row item, its staged file and its thumbnail."""
+    login()
+    job = api.post("/api/jobs", json={"name": "t"}).json()["id"]
+    row = add_uploaded(job, ["15-1234_a.jpg"])[0]
+    assert services.storage.store_thumbnail(job, row["n"], make_thumbnail(jpeg_with_exif((100, 100))))
+    got = services.storage.get_row(job, row["n"])
+    thumb, staged = got["thumbKey"], got["s3Key"]
+    assert services.storage.head_object(thumb) and services.storage.head_object(staged)
+    assert api.delete(f"/api/jobs/{job}/rows/{row['n']}").status_code == 200
+    assert services.storage.head_object(thumb) is None and services.storage.head_object(staged) is None

@@ -4,7 +4,7 @@
  */
 import { ref } from "vue";
 import { api } from "../api";
-import type { Created, Failure, Job, ResultCounts, Row, Step } from "../types";
+import type { Created, Failure, Handling, Job, ResultCounts, Row, Step } from "../types";
 
 // ---- the failure catalog, loaded once and shared ----------------------------------------------------
 export const failures = ref<Record<string, Failure>>({});
@@ -96,7 +96,7 @@ export function importantRows(rows: Row[], n = 10): Row[] {
 
 // ---- steps ----------------------------------------------------------------------------------------
 export const STEP_LABEL: Record<string, string> = {
-  media: "Create Media record", findObject: "Find object", createObject: "Find or create object",
+  media: "Create Media record", findObject: "Find object", createObject: "Create object", findOrCreateObject: "Find or create object",
   upload: "Upload file (creates the Blob)", relMediaObject: "Relate Media → Object", relObjectMedia: "Relate Object → Media",
   addToGroup: "Add object to the job's group",
 };
@@ -112,7 +112,7 @@ export function stepNote(key: string, st: Step): string {
   if (st.s === "done" && st.sameAs) return `added by document ${st.sameAs}`;
   if (st.s === "not needed") return key === "addToGroup" ? "not needed: left out of the group" : "not needed: you stopped linking this document";
   if (st.s === "not run") return "not run";
-  if (st.s === "done" && st.found) return key === "findObject" || key === "createObject" ? "found" : "existing";
+  if (st.s === "done" && st.found) return OBJ_STEPS.includes(key) ? "found" : "existing";
   return "";
 }
 
@@ -128,7 +128,7 @@ export function createdText(c: Created): string {
 
 // ---- fixing a job after a run: what each document may still change (mirrors backend rows.fix_fields) ------
 const FINISHED_STEP = ["done", "not needed"];
-const OBJ_STEPS = ["findObject", "createObject"];
+const OBJ_STEPS = ["findObject", "createObject", "findOrCreateObject"];
 const REL_STEPS = ["relMediaObject", "relObjectMedia"];
 const openSteps = (r: Row, names: string[]) =>
   names.filter((n) => r.result?.steps?.[n] && !FINISHED_STEP.includes(r.result.steps[n].s));
@@ -149,17 +149,26 @@ export function createdSomething(r: Row): boolean {
   return Object.entries(r.result?.steps ?? {}).some(([k, s]) => k !== "findObject" && !!s.csid && !s.found && !s.sameAs);
 }
 
-/** What a document whose Media record exists may still change: only what the rerun needs. */
-export function fixFields(r: Row): { obj: boolean; skipLink: boolean } {
+/**
+ * What a document whose Media record exists may still change: only what the rerun needs. After object_exists
+ * ("Create new object + link" found the object already there) that includes the handling, but only to one that
+ * links to an existing object (RELINK_OBJECT).
+ */
+export function fixFields(r: Row): { obj: boolean; skipLink: boolean; handling: boolean } {
   const steps = r.result?.steps ?? {};
   const failed = (names: string[]) => names.filter((n) => steps[n]?.s === "failed").map((n) => steps[n].code ?? "");
   const obj = failed(OBJ_STEPS);
   const rel = failed(REL_STEPS);
   return {
-    obj: obj.some((c) => ["object_gone", "object_ambiguous", "object_rejected"].includes(c)) && !r.skipLink,
-    skipLink: openSteps(r, REL_STEPS).length > 0 && (obj.some((c) => c === "object_gone" || c === "object_ambiguous") || rel.includes("no_permission")),
+    obj: obj.some((c) => ["object_gone", "object_ambiguous", "object_rejected", "object_exists"].includes(c)) && !r.skipLink,
+    skipLink: openSteps(r, REL_STEPS).length > 0
+      && (obj.some((c) => ["object_gone", "object_ambiguous", "object_exists"].includes(c)) || rel.includes("no_permission")),
+    handling: obj.includes("object_exists") && !r.skipLink,
   };
 }
+
+/** The object behaviors a document can switch to after object_exists: those that link to the existing object. */
+export const RELINK_OBJECT: Handling["object"][] = ["existing", "either"];
 
 /** A replacement file is for a document whose Media record exists and whose file didn't reach CollectionSpace. */
 export function canReplaceFile(r: Row): boolean {

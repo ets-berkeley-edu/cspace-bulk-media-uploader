@@ -26,8 +26,10 @@ export function rowStatus(r: Row, tenant: TenantInfo, checking = false): Badge {
   const h = tenant.handling.find((x) => x.id === r.handling);
   if (!h || h.object === "none") return { text: "Not linked", cls: "b-accent" };
   const found = r.lookups?.object?.value === r.obj ? r.lookups.object.csids.length : undefined;
-  if (h.object === "create") return found ? { text: "Exists — will link", cls: "b-ok" } : { text: "Will create object", cls: "b-accent" };
-  return found === undefined ? { text: "Not checked yet", cls: "b-muted" } : { text: "Found — will link", cls: "b-ok" };
+  // An existing object blocks "create" (Needs fixing, above); "either" links to it, or creates it when missing
+  if (found === undefined) return { text: "Not checked yet", cls: "b-muted" };
+  if (h.object === "create" || (h.object === "either" && !found)) return { text: "Will create object", cls: "b-accent" };
+  return { text: "Found — will link", cls: "b-ok" };
 }
 
 export function worstLevel(r: Row): "block" | "warn" | "ok" {

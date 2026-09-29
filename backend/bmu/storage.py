@@ -117,6 +117,13 @@ class Storage:
                 if e.response["Error"]["Code"] != "ResourceInUseException":
                     raise
             self.dynamodb.Table(name).wait_until_exists()
+        # Sessions and saved sign-ins also expire through DynamoDB's TTL, a backstop to the worker's sweep
+        for name in (f"{p}-sessions", f"{p}-credentials"):
+            try:
+                self.dynamodb.meta.client.update_time_to_live(
+                    TableName=name, TimeToLiveSpecification={"Enabled": True, "AttributeName": "expires"})
+            except ClientError:
+                pass  # already enabled, or a local stand-in without TTL
         try:
             self.s3.head_bucket(Bucket=self.s.s3_bucket)
         except ClientError:
@@ -140,9 +147,29 @@ class Storage:
 
     def get_session(self, key: str) -> dict | None:
         item = self.sessions.get_item(Key={"PK": key}).get("Item")
-        if not item or _clean(item).get("expires", 0) < now():
+        if not item:
+            return None
+        if _clean(item).get("expires", 0) < now():
+            self.delete_session(key)  # past the absolute limit: the encrypted password goes with it
             return None
         return _clean(item)
+
+    def sweep_sessions(self, idle_seconds: float) -> int:
+        """Delete sessions past their absolute limit or idle too long, with their encrypted passwords (design:
+        Sessions): an abandoned browser tab never comes back to trigger the check itself."""
+        t, gone = now(), 0
+        kw: dict[str, Any] = {"ProjectionExpression": "PK, expires, lastSeen"}
+        while True:
+            page = self.sessions.scan(**kw)
+            for item in page.get("Items", []):
+                it = _clean(item)
+                last = it.get("lastSeen") or 0
+                if it.get("expires", 0) < t or (last and t - last > idle_seconds):
+                    self.delete_session(it["PK"])
+                    gone += 1
+            if "LastEvaluatedKey" not in page:
+                return gone
+            kw["ExclusiveStartKey"] = page["LastEvaluatedKey"]
 
     def update_session_perms(self, key: str, perms: dict) -> None:
         self.sessions.update_item(Key={"PK": key}, UpdateExpression="SET perms = :p",
@@ -459,6 +486,62 @@ class Storage:
                 raise
 
     # ---- job credentials ------------------------------------------------------------------
+    # ---- writes that must happen together (design: State rules; Deleting a row) ------------------------
+    def _transact(self, items: list[dict]) -> bool:
+        """Run a DynamoDB transaction: all of it or none. False if a condition failed. The resource's client
+        takes plain Python values (it converts them itself), like the Table methods."""
+        try:
+            self.dynamodb.meta.client.transact_write_items(TransactItems=items)
+            return True
+        except ClientError as e:
+            if e.response["Error"]["Code"] in ("TransactionCanceledException", "ConditionalCheckFailedException"):
+                return False
+            raise
+
+    def _job_update(self, job_id: str, fields: dict, condition: str, cond_values: dict, cond_names: dict | None = None) -> dict:
+        fields = {**fields, "updated": now()}
+        return {"Update": {
+            "TableName": self.jobs.name, "Key": _dyn({"PK": f"JOB#{job_id}", "SK": "META"}),
+            "UpdateExpression": "SET " + ", ".join(f"#f_{k} = :f_{k}" for k in fields),
+            "ConditionExpression": condition,
+            "ExpressionAttributeNames": {**{f"#f_{k}": k for k in fields}, **(cond_names or {})},
+            "ExpressionAttributeValues": _dyn({**{f":f_{k}": v for k, v in fields.items()}, **cond_values})}}
+
+    def queue_with_credential(self, job_id: str, user: str, token: str, expires: float, fields: dict,
+                              statuses: list[str], session: str) -> bool:
+        """Scheduling: store the job's encrypted sign-in and set it to Queued in one write, only if it is still in
+        one of these statuses and still being edited by this session (design: State rules)."""
+        allowed = ", ".join(f":c_s{i}" for i in range(len(statuses)))
+        update = self._job_update(job_id, fields, f"#c_status IN ({allowed}) AND #c_ed = :c_ed",
+                                  {**{f":c_s{i}": st for i, st in enumerate(statuses)}, ":c_ed": session},
+                                  {"#c_status": "status", "#c_ed": "editingSession"})
+        put = {"Put": {"TableName": self.credentials.name,
+                       "Item": _dyn({"PK": f"JOB#{job_id}", "user": user, "token": token, "expires": int(expires)})}}
+        return self._transact([put, update])
+
+    def claim_job(self, job_id: str, fields: dict) -> bool:
+        """The worker claims a queued job, only if it is still Queued and its sign-in is still stored and valid."""
+        check = {"ConditionCheck": {"TableName": self.credentials.name, "Key": _dyn({"PK": f"JOB#{job_id}"}),
+                                    "ConditionExpression": "attribute_exists(PK) AND #e > :now",
+                                    "ExpressionAttributeNames": {"#e": "expires"}, "ExpressionAttributeValues": _dyn({":now": int(now())})}}
+        update = self._job_update(job_id, fields, "#c_status = :c_q", {":c_q": "Queued"}, {"#c_status": "status"})
+        return self._transact([check, update])
+
+    def delete_row_if_unchanged(self, job_id: str, row: dict, session: str) -> bool:
+        """Delete a row that was checked as deletable, only if it hasn't changed since (same version) and the
+        job is still a draft this session is editing (design: Deleting a row)."""
+        v = int(row.get("v", 0))
+        cond = "attribute_exists(PK) AND " + ("attribute_not_exists(#v)" if v == 0 else "#v = :v")
+        delete = {"Delete": {"TableName": self.jobs.name, "Key": _dyn({"PK": f"JOB#{job_id}", "SK": f"ROW#{row['n']:05d}"}),
+                             "ConditionExpression": cond, "ExpressionAttributeNames": {"#v": "v"},
+                             **({"ExpressionAttributeValues": _dyn({":v": v})} if v else {})}}
+        update = {"Update": {"TableName": self.jobs.name, "Key": _dyn({"PK": f"JOB#{job_id}", "SK": "META"}),
+                             "UpdateExpression": "SET rowCount = rowCount - :one, #u = :t",
+                             "ConditionExpression": "#s = :draft AND editingSession = :ed",
+                             "ExpressionAttributeNames": {"#u": "updated", "#s": "status"},
+                             "ExpressionAttributeValues": _dyn({":one": 1, ":t": now(), ":draft": "Draft", ":ed": session})}}
+        return self._transact([delete, update])
+
     def put_credential(self, job_id: str, user: str, token: str, expires: float) -> None:
         self.credentials.put_item(Item=_dyn({"PK": f"JOB#{job_id}", "user": user, "token": token, "expires": int(expires)}))
 

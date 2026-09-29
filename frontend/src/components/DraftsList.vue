@@ -7,7 +7,8 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { api } from "../api";
 import { formatTime } from "../lib/files";
 import { tableState, tableView } from "../lib/table";
-import type { Job, Row, TenantInfo } from "../types";
+import type { Created, Job, Row, TenantInfo } from "../types";
+import DeleteJobConfirm from "./DeleteJobConfirm.vue";
 import JobDocs from "./JobDocs.vue";
 import SortTh from "./SortTh.vue";
 
@@ -72,6 +73,13 @@ function countsOf(id: string): { block: number; warn: number } | null {
   return c && c !== "checking" ? c : null;
 }
 
+// What each draft's runs created, for the delete confirmation (null: it has never run)
+const created = reactive(new Map<string, Created | null>());
+function askDelete(j: Job) {
+  confirm.value = { id: j.id, kind: "delete" };
+  if (!j.run) created.set(j.id, null);
+  else api.job(j.id).then((r) => created.set(j.id, r.created)).catch((e) => { error.value = (e as Error).message; });
+}
 async function del(j: Job) {
   try {
     await api.deleteJob(j.id);
@@ -104,7 +112,8 @@ async function del(j: Job) {
             <td><button class="chevron" :class="{ open: expanded.has(j.id) }" :aria-expanded="expanded.has(j.id)"
                         :aria-label="`Show details of ${j.name || 'Untitled job'}`" @click="toggle(j)">▸</button></td>
             <td>{{ j.name || "Untitled job" }}<div class="sub">created by {{ j.createdBy }}</div>
-              <div v-if="j.fixFrom" class="sub">🔧 fixing after run {{ j.fixFrom.run }} ({{ j.fixFrom.status === "Failed" ? "failed" : "needed attention" }})</div></td>
+              <div v-if="j.fixFrom" class="sub">🔧 fixing after run {{ j.fixFrom.run }} ({{ j.fixFrom.status === "Failed" ? "failed" : "needed attention" }})</div>
+              <div v-if="j.note" class="sub note">⚠ {{ j.note }}</div></td>
             <td>{{ j.rowCount }}</td>
             <td>
               <span v-if="checks.get(j.id) === 'checking'" class="badge b-muted">Checking…</span>
@@ -118,11 +127,8 @@ async function del(j: Job) {
             <td><span :class="{ soon: expiry(j).soon }">{{ expiry(j).text }}</span><div class="sub" :title="j.fixFrom ? 'The edits are discarded and the job returns to Finished jobs as it was' : 'The draft is deleted with its files'">{{ j.fixFrom ? "then reverted" : "then deleted" }}</div>
               <div v-if="j.protectedCount" class="sub" title="A draft with protected files expires 7 days after it was last saved">7 days: protected files</div></td>
             <td>
-              <div v-if="confirm?.id === j.id && confirm.kind === 'delete'" class="msg msg-warn">
-                Delete this draft? Its {{ j.rowCount }} documents and uploaded files are removed from the BMU; nothing in CollectionSpace is touched<template
-                  v-if="j.run"> (records its earlier runs created stay there, and the audit log lists them)</template>.
-                <button @click="del(j)">Delete</button> <button @click="confirm = null">Cancel</button>
-              </div>
+              <DeleteJobConfirm v-if="confirm?.id === j.id && confirm.kind === 'delete'" :job="j" :created="created.get(j.id)"
+                                @confirm="del(j)" @cancel="confirm = null" />
               <div v-else-if="confirm?.id === j.id && confirm.kind === 'takeover'" class="msg msg-warn">
                 {{ j.editingBy }} has been editing this draft since {{ formatTime(j.editingSince) }}. If you take over, their editing ends
                 and their page becomes read-only; everything they changed so far is already saved.
@@ -133,7 +139,7 @@ async function del(j: Job) {
                 <button v-if="lockedByOther(j)" @click="confirm = { id: j.id, kind: 'takeover' }">Take over…</button>
                 <button v-else @click="emit('open', j.id, 'edit')">{{ j.editingByYou ? "Continue editing" : "Edit" }}</button>
                 <button :disabled="lockedByOther(j)" :title="lockedByOther(j) ? `${j.editingBy} is editing this draft` : ''"
-                        @click="confirm = { id: j.id, kind: 'delete' }">Delete</button>
+                        @click="askDelete(j)">Delete</button>
               </div>
             </td>
           </tr>

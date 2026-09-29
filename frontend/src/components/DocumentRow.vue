@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import type { Option, Perms, Row, TenantInfo } from "../types";
+import type { Handling, Option, Perms, Row, TenantInfo } from "../types";
 import { formatBytes } from "../lib/files";
 import { filenameProblems, idLabel, objectLabel } from "../lib/filenames";
 import { handlingBlocked, rowStatus, worstLevel } from "../lib/status";
-import { canReplaceFile, createdSomething, fixFields, mediaCreated, objectStepRan, stepList, STEP_MARK, stepNote } from "../lib/results";
+import { canReplaceFile, createdSomething, fixFields, mediaCreated, objectStepRan, RELINK_OBJECT, stepList, STEP_MARK, stepNote } from "../lib/results";
 import { portalOf } from "../lib/portal";
 import AuthorityInput from "./AuthorityInput.vue";
 import DateInput from "./DateInput.vue";
@@ -41,6 +41,15 @@ const ro = computed(() => props.readonly || created.value || !props.row.include)
 const objFixed = computed(() => !created.value && objectStepRan(props.row));
 const allowed = computed(() => fixFields(props.row));
 const canEditObj = computed(() => !props.readonly && props.row.include && (created.value ? allowed.value.obj : !objFixed.value));
+// Option A (design: Fixing a job after a run): after object_exists, the handling may change to one that links
+// to the existing object; nothing else about the Media record can change.
+const relink = computed(() => !props.readonly && props.row.include && created.value && allowed.value.handling);
+const handlingLocked = computed(() => relink.value ? false : ro.value || objFixed.value);
+function handlingOptionOff(h: Handling): string {
+  if (h.id === props.row.handling) return "";
+  if (relink.value && !RELINK_OBJECT.includes(h.object)) return "Its Media record already exists: choose a handling that links to the existing object";
+  return handlingBlocked(h, props.perms);
+}
 const replaceable = computed(() => !props.readonly && canReplaceFile(props.row));
 const replaceInput = ref<HTMLInputElement | null>(null);
 function pickReplacement(e: Event) {
@@ -75,6 +84,9 @@ function applyName() {
 }
 const objLabel = computed(() => objectLabel(props.row));
 const idnLabel = computed(() => idLabel(props.row, props.tenant));
+/** Language still holds the tenant's default, which the user hasn't chosen (design: PRESET marks). */
+const languagePreset = computed(() => !(props.row.touched ?? []).includes("language") && !!props.tenant.languageDefault
+  && JSON.stringify(props.row.language ?? []) === JSON.stringify([props.tenant.languageDefault]));
 
 function text(field: keyof Row, e: Event) {
   const v = (e.target as HTMLInputElement).value;
@@ -94,9 +106,11 @@ function text(field: keyof Row, e: Event) {
       <div class="sub">{{ formatBytes(row.size) }}<template v-if="handling?.object !== 'none'"> · object {{ row.obj || "—" }}</template></div>
     </td>
     <td>
-      <select :value="row.handling" :disabled="ro || objFixed" aria-label="Handling" :title="objFixed ? '🔒 The last run already found or created this document\'s object' : ''" @change="emit('edit', { handling: ($event.target as HTMLSelectElement).value })">
-        <option v-for="h in tenant.handling" :key="h.id" :value="h.id" :disabled="!!handlingBlocked(h, perms) && h.id !== row.handling"
-                :title="handlingBlocked(h, perms)">{{ h.label }}{{ handlingBlocked(h, perms) ? " (no permission)" : "" }}</option>
+      <select :value="row.handling" :disabled="handlingLocked" aria-label="Handling"
+              :title="objFixed ? '🔒 The last run already found or created this document\'s object' : relink ? 'The object already exists: choose a handling that links to it' : ''"
+              @change="emit('edit', { handling: ($event.target as HTMLSelectElement).value })">
+        <option v-for="h in tenant.handling" :key="h.id" :value="h.id" :disabled="!!handlingOptionOff(h)"
+                :title="handlingOptionOff(h)">{{ h.label }}{{ h.id !== row.handling && !relink && handlingBlocked(h, perms) ? " (no permission)" : "" }}</option>
       </select>
     </td>
     <td style="text-align:center">
@@ -170,28 +184,28 @@ function text(field: keyof Row, e: Event) {
           <span class="field-note">{{ tenant.filenameHint }}
             <template v-if="renamed && !ro"> · <button class="link" type="button" @click="emit('edit', { file: original })">Use original filename</button></template></span>
         </div>
-        <div v-if="handling?.object !== 'none'" class="field" :class="{ edited: objLabel.edited }">
-          <label><span>Object number <em class="num-state">{{ objFixed ? "🔒 its object already exists" : objLabel.text }}</em></span>
-            <input type="text" :value="row.obj" :disabled="ro || objFixed" aria-label="Object number" @change="text('obj', $event)" /></label>
-          <button v-if="objLabel.reset !== undefined && !ro && !objFixed" class="link field-note" type="button" @click="emit('edit', { obj: objLabel.reset })">Use parsed value</button>
-        </div>
         <div class="field" :class="{ edited: idnLabel.edited }">
           <label><span>Identification number <em class="num-state">{{ idnLabel.text }}</em></span>
             <input type="text" :value="row.idnum" :disabled="ro" aria-label="Identification number" @change="text('idnum', $event)" /></label>
           <button v-if="idnLabel.reset !== undefined && !ro" class="link field-note" type="button" @click="emit('edit', { idnum: idnLabel.reset })">Use parsed value</button>
         </div>
+        <div v-if="handling?.object !== 'none'" class="field" :class="{ edited: objLabel.edited }">
+          <label><span>Object number <em class="num-state">{{ objFixed ? "🔒 its object already exists" : objLabel.text }}</em></span>
+            <input type="text" :value="row.obj" :disabled="ro || objFixed" aria-label="Object number" @change="text('obj', $event)" /></label>
+          <button v-if="objLabel.reset !== undefined && !ro && !objFixed" class="link field-note" type="button" @click="emit('edit', { obj: objLabel.reset })">Use parsed value</button>
+        </div>
         <DateInput :model-value="row.date" :parsed="row.lookups?.date" :disabled="ro" @update:model-value="emit('edit', { date: $event })" />
         <RepeatingSelect label="Media type" word="type" :model-value="row.type" :options="tenant.mediaTypes" :disabled="ro"
                          @update:model-value="emit('edit', { type: $event })" />
-        <RepeatingSelect label="Language" word="language" :model-value="row.language ?? []" :options="languages ?? []" :disabled="ro"
-                         @update:model-value="emit('edit', { language: $event })" />
         <AuthorityInput field="creator" label="Creator" :model-value="row.creator" :disabled="ro" @update:model-value="emit('edit', { creator: $event })" />
         <AuthorityInput field="contributor" label="Contributor" :model-value="row.contributor" :disabled="ro" @update:model-value="emit('edit', { contributor: $event })" />
         <AuthorityInput field="rightsHolder" label="Rights holder" :model-value="row.rightsHolder" :disabled="ro" @update:model-value="emit('edit', { rightsHolder: $event })" />
-        <label class="field"><span>Copyright statement</span>
-          <input type="text" :value="row.copyright" :disabled="ro" @change="text('copyright', $event)" /></label>
         <label class="field wide"><span>Description</span>
           <textarea rows="2" :value="row.description" :disabled="ro" @change="text('description', $event)"></textarea></label>
+        <label class="field"><span>Copyright statement</span>
+          <input type="text" :value="row.copyright" :disabled="ro" @change="text('copyright', $event)" /></label>
+        <RepeatingSelect label="Language" word="language" :model-value="row.language ?? []" :options="languages ?? []" :disabled="ro" :preset="languagePreset"
+                         @update:model-value="emit('edit', { language: $event })" />
       </div>
       </template>
       <ErrorBox v-for="(nt, i) in row.result?.notices ?? []" :key="'n' + i" :code="nt.code" :detail="nt.detail" notice />
