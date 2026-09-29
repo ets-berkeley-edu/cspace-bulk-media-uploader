@@ -19,7 +19,7 @@ from botocore.exceptions import ClientError
 from .config import Settings, get_settings
 from .crypto import Crypto, make_crypto
 from .cspace import CSpaceClient, CSpaceError
-from .cspace.payloads import media_xml, object_xml, relation_xml
+from .cspace.payloads import group_xml, media_xml, object_xml, relation_xml
 from .failures import JOB_LEVEL, classify
 from .storage import Storage, now
 from .tenant import Tenant, load_tenant
@@ -28,7 +28,7 @@ log = logging.getLogger("bmu.worker")
 
 MAX_CONSECUTIVE_SERVER_ERRORS = 5
 STOPPED_JOB = {"unavailable", "worker_stopped"} | JOB_LEVEL  # these end the job as Failed
-OBJECT_STEPS = ("findObject", "createObject", "relMediaObject", "relObjectMedia")
+OBJECT_STEPS = ("findObject", "createObject", "relMediaObject", "relObjectMedia", "addToGroup")
 FINISHED = ("done", "not needed")
 
 
@@ -46,13 +46,14 @@ def _step(row: dict, name: str) -> dict:
     return steps.setdefault(name, {"s": "not run"})
 
 
-def plan_steps(tenant: Tenant, row: dict) -> list[tuple[str, list[str]]]:
+def plan_steps(tenant: Tenant, row: dict, job: dict | None = None) -> list[tuple[str, list[str]]]:
     """A row's steps in order, each with the steps it depends on (design: "Steps within a row").
 
     Create Media record      depends on nothing
     Find or create Object    depends on nothing
     Upload file (PUT media/{csid}/blob, which creates the Blob record)   depends on Media
     Create Relations, both directions                                    depend on Media and Object
+    Add the Object to the job's Group (if the job creates one and the row is in it)  depends on the Relations
     """
     h = tenant.handling_by_id(row["handling"])
     obj = {"existing": "findObject", "create": "createObject"}.get(h.object)
@@ -62,6 +63,8 @@ def plan_steps(tenant: Tenant, row: dict) -> list[tuple[str, list[str]]]:
     steps.append(("upload", ["media"]))
     if obj:
         steps += [("relMediaObject", ["media", obj]), ("relObjectMedia", ["media", obj])]
+        if job and job.get("groupOn") and row.get("group", True):
+            steps.append(("addToGroup", ["relMediaObject", "relObjectMedia"]))
     return steps
 
 
@@ -122,6 +125,7 @@ class Worker:
         self.tenant = tenant or load_tenant(settings.tenant)
         self.owner = f"{socket.gethostname()}-{uuid.uuid4().hex[:6]}"
         self._last_sweep = 0.0
+        self._job_media: set[str] = set()  # Media records the running job has created
 
     # ---- scheduling ------------------------------------------------------------------------
     def run_forever(self) -> None:
@@ -141,6 +145,7 @@ class Worker:
         self.sweep_expired_drafts()
         self.sweep_completed()
         self.sweep_stopped_jobs()
+        self.sweep_protected_staged()
 
     def sweep_expired_sign_ins(self) -> list[str]:
         """A queued job whose saved sign-in reached its time limit leaves the queue for Drafts (design: State
@@ -220,6 +225,27 @@ class Worker:
                                        f"{self.s.completed_days} days after it completed.")
                     gone.append(j["id"])
         return gone
+
+    def sweep_protected_staged(self) -> list[tuple[str, int]]:
+        """Design: Protected files, Cleanup. In jobs that need attention or failed, a protected file's staged
+        upload is removed after a time limit even though the job stays; a fix adds the file again."""
+        removed = []
+        limit = now() - self.s.protected_staged_days * 86400
+        for j in self.storage.list_jobs(self.tenant.key):
+            if j["status"] not in ("NeedsAttention", "Failed") or (j.get("finishedAt") or now()) > limit:
+                continue
+            for r in self.storage.get_rows(j["id"]):
+                upload_open = ((r.get("result") or {}).get("steps") or {}).get("upload", {}).get("s") != "done"
+                if r.get("protected") and upload_open and (r.get("upload") or {}).get("s") == "done" and r.get("s3Key"):
+                    self._delete_key(r["s3Key"])
+                    r["upload"] = {"s": "failed", "reason": "removed"}
+                    self.storage.put_row(j["id"], r, guard=False)
+                    removed.append((j["id"], r["n"]))
+            if any(jid == j["id"] for jid, _ in removed):
+                self.storage.audit(self.tenant.key, "Protected files removed", "BMU", j["id"],
+                                   f"Removed the staged uploads of {sum(1 for jid, _ in removed if jid == j['id'])} protected file(s) "
+                                   f"from “{j.get('name') or 'Untitled job'}”, {self.s.protected_staged_days} days after it stopped.")
+        return removed
 
     def sweep_stopped_jobs(self) -> list[str]:
         """A Running job whose heartbeat went stale lost its worker: it stops as Failed with code
@@ -320,10 +346,14 @@ class Worker:
         """End a run however it ended: settle the rows, set the job's status and counts, complete the run
         item and write the audit entry. A Completed job gets its 30-day expiry."""
         rows = self.storage.get_rows(job_id)
+        job_before = self.storage.get_job(job_id) or {}
+        group = job_before.get("groupStep") or {}
+        if not code and group.get("s") == "failed" and group.get("run") == run_no:
+            code = "group_failed"  # the job needs attention; the rows' other steps still ran
         for r in rows:
             res = r.get("result")
             if res and res.get("state") == "In progress":  # the worker stopped while on this row
-                res["state"] = row_state(res, [n for n, _ in plan_steps(self.tenant, r)])
+                res["state"] = row_state(res, [n for n, _ in plan_steps(self.tenant, r, job_before)])
                 self.storage.put_row(job_id, r, guard=False)
         work = [r for r in rows if r.get("include")]
         states = [((r.get("result") or {}).get("state") or "Not started") for r in work]
@@ -355,6 +385,8 @@ class Worker:
 
     def _run_rows(self, job_id: str, client: CSpaceClient, run_no: int, created: list[dict]) -> str:
         server_errors = 0
+        self._job_media = {((r.get("result") or {}).get("steps") or {}).get("media", {}).get("csid")
+                           for r in self.storage.get_rows(job_id)} - {None}
         for row in self.storage.get_rows(job_id):
             if not row.get("include") or (row.get("result") or {}).get("state") == "Done":
                 continue
@@ -388,7 +420,14 @@ class Worker:
         row["result"] = res
         self.storage.put_row(job_id, row, guard=False)
         first_error = ""
-        for name, deps in plan_steps(self.tenant, row):
+        job = self.storage.get_job(job_id) or {}
+        plan = plan_steps(self.tenant, row, job)
+        planned = {n for n, _ in plan}
+        for name, st in (res.get("steps") or {}).items():
+            if name not in planned and st.get("s") not in FINISHED:
+                st.clear()
+                st.update(s="not needed")  # e.g. the job's group was turned off, or the row left it, while fixing
+        for name, deps in plan:
             st = _step(row, name)
             if st.get("s") in FINISHED:
                 continue  # a rerun never repeats a done step
@@ -405,9 +444,14 @@ class Worker:
             try:
                 if name == "media":
                     self._notice_new_duplicates(client, row)
+                if name == "addToGroup":
+                    self._add_to_group(client, job_id, row, st, run_no, created)
+                    continue
                 csid, found = self._do(client, name, row)
                 st.clear()
                 st.update(s="done", csid=csid, run=run_no)
+                if name == "media":
+                    self._job_media.add(csid)
                 if found:
                     st["found"] = True  # an existing record, not one this job created
                 if name != "findObject" and not found and csid:
@@ -435,8 +479,60 @@ class Worker:
             failed = next(((n, st) for n, st in res["steps"].items() if st.get("s") == "failed"), None)
             res["error"] = ({"code": failed[1].get("code", "unknown"), "detail": failed[1].get("detail", ""), "step": failed[0]}
                             if failed else None)
+            if not failed and (res["steps"].get("addToGroup") or {}).get("after") == "group":
+                g = (self.storage.get_job(job_id) or {}).get("groupStep") or {}
+                res["error"] = {"code": "group_failed", "detail": g.get("detail", ""), "step": "addToGroup"}
         self.storage.put_row(job_id, row, guard=False)
         return first_error
+
+    # ---- the job's Group (design: Groups; The Group step) ---------------------------------------------
+    def _ensure_group(self, client: CSpaceClient, job_id: str, run_no: int, created: list[dict]) -> str | None:
+        """The job's Group CSID, creating the Group the first time a row is ready to join it. Reruns reuse
+        the recorded CSID and never create a second Group. Returns None if creating it failed in this run."""
+        job = self.storage.get_job(job_id) or {}
+        g = job.get("groupStep") or {}
+        if g.get("s") == "done":
+            return g["csid"]
+        if g.get("s") == "failed" and g.get("run") == run_no:
+            return None
+        try:
+            csid = client.create_group(group_xml(job.get("groupTitle") or ""))
+        except CSpaceError as e:
+            code, detail = classify("group", e)
+            if code in JOB_LEVEL:
+                raise JobStop(code, detail) from e
+            self.storage.update_job(job_id, {"groupStep": {"s": "failed", "code": "group_failed", "detail": detail, "run": run_no}})
+            return None
+        self.storage.update_job(job_id, {"groupStep": {"s": "done", "csid": csid, "run": run_no}})
+        created.append({"row": 0, "file": "", "step": "group", "csid": csid})
+        return csid
+
+    def _add_to_group(self, client: CSpaceClient, job_id: str, row: dict, st: dict, run_no: int, created: list[dict]) -> None:
+        """Relate the row's Object to the job's Group, both ways, once per Object: when several rows relate to
+        the same Object, only the first adds it; the others record the step as done, pointing to that row."""
+        group = self._ensure_group(client, job_id, run_no, created)
+        if group is None:
+            st.clear()
+            st.update(s="skipped", after="group")
+            return
+        steps = row["result"]["steps"]
+        obj = (steps.get("findObject") or steps.get("createObject"))["csid"]
+        members = (self.storage.get_job(job_id) or {}).get("groupMembers") or {}
+        first = members.get(obj)
+        if first and first["n"] != row["n"]:
+            st.clear()
+            st.update(s="done", csid=first["csid"], sameAs=first["n"], run=run_no)
+            return
+        pair = []
+        for subj, subj_type, tgt, tgt_type in ((group, "Group", obj, "CollectionObject"), (obj, "CollectionObject", group, "Group")):
+            existing = client.find_relations(subj, tgt)  # a rerun never creates a duplicate relation
+            csid = existing[0] if existing else client.create_relation(relation_xml(subj, subj_type, tgt, tgt_type))
+            if not existing:
+                created.append({"row": row["n"], "file": row["file"], "step": "addToGroup", "csid": csid})
+            pair.append(csid)
+        st.clear()
+        st.update(s="done", csid=pair[0], csid2=pair[1], run=run_no)
+        self.storage.update_job(job_id, {"groupMembers": {**members, obj: {"n": row["n"], "csid": pair[0]}}})
 
     def _notice_new_duplicates(self, client: CSpaceClient, row: dict) -> None:
         """Design: duplicate_at_run. A Media record with the same identification number that appeared after
@@ -449,14 +545,19 @@ class Worker:
         except CSpaceError:
             return  # only a notice; the create itself reports real failures
         known = set(((row.get("lookups") or {}).get("media") or {}).get("csids") or [])
+        known |= self._job_media  # Media records this job created aren't news: the editor warned about IDs shared in the job
         new = [c for c in existing if c not in known]
         if new:
             row["result"]["notices"] = [{"code": "duplicate_at_run",
                                          "detail": f"GET media?as=identificationNumber = \"{idn}\" found {', '.join(new[:5])}"}]
 
     def _delete_staged(self, row: dict) -> None:
-        # the staged file is no longer needed once it is in CollectionSpace
+        # the staged file and its thumbnail are no longer needed once the file is in CollectionSpace, whose own
+        # derivatives are shown from then on
         self._delete_key(row["s3Key"])
+        if row.get("thumbKey"):
+            self._delete_key(row["thumbKey"])
+            row["thumbKey"] = None
 
     def _delete_key(self, key: str) -> None:
         try:

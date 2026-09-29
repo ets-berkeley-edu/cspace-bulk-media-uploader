@@ -754,3 +754,25 @@ def test_a_queued_job_whose_sign_in_expired_moves_to_drafts(api, login, add_uplo
     assert worker.sweep_expired_sign_ins() == [job]
     j = services.storage.get_job(job)
     assert j["status"] == "Draft" and "Sign-in expired" in j["note"] and services.storage.get_credential(job) is None
+
+
+def test_retry_a_failed_upload_with_the_same_file(api, login, services):
+    """Design: a failed upload shows "Upload failed" with Retry and Remove."""
+    login()
+    job = new_job(api)
+    row = api.post(f"/api/jobs/{job}/files", json={"files": [{"name": "15-1234_r.jpg", "size": 5, "type": "image/jpeg"}]}).json()["rows"][0]
+    r = api.post(f"/api/jobs/{job}/rows/{row['n']}/upload-failed").json()["row"]
+    assert any("Retry it, or remove the document" in c["text"] for c in r["checks"])
+    # only the same file
+    bad = api.post(f"/api/jobs/{job}/rows/{row['n']}/retry-upload", json={"name": "other.jpg", "size": 5, "type": "image/jpeg"})
+    assert bad.status_code == 422 and "Choose the same file, 15-1234_r.jpg" in bad.json()["detail"]
+    r = api.post(f"/api/jobs/{job}/rows/{row['n']}/retry-upload", json={"name": "15-1234_r.jpg", "size": 6, "type": "image/jpeg"})
+    assert r.status_code == 200, r.text
+    again = r.json()["row"]
+    assert again["upload"]["s"] == "pending" and again["s3Key"] != row["s3Key"] and again["size"] == 6
+    assert r.json()["uploadForm"]["fields"]["key"] == again["s3Key"]
+    services.storage.s3.put_object(Bucket=services.settings.s3_bucket, Key=again["s3Key"], Body=b"sixsix")
+    done = api.post(f"/api/jobs/{job}/rows/{row['n']}/uploaded").json()["row"]
+    assert done["upload"]["s"] == "done"
+    # nothing to retry once it's uploaded
+    assert api.post(f"/api/jobs/{job}/rows/{row['n']}/retry-upload", json={"name": "15-1234_r.jpg", "size": 6, "type": "image/jpeg"}).status_code == 409

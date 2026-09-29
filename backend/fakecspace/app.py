@@ -5,7 +5,7 @@ search, creating Media, Objects and Relations, and attaching a file with PUT med
 behavior against the real server must be confirmed on the Lyrasis QA tenant.
 
 Run: uvicorn fakecspace.app:app --port 8180
-Users: admin/admin (all permissions), limited/limited (can't create objects), reader/reader (read only).
+Users: admin/admin (all permissions), limited/limited (can't create objects or groups), reader/reader (read only).
 Development hooks: /_fake/state, /_fake/reset, /_fake/slow, /_fake/fail (failures on demand).
 """
 from __future__ import annotations
@@ -26,7 +26,7 @@ USERS = {
     "limited": ("limited", "CRUDL"),
     "reader": ("reader", "RL"),
 }
-RESOURCES = ["media", "relations", "collectionobjects", "personauthorities", "orgauthorities", "vocabularies"]
+RESOURCES = ["media", "relations", "collectionobjects", "groups", "personauthorities", "orgauthorities", "vocabularies"]
 
 
 def _perms_for(user: str) -> dict[str, str]:
@@ -34,6 +34,7 @@ def _perms_for(user: str) -> dict[str, str]:
     p = {r: base for r in RESOURCES}
     if user == "limited":
         p["collectionobjects"] = "RL"
+        p["groups"] = "RL"
     p.update(store.perm_overrides.get(user, {}))
     return p
 
@@ -61,9 +62,9 @@ SAMPLE_OBJECTS = [
     ("16-4711", "Ordinary"),
 ]
 
-# Objects PAHMA treats as sensitive, or nearly so (design: Protected files, Per-tenant signals). The BMU doesn't
-# read these fields yet: they are for the Protected files feature, whose real CollectionSpace field names are to
-# be confirmed on the QA tenant when it is built. Search results don't include them, as in CollectionSpace.
+# Objects PAHMA treats as sensitive, or nearly so (design: Protected files, Per-tenant signals). GET
+# collectionobjects/{csid} returns these fields with the element names in bmu/tenants/pahma.yaml's sensitivity
+# rules; both are the prototype's reading of PAHMA's profile, to be confirmed on the QA tenant.
 SENSITIVE_OBJECTS = [
     ("12-2001", "Sensitive: culturally sensitive, Human Remains department (the public portal hides its images)",
      {"objectStatus": ["culturally sensitive"], "department": "Human Remains"}),
@@ -84,6 +85,8 @@ class Store:
         self.media: dict[str, dict] = {}
         self.blobs: dict[str, dict] = {}
         self.relations: dict[str, dict] = {}
+        self.groups: dict[str, dict] = {}
+        self.content: dict[str, bytes] = {}  # blob CSID -> file bytes (small files only)
         self.fail_next: dict[str, int] = {}  # e.g. {"media": 503} or {"media_blob": 500}: fail the next call once
         self.perm_overrides: dict[str, dict[str, str]] = {}  # e.g. {"admin": {"collectionobjects": "RL"}}: roles changed
         self.searches: list[tuple[str, str | None]] = []  # (service, searched value), to test lookup caching
@@ -130,7 +133,7 @@ def _check(request: Request, resource: str, action: str) -> Response | None:
 
 
 # ---- failures on demand (development only; see /_fake/fail) ----------------------------------------
-STEPS = {"media", "upload", "objectSearch", "objectCreate", "relation", "mediaSearch"}
+STEPS = {"media", "upload", "objectSearch", "objectCreate", "relation", "mediaSearch", "group"}
 
 
 def _rule(request: Request, step: str, names: list[str]) -> dict | None:
@@ -337,11 +340,15 @@ async def media_blob(csid: str, request: Request, file: UploadFile):
         return Response(status_code=404)
     if (f := _fail(request, "upload", [file.filename or "", *_media_names(csid)])) is not None:
         return f
-    size = 0
+    size, head = 0, b""
     while chunk := await file.read(1024 * 1024):
         size += len(chunk)
+        if size <= KEEP_BYTES:
+            head += chunk
     blob = str(uuid.uuid4())
     store.blobs[blob] = {"name": file.filename, "size": size, "type": file.content_type, "media": csid}
+    if size <= KEEP_BYTES:
+        store.content[blob] = head  # small files are kept, to serve as their own derivatives
     store.media[csid]["blobCsid"] = blob
     return _created(request, "blobs", blob)
 
@@ -362,6 +369,20 @@ def get_media(csid: str, request: Request):
                 f"<blobCsid>{m.get('blobCsid', '')}</blobCsid></ns2:media_common></document>")
 
 
+KEEP_BYTES = 5 * 1024 * 1024
+
+
+@app.get("/cspace-services/blobs/{csid}/derivatives/{name}/content")
+def derivative(csid: str, name: str, request: Request):
+    """A Blob's derivative image. Real CollectionSpace makes resized JPEGs; the simulator returns the file itself."""
+    if (d := _check(request, "media", "R")):
+        return d
+    blob = store.blobs.get(csid)
+    if not blob or csid not in store.content or name not in ("Thumbnail", "Medium", "OriginalJpeg"):
+        return Response(status_code=404)
+    return Response(content=store.content[csid], media_type=blob.get("type") or "application/octet-stream")
+
+
 @app.get("/cspace-services/relations")
 def find_relations(request: Request):
     if (d := _check(request, "relations", "R")):
@@ -371,6 +392,31 @@ def find_relations(request: Request):
     items = "".join(f"<relation-list-item><csid>{c}</csid></relation-list-item>" for c, r in store.relations.items()
                     if r["subjectCsid"] == q.get("sbj") and r["objectCsid"] == q.get("obj"))
     return _xml(f'<ns2:relations-common-list xmlns:ns2="http://collectionspace.org/services/relation">{items}</ns2:relations-common-list>')
+
+
+@app.get("/cspace-services/collectionobjects/{csid}")
+def get_object(csid: str, request: Request):
+    """An Object record: its number, and for the sample sensitive objects the fields PAHMA's rules read."""
+    if (d := _check(request, "collectionobjects", "R")):
+        return d
+    o = store.objects.get(csid)
+    if not o or o.get("deleted"):
+        return Response(status_code=404)
+    sens = o.get("sensitivity") or {}
+    dept = sens.get("department")
+    common = (f"<objectNumber>{escape(o['objectNumber'])}</objectNumber>"
+              + (f"<responsibleDepartments><responsibleDepartment>{escape(dept)}</responsibleDepartment></responsibleDepartments>" if dept else ""))
+    statuses = "".join(f"<pahmaObjectStatus>{escape(x)}</pahmaObjectStatus>" for x in sens.get("objectStatus", []))
+    restrictions = "".join(f"<accessRestrictionGroup><accessRestrictionType>{escape(a['type'])}</accessRestrictionType>"
+                           f"<accessRestrictionLevel>{escape(a['level'])}</accessRestrictionLevel></accessRestrictionGroup>"
+                           for a in sens.get("accessRestrictions", []))
+    pahma = ((f"<pahmaObjectStatusList>{statuses}</pahmaObjectStatusList>" if statuses else "")
+             + (f"<nagpraStatus>{escape(sens['nagpraStatus'])}</nagpraStatus>" if sens.get("nagpraStatus") else "")
+             + (f"<accessRestrictionGroupList>{restrictions}</accessRestrictionGroupList>" if restrictions else ""))
+    return _xml('<document name="collectionobjects">'
+                f'<ns2:collectionobjects_common xmlns:ns2="http://collectionspace.org/services/collectionobject">{common}</ns2:collectionobjects_common>'
+                f'<ns2:collectionobjects_pahma xmlns:ns2="http://collectionspace.org/services/collectionobject/local/pahma">{pahma}</ns2:collectionobjects_pahma>'
+                "</document>")
 
 
 @app.post("/cspace-services/collectionobjects")
@@ -383,6 +429,21 @@ async def create_object(request: Request):
         return f
     store.objects[csid] = {"objectNumber": _field(body, "objectNumber"), "deleted": False}
     return _created(request, "collectionobjects", csid)
+
+
+@app.post("/cspace-services/groups")
+async def create_group(request: Request):
+    if (d := _check(request, "groups", "C")):
+        return d
+    body = await request.body()
+    title = _field(body, "title")
+    if (f := _fail(request, "group", [title])) is not None:
+        return f
+    if not title:
+        return Response(status_code=400)
+    csid = str(uuid.uuid4())
+    store.groups[csid] = {"title": title}
+    return _created(request, "groups", csid)
 
 
 @app.post("/cspace-services/relations")
@@ -422,8 +483,8 @@ def slow(seconds: float = 2.0):
 def add_failure(step: str, match: str = "", status: int = 500, effect: str = "", count: int = 1, client: str = "worker"):
     """Development only: make CollectionSpace fail on purpose, to see how the BMU reports it.
 
-    step:   media | upload | objectSearch | objectCreate | relation | mediaSearch
-    match:  only requests whose identification number, filename or object number contains this text ("" = any)
+    step:   media | upload | objectSearch | objectCreate | relation | mediaSearch | group
+    match:  only requests whose identification number, filename, object number or group title contains this text ("" = any)
     status: the HTTP status to return, e.g. 400 (rejected), 401 (sign-in), 403 (permission), 409 (inactive
             account), 413 (file too large), 415 (file type), 500 (server error)
     effect: for objectSearch, "none" (no object found) or "many" (several objects) instead of a status
@@ -454,7 +515,7 @@ def clear_failures():
 @app.get("/_fake/state")
 def state():
     return {"objects": store.objects, "media": {k: {x: y for x, y in v.items() if x != "xml"} for k, v in store.media.items()},
-            "blobs": store.blobs, "relations": store.relations}
+            "blobs": store.blobs, "relations": store.relations, "groups": store.groups}
 
 
 @app.get("/_fake/objects")

@@ -45,7 +45,7 @@ const tenant: TenantInfo = {
   handling: [{ id: "link", label: "Link to existing object", object: "existing", id_rule: "object" },
              { id: "create", label: "Create new object + link", object: "create", id_rule: "object" }],
 };
-const perms: Perms = { media: true, relations: true, objects: true, readObjects: true, authorities: true };
+const perms: Perms = { media: true, relations: true, objects: true, readObjects: true, authorities: true, groups: true };
 function row(p: Partial<Row> = {}): Row {
   return { n: 1, file: "15-1234_a.jpg", size: 10, contentType: "image/jpeg", handling: "link", obj: "15-1234", objParsed: "15-1234",
     img: "15-1234_a", parseOk: true, idnum: "15-1234", date: "", restricted: false, type: [], creator: "", contributor: "",
@@ -87,9 +87,36 @@ describe("DocumentRow checks", () => {
   });
 
   it("shows upload progress, then Verifying, before the checks", () => {
-    expect(mountRow({ row: row({ upload: { s: "uploading", pct: 40 } }) }).text()).toContain("Uploading 40%");
-    expect(mountRow({ row: row({ upload: { s: "verifying" } }) }).text()).toContain("Verifying…");
+    expect(mountRow({ row: row({ upload: { s: "uploading", pct: 40 } }), uploadingHere: true }).text()).toContain("Uploading 40%");
+    expect(mountRow({ row: row({ upload: { s: "verifying" } }), uploadingHere: true }).text()).toContain("Verifying…");
     expect(mountRow({ row: row(), checking: true }).text()).toContain("Checking…");
+  });
+
+  it("shows the Group box only when the job creates a group; documents without an object can't join", async () => {
+    expect(mountRow({ row: row() }).find('input[aria-label$="in the job\'s group"]').exists()).toBe(false);
+    const w = mountRow({ row: row(), groupOn: true });
+    const box = w.find('input[aria-label="15-1234_a.jpg in the job\'s group"]');
+    expect((box.element as HTMLInputElement).checked).toBe(true);
+    await box.setValue(false);
+    expect(w.findComponent(DocumentRow).emitted("edit")?.[0]).toEqual([{ group: false }]);
+    const mediaOnly = mountRow({ row: row({ handling: "mediaonly" }), groupOn: true,
+      tenant: { ...tenant, handling: [...tenant.handling, { id: "mediaonly", label: "Media only", object: "none", id_rule: "image" }] } });
+    expect((mediaOnly.find('input[aria-label="15-1234_a.jpg in the job\'s group"]').element as HTMLInputElement).disabled).toBe(true);
+  });
+
+  it("offers Retry and Remove for a failed upload, or one this page isn't sending", async () => {
+    const failed = mountRow({ row: row({ upload: { s: "failed" } }) });
+    expect(failed.text()).toContain("Upload failed");
+    await failed.findAll("button").find((b) => b.text() === "Retry")!.trigger("click");
+    expect(failed.findComponent(DocumentRow).emitted("retry")).toHaveLength(1);
+    await failed.findAll("button").find((b) => b.text() === "Remove")!.trigger("click");
+    expect(failed.text()).toContain("Remove this document?");
+    await failed.findAll("button").find((b) => b.text() === "Remove")!.trigger("click");
+    expect(failed.findComponent(DocumentRow).emitted("remove")).toHaveLength(1);
+    const stalled = mountRow({ row: row({ upload: { s: "pending" } }) });
+    expect(stalled.text()).toContain("Upload not finished");
+    expect(stalled.findAll("button").some((b) => b.text() === "Retry")).toBe(true);
+    expect(mountRow({ row: row({ upload: { s: "pending" } }), uploadingHere: true }).text()).toContain("Waiting to upload");
   });
 });
 

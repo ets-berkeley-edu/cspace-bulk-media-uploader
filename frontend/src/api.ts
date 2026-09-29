@@ -29,7 +29,20 @@ export async function request<T>(method: string, path: string, body?: unknown): 
   return data as T;
 }
 
+/** Send the thumbnail the browser made; the server rewrites it, and stores none for a protected file. */
+async function putThumbnail(id: string, n: number, jpeg: Blob): Promise<{ stored: boolean }> {
+  const res = await fetch(`/api/jobs/${id}/rows/${n}/thumbnail`, {
+    method: "POST", credentials: "same-origin", headers: { "X-BMU": "1", "Content-Type": "image/jpeg" }, body: jpeg,
+  });
+  if (!res.ok) throw new ApiError(res.status, `Thumbnail not stored (${res.status})`);
+  return res.json();
+}
+
+export const thumbnailUrl = (id: string, n: number, v = 0, large = false) =>
+  `/api/jobs/${id}/rows/${n}/thumbnail?v=${v}${large ? "&size=large" : ""}`;
+
 export const api = {
+  putThumbnail,
   me: () => request<Me>("GET", "/api/me"),
   login: (username: string, password: string) => request<Me>("POST", "/api/login", { username, password }),
   logout: () => request("POST", "/api/logout"),
@@ -40,9 +53,14 @@ export const api = {
   fix: (id: string) => request<Job>("POST", `/api/jobs/${id}/fix`),
   /** The failure catalog: title, explanation and what to do for each failure code. */
   failures: () => request<{ failures: Record<string, Failure> }>("GET", "/api/failures"),
+  /** Retry a document's upload that failed or never finished: a new staged key for the same file. */
+  retryUpload: (id: string, n: number, f: { name: string; size: number; type: string }) =>
+    request<{ row: Row; uploadForm: { url: string; fields: Record<string, string> } }>("POST", `/api/jobs/${id}/rows/${n}/retry-upload`, f),
   replaceFile: (id: string, n: number, f: { name: string; size: number; type: string }) =>
     request<{ row: Row; uploadForm: { url: string; fields: Record<string, string> } }>("POST", `/api/jobs/${id}/rows/${n}/replace-file`, f),
-  renameJob: (id: string, name: string) => request<Job>("PATCH", `/api/jobs/${id}`, { name }),
+  /** The job header: name, and the job's group. Turning the group on or off returns the rows whose checks changed. */
+  patchJob: (id: string, fields: { name?: string; groupOn?: boolean; groupTitle?: string }) =>
+    request<Job & { rows?: Row[] }>("PATCH", `/api/jobs/${id}`, fields),
   deleteJob: (id: string) => request("DELETE", `/api/jobs/${id}`),
   /** Become the draft's editor; with takeOverSince, take over from the editor the user was warned about. */
   openJob: (id: string, takeOverSince?: number) =>

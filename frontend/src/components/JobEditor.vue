@@ -1,13 +1,17 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { api, ApiError } from "../api";
-import { canPreview, formatTime, readExifDate, uploadToS3 } from "../lib/files";
+import { canPreview, formatTime, makeThumbnail, readExifDate, uploadToS3 } from "../lib/files";
 import { jobCounts, worstLevel } from "../lib/status";
 import { failureOf, loadFailures, OUTCOME } from "../lib/results";
 import type { Job, Me, Option, Row, RowChange } from "../types";
 import type { BulkChanges } from "../lib/bulk";
 import BulkPanel from "./BulkPanel.vue";
 import DocumentRow from "./DocumentRow.vue";
+import PagerBar from "./PagerBar.vue";
+import SortTh from "./SortTh.vue";
+import { tableState, tableView } from "../lib/table";
+import { portalOf } from "../lib/portal";
 
 const props = defineProps<{ me: Me; jobId: string | null; mode?: "edit" | "preview"; takeOverSince?: number | null }>();
 const emit = defineEmits<{ scheduled: [job: Job]; opened: [id: string]; close: [] }>();
@@ -28,8 +32,48 @@ api.vocabulary("languages")
   .catch((e) => { message.value = { cls: "msg-warn", text: `Couldn't load the languages list: ${(e as Error).message}` }; });
 const bulkPanel = ref<InstanceType<typeof BulkPanel> | null>(null);
 loadFailures();
-const allSelected = computed(() => rows.value.length > 0 && rows.value.every((r) => selected.has(r.n)));
+// Paging, sorting and the Show filter (design: User interface, Large jobs).
+const table = tableState();
+const handlingLabel = (r: Row) => props.me.tenant.handling.find((h) => h.id === r.handling)?.label ?? r.handling;
+const LEVEL_RANK = { block: 0, warn: 1, ok: 2 } as const;
+const statusRank = (r: Row) => (!r.include ? 3 : r.result?.state === "Done" ? 4 : LEVEL_RANK[worstLevel(r)]);
+const docKeys = {
+  file: (r: Row) => r.file,
+  handling: handlingLabel,
+  publish: (r: Row) => (r.restricted ? 1 : 0),
+  portal: (r: Row) => portalOf(r, props.me.tenant).text,
+  group: (r: Row) => (r.group ?? true ? 0 : 1),
+  status: statusRank,
+  include: (r: Row) => (r.include ? 0 : 1),
+};
+function docFilter(r: Row, f: string): boolean {
+  const lv = worstLevel(r);
+  switch (f) {
+    case "problems": return r.include && lv !== "ok";
+    case "block": return r.include && lv === "block";
+    case "warn": return r.include && lv === "warn";
+    case "protected": return !!r.protected;
+    case "disabled": return !r.include;
+    case "selected": return selected.has(r.n);
+    default: return true;
+  }
+}
+const view = computed(() => tableView(rows.value, table, docKeys, docFilter));
+const docFilters = computed<[string, string][]>(() => {
+  const n = (f: string) => rows.value.filter((r) => docFilter(r, f)).length;
+  return [["all", `All documents (${rows.value.length})`], ["problems", `With problems (${n("problems")})`], ["block", `Need fixing (${n("block")})`],
+    ["warn", `With warnings (${n("warn")})`], ["protected", `Protected (${n("protected")})`], ["disabled", `Disabled (${n("disabled")})`],
+    ["selected", `Selected (${selected.size})`]];
+});
+const pageSelected = computed(() => view.value.shown.length > 0 && view.value.shown.every((r) => selected.has(r.n)));
+const pageExpanded = computed(() => view.value.shown.length > 0 && view.value.shown.every((r) => expanded.has(r.n)));
+const moreMatching = computed(() => pageSelected.value && view.value.all.some((r) => !selected.has(r.n)));
 const drag = ref(false);
+// The files this page added, kept for Retry, and the uploads this page is sending right now.
+const localFiles = new Map<number, File>();
+const uploadingHere = reactive(new Set<number>());
+const retryInput = ref<HTMLInputElement | null>(null);
+let retryRow: Row | null = null;
 const fileInput = ref<HTMLInputElement | null>(null);
 
 const readonly = computed(() => !!job.value && job.value.status !== "Draft");
@@ -40,8 +84,25 @@ const lockedBy = computed(() => job.value?.status === "Draft" && job.value.editi
 const confirmTakeOver = ref(false);
 const savedNote = ref("");
 const counts = computed(() => jobCounts(rows.value));
+// The job's group (design: Groups): on/off and its title; fixed once the Group exists in CollectionSpace.
+const groupMade = computed(() => job.value?.groupStep?.s === "done");
+const groupTitle = ref("");
+watch(() => job.value?.groupTitle, (t) => { groupTitle.value = t ?? ""; }, { immediate: true });
+async function setGroup(fields: { groupOn?: boolean; groupTitle?: string }) {
+  try {
+    const j = await ensureJob();
+    const r = await api.patchJob(j.id, fields);
+    (r.rows ?? []).forEach((row) => replace(row));
+    const { rows: _changed, ...rest } = r;
+    job.value = rest;
+  } catch (e) {
+    await failed(e);
+  }
+}
+
 const scheduleBlocked = computed(() => {
   const c = counts.value;
+  if (job.value?.groupOn && !job.value.groupTitle?.trim()) return "Enter a group title, or turn off the job's group";
   if (c.block) return "Fix or disable the documents marked Needs fixing first";
   if (c.uploading) return "Wait until every file is uploaded and verified";
   if (!c.work) return "Nothing left to run: every document is done or disabled";
@@ -54,6 +115,7 @@ async function load(id: string | null) {
   previews.clear();
   expanded.clear();
   selected.clear();
+  Object.assign(table, { page: 1, sort: null, dir: 1, filter: "all" });
   message.value = null;
   if (!id) {
     job.value = null;
@@ -154,7 +216,7 @@ async function rename() {
   }
   if (name.value.trim() !== job.value.name && editable.value) {
     try {
-      job.value = await api.renameJob(job.value.id, name.value.trim());
+      job.value = await api.patchJob(job.value.id, { name: name.value.trim() });
     } catch (e) {
       await failed(e);
     }
@@ -181,6 +243,8 @@ async function addFiles(list: FileList | File[] | null) {
     const queue = created.map((row, i) => ({ row, file: files[i] }));
     for (const { row, file } of queue) {
       row.upload = { s: "pending" };
+      localFiles.set(row.n, file);
+      uploadingHere.add(row.n);
       rows.value.push(row);
       if (canPreview(file)) previews.set(row.n, URL.createObjectURL(file));
     }
@@ -211,6 +275,42 @@ async function replaceFile(row: Row, file: File) {
 }
 
 async function uploadOne(jobId: string, row: Row, file: File, exif = true) {
+  uploadingHere.add(row.n);
+  try {
+    await sendFile(jobId, row, file, exif);
+  } finally {
+    uploadingHere.delete(row.n);
+  }
+}
+
+/** Retry an upload that failed or never finished, with the file this page still holds, or one the user picks again. */
+async function retry(row: Row, picked?: File) {
+  if (!job.value) return;
+  const file = picked ?? localFiles.get(row.n);
+  if (!file) {
+    retryRow = row;
+    retryInput.value?.click();
+    return;
+  }
+  try {
+    const r = await api.retryUpload(job.value.id, row.n, { name: file.name, size: file.size, type: file.type });
+    localFiles.set(row.n, file);
+    replace(r.row);
+    if (!previews.has(row.n) && canPreview(file)) previews.set(row.n, URL.createObjectURL(file));
+    await uploadOne(job.value.id, { ...r.row, uploadForm: r.uploadForm }, file);
+  } catch (e) {
+    await failed(e);
+  }
+}
+function retryPicked(e: Event) {
+  const input = e.target as HTMLInputElement;
+  const f = input.files?.[0];
+  input.value = "";
+  if (f && retryRow) void retry(retryRow, f);
+  retryRow = null;
+}
+
+async function sendFile(jobId: string, row: Row, file: File, exif: boolean) {
   const live = () => rows.value.find((r) => r.n === row.n);
   const set = (u: Row["upload"]) => { const r = live(); if (r) r.upload = u; };
   set({ s: "uploading", pct: 0 });
@@ -222,6 +322,11 @@ async function uploadOne(jobId: string, row: Row, file: File, exif = true) {
     if (date && !confirmed.row.date) confirmed = await api.editRow(jobId, row.n, { date });
     set(confirmed.row.upload);
     apply(confirmed);
+    // Design: the browser makes the thumbnail for JPEG and PNG and sends it with the file (none for a protected file).
+    if (confirmed.row.upload.s === "done" && !confirmed.row.protected) {
+      const thumb = await makeThumbnail(file);
+      if (thumb) await api.putThumbnail(jobId, row.n, thumb).catch(() => undefined);
+    }
   } catch {
     set({ s: "failed" });
     try {
@@ -264,9 +369,16 @@ function select(n: number, on: boolean) {
   if (on) selected.add(n);
   else selected.delete(n);
 }
-function selectAll(on: boolean) {
-  selected.clear();
-  if (on) rows.value.forEach((r) => selected.add(r.n));
+/** The header checkbox: the documents on this page (design: with a link to select every matching document). */
+function selectPage(on: boolean) {
+  view.value.shown.forEach((r) => (on ? selected.add(r.n) : selected.delete(r.n)));
+}
+function selectMatching() {
+  view.value.all.forEach((r) => selected.add(r.n));
+}
+function expandPage() {
+  const open = !pageExpanded.value;
+  view.value.shown.forEach((r) => (open ? expanded.add(r.n) : expanded.delete(r.n)));
 }
 
 /** The bulk-change panel: the server applies every change to every target, or refuses and changes nothing. */
@@ -285,10 +397,12 @@ async function bulk(targets: number[], changes: BulkChanges | Partial<Row>, rese
   }
 }
 
-/** "Show documents with problems": expand just the rows that need fixing or have warnings. */
+/** "Show documents with problems": filter to them and expand those on the page. */
 function showProblems() {
+  table.filter = "problems";
+  table.page = 1;
   expanded.clear();
-  rows.value.forEach((r) => r.include && worstLevel(r) !== "ok" && expanded.add(r.n));
+  view.value.shown.forEach((r) => expanded.add(r.n));
 }
 
 async function schedule() {
@@ -346,6 +460,22 @@ function toggle(n: number) {
     <label class="field"><span><strong>Job name</strong></span>
       <input v-model="name" type="text" placeholder="e.g. 2026 spring accession batch" :disabled="!editable" @change="rename" /></label>
 
+    <div class="group-box">
+      <label class="check-line"><input type="checkbox" :checked="!!job?.groupOn" aria-label="Create a group for this job"
+          :disabled="!editable || groupMade || (!me.perms.groups && !job?.groupOn)"
+          :title="!me.perms.groups ? 'You don\'t have permission to create groups' : groupMade ? 'The group already exists in CollectionSpace' : ''"
+          @change="setGroup({ groupOn: ($event.target as HTMLInputElement).checked })" />
+        <span><strong>Create a group for this job</strong></span></label>
+      <label class="group-title">Object group title
+        <input v-model="groupTitle" type="text" :disabled="!editable || !job?.groupOn || groupMade" aria-label="Object group title"
+               :placeholder="job?.groupOn ? '' : 'Turn on “Create a group” first'" @change="setGroup({ groupTitle })" /></label>
+      <div class="field-note">When on, the job creates one new group in CollectionSpace, and every document linked to an object joins it
+        once its Media record is linked; untick a document's Group box to leave it out. Documents that aren't linked to an object can't join.
+        <template v-if="groupMade"> The group was created in run {{ job?.groupStep?.run }} (<code>{{ job?.groupStep?.csid }}</code>), so it can't be
+          turned off or renamed here.</template>
+        <template v-else-if="!me.perms.groups"> Your account can't create groups.</template></div>
+    </div>
+
     <div v-if="editable" class="dropzone" :class="{ drag }" role="button" tabindex="0"
          @click="fileInput?.click()" @keydown.enter.prevent="fileInput?.click()"
          @dragenter.prevent="drag = true" @dragover.prevent="drag = true" @dragleave.prevent="drag = false"
@@ -355,6 +485,15 @@ function toggle(n: number) {
       <input ref="fileInput" type="file" multiple hidden @change="addFiles(($event.target as HTMLInputElement).files); ($event.target as HTMLInputElement).value = ''" />
     </div>
 
+    <details v-if="me.tenant.sensitivity?.summary" class="sens-explain">
+      <summary><strong>Sensitivity and publishing at {{ me.tenant.name }}:</strong> {{ me.tenant.sensitivity.summary }} <span class="link">More</span></summary>
+      <ul><li v-for="(t, i) in me.tenant.sensitivity.explain" :key="i">{{ t }}</li></ul>
+      <div class="field-note">Three different things: the museum's sensitivity of an <em>object</em>, the publish setting of each <em>image</em>,
+        and the BMU's <em>protected file</em> handling while the file is in the BMU. The Public portal column combines the first two. None of
+        them stops CollectionSpace users who can read the record from seeing the image. Protected files are set automatically from
+        CollectionSpace; there is no manual setting.</div>
+    </details>
+    <input ref="retryInput" type="file" hidden aria-hidden="true" @change="retryPicked" />
     <div v-if="message" class="msg" :class="message.cls" role="status">{{ message.text }}</div>
     <div v-if="counts.uploading || counts.uploadFailed" class="sub" style="margin:6px 0">
       {{ counts.uploaded }} of {{ counts.work }} uploaded<template v-if="counts.uploading"> · {{ counts.uploading }} uploading</template><template v-if="counts.uploadFailed"> · {{ counts.uploadFailed }} failed</template>
@@ -362,27 +501,44 @@ function toggle(n: number) {
 
     <div class="editor-split">
     <BulkPanel ref="bulkPanel" :rows="rows" :selected="selected" :tenant="me.tenant" :perms="me.perms" :readonly="!editable" :busy="busy" :languages="languages"
+               :group-on="!!job?.groupOn"
                @apply="(t, c) => bulk(t, c, true)" @include="(t, on) => bulk(t, { include: on }, false)" />
     <div class="grid-main">
+    <PagerBar v-if="rows.length" :state="table" :total="view.total" :of="view.of" :pages="view.pages" :start="view.start" noun="documents" :filters="docFilters" />
+    <div v-if="selected.size" class="sel-banner"><strong>{{ selected.size.toLocaleString() }}</strong> selected<template
+      v-if="selected.size > view.shown.length"> across pages</template><template v-if="moreMatching"> · <button class="link" @click="selectMatching">Select all
+      {{ view.total.toLocaleString() }}{{ view.total !== view.of ? " matching" : "" }} documents</button></template>
+      · <button class="link" @click="selected.clear()">Clear selection</button></div>
     <div class="table-wrap">
       <table>
         <thead><tr>
           <th style="width:64px"><span class="sr-only">Preview</span></th>
-          <th style="width:28px"><input type="checkbox" :checked="allSelected" :disabled="!rows.length" aria-label="Select all documents"
-            @change="selectAll(($event.target as HTMLInputElement).checked)" /></th>
-          <th style="width:28px"></th><th>Document</th>
-          <th style="width:220px">Handling</th><th style="width:90px">{{ me.tenant.publish.header }}</th>
-          <th style="width:140px">Status</th><th style="width:90px"></th>
+          <th style="width:28px"><input type="checkbox" :checked="pageSelected" :disabled="!view.shown.length" aria-label="Select all documents on this page"
+            @change="selectPage(($event.target as HTMLInputElement).checked)" /></th>
+          <th style="width:28px"><button class="chevron" :class="{ open: pageExpanded }" :disabled="!view.shown.length"
+            title="Expand or collapse all rows on this page" aria-label="Expand or collapse all rows on this page" @click="expandPage">▸</button></th>
+          <SortTh :state="table" sort-key="file" label="Document" />
+          <SortTh :state="table" sort-key="handling" label="Handling" style="width:220px" />
+          <SortTh :state="table" sort-key="publish" :label="me.tenant.publish.header" style="width:110px" />
+          <SortTh :state="table" sort-key="portal" label="Public portal" style="width:170px"
+                  title="Whether this image will appear on the museum's public portal, combining the object's sensitivity and the image's own setting" />
+          <SortTh v-if="job?.groupOn" :state="table" sort-key="group" label="Group" style="width:70px" />
+          <SortTh :state="table" sort-key="status" label="Status" style="width:150px" />
+          <SortTh :state="table" sort-key="include" label="Include" style="width:90px" title="Turn off to have the BMU ignore a document" />
         </tr></thead>
         <tbody>
-          <tr v-if="!rows.length"><td colspan="8" class="muted" style="text-align:center;padding:18px">No documents yet. Drop files in the box above, or browse, to add them to this job.</td></tr>
-          <DocumentRow v-for="r in rows" :key="r.n" :row="r" :tenant="me.tenant" :perms="me.perms" :checking="checking.has(r.n)" :preview="previews.get(r.n)"
+          <tr v-if="!rows.length"><td :colspan="job?.groupOn ? 10 : 9" class="muted" style="text-align:center;padding:18px">No documents yet. Drop files in the box above, or browse, to add them to this job.</td></tr>
+          <tr v-else-if="!view.shown.length"><td :colspan="job?.groupOn ? 10 : 9" class="muted" style="text-align:center;padding:18px">No documents match this filter.</td></tr>
+          <DocumentRow v-for="r in view.shown" :key="r.n" :row="r" :tenant="me.tenant" :perms="me.perms" :checking="checking.has(r.n)" :preview="previews.get(r.n)"
                        :expanded="expanded.has(r.n)" :readonly="readonly || !editable" :selected="selected.has(r.n)" :languages="languages"
                        :other-names="rows.filter((x) => x.n !== r.n).map((x) => x.file)"
-                       @toggle="toggle(r.n)" @edit="edit(r, $event)" @remove="remove(r)" @select="select(r.n, $event)" @replace="replaceFile(r, $event)" />
+                       :uploading-here="uploadingHere.has(r.n)" :group-on="!!job?.groupOn" :job-id="job?.id"
+                       @toggle="toggle(r.n)" @edit="edit(r, $event)" @remove="remove(r)" @select="select(r.n, $event)" @replace="replaceFile(r, $event)"
+                       @retry="retry(r)" />
         </tbody>
       </table>
     </div>
+    <PagerBar :state="table" :total="view.total" :of="view.of" :pages="view.pages" :start="view.start" noun="documents" bottom />
     </div>
     </div>
 

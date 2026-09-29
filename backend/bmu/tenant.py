@@ -41,6 +41,7 @@ class Tenant:
     language_default: str
     authorities: dict[str, dict[str, str]]
     authority_fields: dict[str, list[str]] = field(default_factory=dict)
+    sensitivity: dict[str, Any] = field(default_factory=dict)  # Object-level rules (design: Protected files)
 
     @property
     def media_type_values(self) -> set[str]:
@@ -60,6 +61,7 @@ class Tenant:
             "mediaTypes": [o.__dict__ for o in self.media_types],
             "languageDefault": self.language_default,
             "authorityFields": self.authority_fields,
+            "sensitivity": {"summary": self.sensitivity.get("summary", ""), "explain": self.sensitivity.get("explain", [])},
         }
 
 
@@ -81,6 +83,7 @@ def load_tenant(key: str) -> Tenant:
         language_default=raw["language"]["default"],
         authorities=raw["authorities"],
         authority_fields=raw.get("authority_fields", {}),
+        sensitivity=raw.get("sensitivity") or {},
     )
 
 

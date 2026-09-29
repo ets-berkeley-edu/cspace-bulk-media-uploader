@@ -17,7 +17,10 @@ import sys
 import time
 
 from bmu.cspace import CSpaceClient, CSpaceError
-from bmu.cspace.payloads import media_xml, object_xml, relation_xml
+from defusedxml import ElementTree as SafeET
+
+from bmu.sensitivity import evaluate as evaluate_sensitivity
+from bmu.cspace.payloads import group_xml, media_xml, object_xml, relation_xml
 from bmu.rows import new_row
 from bmu.tenant import load_tenant
 
@@ -50,6 +53,8 @@ def main():
     ap.add_argument("--object", default="1-2345", help="an object number that exists on the server")
     ap.add_argument("--term", default="smi", help="text to search the Person and Organization authorities for")
     ap.add_argument("--create", action="store_true", help="create real test records (they are not deleted)")
+    ap.add_argument("--show-object", action="store_true",
+                    help="print the Object record's fields and what the tenant's sensitivity rules make of it")
     ap.add_argument("--tenant", default="pahma")
     a = ap.parse_args()
     url, user, pw = os.environ.get("CSPACE_URL"), os.environ.get("CSPACE_USER"), os.environ.get("CSPACE_PASSWORD")
@@ -61,8 +66,15 @@ def main():
     if perms:
         print("     summary:", perms.summary)
         print("     resources:", {k: "".join(sorted(v)) for k, v in sorted(perms.resources.items()) if k in (
-            "media", "relations", "collectionobjects", "personauthorities", "orgauthorities")})
-    step(f"find object {a.object}", lambda: c.find_objects(a.object))
+            "media", "relations", "collectionobjects", "groups", "personauthorities", "orgauthorities")})
+    found = step(f"find object {a.object}", lambda: c.find_objects(a.object))
+    if a.show_object and found:
+        xml = c.get_object(found[0])
+        print("     fields (element: value), to confirm the sensitivity rules' element names:")
+        for el in SafeET.fromstring(xml).iter():
+            if len(el) == 0 and (el.text or "").strip():
+                print(f"       {el.tag.rsplit('}', 1)[-1]}: {el.text.strip()[:80]}")
+        step("sensitivity by the tenant's rules", lambda: evaluate_sensitivity(t.sensitivity, xml))
     step(f"find media id {a.object}", lambda: c.find_media(a.object))
     for kind, cfg in t.authorities.items():
         step(f"search {kind} '{a.term}'", lambda: [x["displayName"] for x in c.search_terms(cfg["service"], cfg["vocabulary"], a.term)][:5])
@@ -89,7 +101,10 @@ def main():
     media = step("create Media (no blobCsid)", lambda: c.create_media(media_xml(t, row)))
     if media:
         blob = step("attach file (PUT media/{csid}/blob)", lambda: c.upload_file(media, row["file"], io.BytesIO(PNG), "image/png"))
-        step("read back the Media record's blobCsid", lambda: c.media_blob_csid(media))
+        blob_csid = step("read back the Media record's blobCsid", lambda: c.media_blob_csid(media))
+        if blob_csid:  # the thumbnails the BMU shows once a file is in CollectionSpace (design: Thumbnails)
+            step("fetch its Thumbnail derivative (GET blobs/{csid}/derivatives/Thumbnail/content)",
+                 lambda: (lambda d: f"{len(d[0])} bytes, {d[1]}")(c.derivative(blob_csid, "Thumbnail")))
         step(f"read back types {row['type']}, {len(row['language'])} languages and the date", lambda: _repeating(c, media))
     obj = step(f"create Object {num}", lambda: c.create_object(object_xml(num)))
     if media and obj:
@@ -98,6 +113,12 @@ def main():
         step("relate Object -> Media", lambda: c.create_relation(relation_xml(obj, "CollectionObject", media, "Media")))
         step("existing relations Media -> Object (expect one)", lambda: c.find_relations(media, obj))
         step(f"find object {num} again", lambda: c.find_objects(num))
+        # the job's Group (design: Groups): a new Group, related to the Object both ways
+        group = step(f"create Group bmu-{num.lower()}", lambda: c.create_group(group_xml(f"bmu-{num.lower()}")))
+        if group:
+            step("relate Group -> Object", lambda: c.create_relation(relation_xml(group, "Group", obj, "CollectionObject")))
+            step("relate Object -> Group", lambda: c.create_relation(relation_xml(obj, "CollectionObject", group, "Group")))
+            step("existing relations Group -> Object (expect one)", lambda: c.find_relations(group, obj))
     print(f"Created test records for {num}; they stay in CollectionSpace.")
 
 

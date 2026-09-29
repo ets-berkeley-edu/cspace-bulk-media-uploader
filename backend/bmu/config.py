@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     session_hours: float = 8.0
     draft_days: int = 30  # a draft that has never run is deleted (a fix is reverted) this long after it was last saved
     completed_days: int = 30  # a Completed job is removed this long after it finished
+    protected_draft_days: int = 7  # a draft with a protected file expires this long after it was last saved
+    protected_staged_days: int = 7  # a protected file's staged upload is removed this long after its job stopped
     credential_hours: float = 72.0
     cookie_secure: bool = True
     max_file_bytes: int = 2 * 1024**3

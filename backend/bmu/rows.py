@@ -6,10 +6,11 @@ import time
 from typing import Any, Callable
 
 from .cspace import CSpaceClient, CSpaceError
+from .sensitivity import evaluate as evaluate_sensitivity
 from .tenant import Tenant, parse_filename
 
 EDITABLE = {"handling", "obj", "idnum", "date", "restricted", "type", "language", "creator", "contributor",
-            "rightsHolder", "description", "copyright", "include", "file", "skipLink"}
+            "rightsHolder", "description", "copyright", "include", "file", "skipLink", "group"}
 # Repeating fields (design: Media record fields): media type values from the tenant's option list, and
 # language refNames from the languages vocabulary.
 REPEATING = {"type", "language"}
@@ -80,7 +81,7 @@ def new_row(tenant: Tenant, filename: str, size: int, content_type: str) -> dict
         "handling": tenant.handling[0].id, "objParsed": p["obj"], "obj": p["obj"], "img": p["img"], "parseOk": p["ok"],
         "idnum": "", "date": "", "restricted": bool(tenant.publish.get("default", False)),
         "type": [], "language": [tenant.language_default], "creator": "", "contributor": "", "rightsHolder": "", "description": "", "copyright": "",
-        "include": True, "upload": {"s": "pending"}, "checks": [], "result": None, "touched": [],
+        "include": True, "group": True, "upload": {"s": "pending"}, "checks": [], "result": None, "touched": [],
     }
     row["idnum"] = default_idnum(tenant, row)
     return row
@@ -107,13 +108,19 @@ def edit_problem(row: dict, changes: dict[str, Any]) -> str | None:
         return None  # any row with work left can be disabled or enabled, a Partial one too
     if not row.get("include", True):
         return "disabled"
+    if "group" in real and _group_done(row):
+        return "grouped"
     if media_created(row):
-        return None if set(real) <= fix_fields(row) else "created"
+        return None if set(real) <= fix_fields(row) | {"group"} else "created"
     if "skipLink" in real:
         return "created"  # only for a row whose Media record exists
     if ("handling" in real or "obj" in real) and object_step_ran(row):
         return "handling"
     return None
+
+
+def _group_done(row: dict) -> bool:
+    return (_steps(row).get("addToGroup") or {}).get("s") == "done"
 
 
 PROBLEM_TEXT = {
@@ -122,6 +129,7 @@ PROBLEM_TEXT = {
     "created": "This document's Media record already exists in CollectionSpace, so only what the rerun still needs can "
                "change here. To change the Media record's fields, edit it in CollectionSpace.",
     "handling": "The last run already found or created this document's object, so its handling and object number can't change.",
+    "grouped": "This document's object is already in the job's group in CollectionSpace.",
 }
 
 FINISHED = ("done", "not needed")
@@ -187,7 +195,7 @@ def apply_edit(tenant: Tenant, row: dict, changes: dict[str, Any], other_names: 
         if k == "handling":
             if not tenant.handling_by_id(v):
                 raise ValueError(f"Unknown handling option {v!r}")
-        elif k in ("restricted", "include", "skipLink"):
+        elif k in ("restricted", "include", "skipLink", "group"):
             v = bool(v)
         elif k in REPEATING:
             if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
@@ -206,6 +214,8 @@ def apply_edit(tenant: Tenant, row: dict, changes: dict[str, Any], other_names: 
             v = v.strip()
         row[k] = v
         touched.add(k)
+        if k == "restricted":
+            row["restrictedAuto"] = False  # the user's choice now stands, protected or not
     if "file" in changes:  # re-parse the new name; the object number follows it unless it was edited
         p = parse_filename(tenant, row["file"])
         row.update(objParsed=p["obj"], img=p["img"], parseOk=p["ok"])
@@ -229,21 +239,29 @@ def is_locked(row: dict) -> bool:
     res = row.get("result") or {}
     if res.get("state") == "In progress":
         return True
-    return any(st.get("csid") and not st.get("found") for name, st in (res.get("steps") or {}).items() if name != "findObject")
+    return any(st.get("csid") and not st.get("found") and not st.get("sameAs")
+               for name, st in (res.get("steps") or {}).items() if name != "findObject")
 
 
-def created_records(rows: list[dict]) -> dict:
+def created_records(rows: list[dict], job: dict | None = None) -> dict:
     """What a job's runs created in CollectionSpace, by record type, and how many documents are unfinished
     (a Media record without its file or its links). For the job-deletion warning and audit entry."""
-    c = {"media": 0, "files": 0, "objects": 0, "relations": 0, "unfinished": 0}
+    c = {"media": 0, "files": 0, "objects": 0, "relations": 0, "groups": 0, "unfinished": 0}
     csids: list[dict] = []
-    kind = {"media": "media", "upload": "files", "createObject": "objects", "relMediaObject": "relations", "relObjectMedia": "relations"}
+    g = (job or {}).get("groupStep") or {}
+    if g.get("s") == "done":
+        c["groups"] = 1
+        csids.append({"row": 0, "file": "", "step": "group", "csid": g["csid"]})
+    kind = {"media": "media", "upload": "files", "createObject": "objects", "relMediaObject": "relations",
+            "relObjectMedia": "relations", "addToGroup": "relations"}
     for r in rows:
         st = _steps(r)
         for name, x in st.items():
-            if x.get("s") == "done" and x.get("csid") and not x.get("found") and name in kind:
-                c[kind[name]] += 1
-                csids.append({"row": r["n"], "file": r["file"], "step": name, "csid": x["csid"]})
+            if x.get("s") == "done" and x.get("csid") and not x.get("found") and not x.get("sameAs") and name in kind:
+                for key in ("csid", "csid2"):
+                    if x.get(key):
+                        c[kind[name]] += 1
+                        csids.append({"row": r["n"], "file": r["file"], "step": name, "csid": x[key]})
         if media_created(r) and any(x.get("s") not in FINISHED for x in st.values()):
             c["unfinished"] += 1
     return {"counts": c, "csids": csids}
@@ -259,7 +277,7 @@ LOOKUP_TTL_SECONDS = 600
 
 
 def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: dict[str, bool],
-               targets: set[int] | None = None, refresh: bool = False) -> set[int]:
+               targets: set[int] | None = None, refresh: bool = False, group_on: bool = False) -> set[int]:
     """Set each row's checks: [{level: block|warn|info, text}]. "block" rows must be fixed before scheduling.
 
     The editor calls this for the rows that just changed (targets) and re-evaluates every row, because some
@@ -291,6 +309,23 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
         r.setdefault("lookups", {})["date"] = entry
         return entry
 
+    def sensitivity(r: dict, csid: str) -> dict | None:
+        """The linked Object's sensitivity (design: Protected files), kept like a lookup; None if not known yet."""
+        if not csid:
+            return {"protect": [], "warn": [], "hides": False}
+        stored = (r.get("lookups") or {}).get("objectSensitivity")
+        may_query = targets is None or r["n"] in targets
+        if stored is not None and stored.get("value") == csid and not refresh and (not may_query or now - stored["at"] < LOOKUP_TTL_SECONDS):
+            return stored
+        if not may_query:
+            incomplete.add(r["n"])
+            return None
+        if ("objectSensitivity", csid) not in batch:
+            batch[("objectSensitivity", csid)] = evaluate_sensitivity(tenant.sensitivity, client.get_object(csid))  # type: ignore[assignment]
+        entry = {"value": csid, **batch[("objectSensitivity", csid)], "at": int(now)}  # type: ignore[dict-item]
+        r.setdefault("lookups", {})["objectSensitivity"] = entry
+        return entry
+
     def lookup(r: dict, kind: str, value: str, search: Callable[[str], list[str]]) -> list[str] | None:
         """CSIDs found for value, from the row's stored lookup or a new search; None when not known yet."""
         stored = (r.get("lookups") or {}).get(kind)
@@ -316,13 +351,17 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
             continue
         h = tenant.handling_by_id(r["handling"])
         if media_created(r):
-            r["checks"] = _rerun_checks(tenant, r, perms, lookup, client)
+            r["checks"] = _rerun_checks(tenant, r, perms, lookup, client, group_on)
             continue
         up = (r.get("upload") or {}).get("s")
-        if up == "failed":
-            out.append({"level": "block", "text": "The upload failed. Remove the document or add the file again."})
+        if up == "failed" and (r.get("upload") or {}).get("reason") == "removed":
+            out.append({"level": "block", "text": "The BMU removed this protected file's upload after the job stopped, as it does for "
+                                                  "protected files. Add it again (Retry), or remove the document."})
+        elif up == "failed":
+            out.append({"level": "block", "text": "The upload failed. Retry it, or remove the document."})
         elif up != "done":
-            out.append({"level": "block", "text": "The file hasn't finished uploading."})
+            out.append({"level": "block", "text": "The file hasn't finished uploading. If it isn't uploading in your browser now "
+                                                  "(for example the page was closed), Retry it, or remove the document."})
         ext = r["file"].rsplit(".", 1)[-1].lower() if "." in r["file"] else ""
         if ext not in SUPPORTED_EXTENSIONS:
             out.append({"level": "block", "text": f"The BMU doesn't accept .{ext or '(no extension)'} files. "
@@ -333,9 +372,16 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
             out.append({"level": "block", "text": "Your account can't create relations, so it can't link to objects. Choose a media-only handling."})
         if h.object == "create" and not perms.get("objects"):
             out.append({"level": "block", "text": "Your account can't create Object records. Choose another handling."})
+        if group_on and r.get("group", True) and h.object != "none" and not perms.get("groups"):
+            out.append({"level": "block", "text": "Your account can't create groups. Turn off the job's group, or untick this document's Group."})
+        obj_csid: str | None = ""  # the linked Object: "" none, None not known yet
+        if h.object != "none" and object_step_ran(r):
+            obj_csid = next(_steps(r)[k]["csid"] for k in OBJ_STEPS if (_steps(r).get(k) or {}).get("s") == "done")
         if h.object != "none" and not object_step_ran(r):  # a found or created object is reused by the rerun
+            obj_csid = None
             num = (r.get("obj") or "").strip()
             if not num:
+                obj_csid = ""
                 media_only = any(x.object == "none" for x in tenant.handling)
                 out.append({"level": "block", "text": f"No object number: the filename doesn't match {tenant.name}'s filename pattern "
                             f"({tenant.filename_hint}). Rename the file, enter the object number"
@@ -347,12 +393,22 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
                     found = None
                     out.append({"level": "warn", "text": f"Couldn't check object {num} in CollectionSpace ({e.code})."})
                 if found is not None:
+                    obj_csid = found[0] if len(found) == 1 else ""
                     if h.object == "existing" and not found:
                         out.append({"level": "block", "text": f"No object {num} in CollectionSpace. Correct the object number, or choose “Create new object + link” or media only."})
                     elif h.object == "existing" and len(found) > 1:
                         out.append({"level": "block", "text": f"Object number {num} matches {len(found)} objects in CollectionSpace. Correct the object number so it identifies one object."})
                     elif h.object == "create" and found:
                         out.append({"level": "block", "text": f"Object {num} already exists. Choose “Link to existing object” instead."})
+        if obj_csid is not None:
+            try:
+                sens = sensitivity(r, obj_csid)
+            except CSpaceError as e:
+                sens = None
+                out.append({"level": "warn", "text": f"Couldn't read object {r.get('obj')}'s sensitivity in CollectionSpace ({e.code})."})
+            if sens is not None:
+                apply_sensitivity(tenant, r, sens)
+        out += sensitivity_checks(tenant, r)
         idn = r.get("idnum") or ""
         if not idn:
             out.append({"level": "block", "text": "The Media record needs an identification number."})
@@ -382,14 +438,47 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
     return incomplete
 
 
-def _rerun_checks(tenant: Tenant, r: dict, perms: dict[str, bool], lookup, client: CSpaceClient) -> list[dict]:
+def apply_sensitivity(tenant: Tenant, r: dict, sens: dict) -> None:
+    """Set the row's automatic protected-file flag from its Object (design: Setting the flag): users never
+    set or clear it. A protected file defaults to not published (Restricted), unless the user chose."""
+    was = r.get("protected")
+    r["protected"] = {"reason": "; ".join(sens["protect"]), "hides": bool(sens["hides"])} if sens["protect"] else None
+    r["softSignals"] = list(sens.get("warn") or [])
+    user_chose = "restricted" in (r.get("touched") or [])
+    if r["protected"] and not user_chose and not r.get("restricted") and tenant.publish.get("invert"):
+        r["restricted"], r["restrictedAuto"] = True, True
+    elif not r["protected"] and was and r.get("restrictedAuto") and not user_chose:
+        r["restricted"], r["restrictedAuto"] = bool(tenant.publish.get("default", False)), False
+
+
+def sensitivity_checks(tenant: Tenant, r: dict) -> list[dict]:
+    out: list[dict[str, str]] = []
+    p = r.get("protected")
+    header = tenant.publish.get("header", "Restricted")
+    if p:
+        out.append({"level": "info", "text": f"Protected file: {p['reason']}. Others in the BMU see a locked preview instead of a "
+                                             f"thumbnail, {header} is on by default, and a draft with protected files expires 7 days "
+                                             "after it was last saved."})
+        if not r.get("restricted") and not p.get("hides"):
+            out.append({"level": "warn", "text": f"This protected file would appear on the public portal: {header} is off. Check "
+                                                 f"{header} unless the image is meant to be public."})
+    elif r.get("softSignals") and not r.get("restricted"):
+        out.append({"level": "warn", "text": f"Object {r.get('obj')} has {', '.join(r['softSignals'])}. Consider checking {header}; "
+                                             "nothing is set automatically."})
+    return out
+
+
+def _rerun_checks(tenant: Tenant, r: dict, perms: dict[str, bool], lookup, client: CSpaceClient,
+                  group_on: bool = False) -> list[dict]:
     """Checks for a row whose Media record already exists (Partial): only what the rerun still has to do.
     Its fields, identification number and date went to CollectionSpace already and aren't checked again."""
     out: list[dict[str, str]] = []
+    if r.get("protected"):
+        out.append({"level": "info", "text": f"Protected file: {r['protected']['reason']}."})
     st = _steps(r)
     skip = bool(r.get("skipLink"))
     todo = list(dict.fromkeys(STEP_TEXT.get(n, n) for n, x in st.items()
-                              if x.get("s") not in FINISHED and not (skip and n in OBJ_STEPS + REL_STEPS)))
+                              if x.get("s") not in FINISHED and not (skip and n in OBJ_STEPS + REL_STEPS + ("addToGroup",))))
     out.append({"level": "info", "text": ("The rerun will only " + " and ".join(todo) + "." if todo
                                           else "Nothing is left to do for this document; the rerun skips it.")
                 + (" Its remaining object steps are skipped: you stopped linking it to an object." if skip else "")})
@@ -397,7 +486,10 @@ def _rerun_checks(tenant: Tenant, r: dict, perms: dict[str, bool], lookup, clien
         code = st["upload"].get("code")
         up = (r.get("upload") or {}).get("s")
         replaced = r.get("replacedFor") == (r.get("result") or {}).get("run")
-        if up == "failed":
+        if up == "failed" and (r.get("upload") or {}).get("reason") == "removed":
+            out.append({"level": "block", "text": "The BMU removed this protected file's upload after the job stopped. Choose Replace "
+                                                  "file to add it again."})
+        elif up == "failed":
             out.append({"level": "block", "text": "The replacement file didn't upload. Choose Replace file again."})
         elif up != "done":
             out.append({"level": "block", "text": "The replacement file hasn't finished uploading."})
@@ -412,6 +504,8 @@ def _rerun_checks(tenant: Tenant, r: dict, perms: dict[str, bool], lookup, clien
                 out.append({"level": "block", "text": f"The BMU doesn't accept .{ext or '(no extension)'} files. Supported types: {SUPPORTED_HINT}."})
     if skip:
         return out
+    if group_on and r.get("group", True) and not _group_done(r) and not perms.get("groups"):
+        out.append({"level": "block", "text": "Your account can't create groups. Turn off the job's group, or untick this document's Group."})
     if open_steps(r, REL_STEPS) and not perms.get("relations"):
         out.append({"level": "block", "text": "Your account can't create relations, so this Media record can't be linked to its "
                                               "object. Stop linking it, or have someone who can reschedule the job."})
@@ -440,7 +534,8 @@ def _rerun_checks(tenant: Tenant, r: dict, perms: dict[str, bool], lookup, clien
 
 
 STEP_TEXT = {"media": "create the Media record", "findObject": "find the object", "createObject": "find or create the object",
-             "upload": "upload the file", "relMediaObject": "link it to its object", "relObjectMedia": "link it to its object"}
+             "upload": "upload the file", "relMediaObject": "link it to its object", "relObjectMedia": "link it to its object",
+             "addToGroup": "add its object to the job's group"}
 
 
 def worst(row: dict) -> str:

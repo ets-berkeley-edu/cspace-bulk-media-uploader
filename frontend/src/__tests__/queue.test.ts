@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
 import QueueList from "../components/QueueList.vue";
+import type { TenantInfo } from "../types";
+const tenant = { name: "PAHMA", handling: [{ id: "link", label: "Link to existing object", object: "existing", id_rule: "object" }] } as unknown as TenantInfo;
 
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -27,7 +29,7 @@ const rowOf = (w: ReturnType<typeof mount>, name: string) => w.findAll("tbody tr
 describe("Job queue (design: The job queue)", () => {
   it("shows the running job first with its progress, then queued jobs in order, with sign-in and check changes", async () => {
     mockApi();
-    const w = mount(QueueList);
+    const w = mount(QueueList, { props: { tenant } });
     await flushPromises();
     const names = w.findAll("tbody tr").map((r) => r.text());
     expect(names[0]).toContain("running one");
@@ -43,7 +45,7 @@ describe("Job queue (design: The job queue)", () => {
 
   it("moves a queued job, asks before Edit and Cancel run", async () => {
     mockApi();
-    const w = mount(QueueList);
+    const w = mount(QueueList, { props: { tenant } });
     await flushPromises();
     await rowOf(w, "second queued").find('button[aria-label="Move second queued up"]').trigger("click");
     await flushPromises();
@@ -52,6 +54,20 @@ describe("Job queue (design: The job queue)", () => {
     expect(w.text()).toContain("deletes its saved sign-in");
     await rowOf(w, "running one").findAll("button").find((b) => b.text() === "Cancel run")!.trigger("click");
     expect(w.text()).toContain("finishes the document it’s on");
+    w.unmount();
+  });
+
+  it("sorting only changes the view: moving is off until the sort is cleared", async () => {
+    mockApi();
+    const w = mount(QueueList, { props: { tenant } });
+    await flushPromises();
+    await w.findAll(".sort-btn").find((b) => b.text().startsWith("Job"))!.trigger("click");
+    const names = w.findAll("tbody tr").map((r) => r.text());
+    expect(names[1]).toContain("first queued"); // alphabetical: first, second
+    expect(w.text()).toContain("Sorted view. The queue still runs in its own order");
+    expect(rowOf(w, "second queued").find('button[aria-label="Move second queued up"]').attributes("disabled")).toBeDefined();
+    await w.findAll("button").find((b) => b.text() === "clear the sort")!.trigger("click");
+    expect(rowOf(w, "second queued").find('button[aria-label="Move second queued up"]').attributes("disabled")).toBeUndefined();
     w.unmount();
   });
 });

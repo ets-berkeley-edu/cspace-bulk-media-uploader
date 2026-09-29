@@ -11,6 +11,9 @@ import { formatTime } from "../lib/files";
 import { countsText, createdText, failureOf, importantRows, loadFailures, needsFix, OUTCOME, RESULT_BADGE, resultState, rowCodes } from "../lib/results";
 import type { Created, Job, Row, Run, TenantInfo } from "../types";
 import JobResults from "./JobResults.vue";
+import ThumbCell from "./ThumbCell.vue";
+import SortTh from "./SortTh.vue";
+import { tableState, tableView } from "../lib/table";
 
 const props = defineProps<{ tenant: TenantInfo }>();
 const emit = defineEmits<{ open: [id: string] }>();
@@ -27,7 +30,15 @@ const confirmDelete = ref<string | null>(null);
 const busy = ref(false);
 let timer: ReturnType<typeof setInterval> | undefined;
 
-const sorted = computed(() => [...jobs.value].sort((a, b) => (b.finishedAt ?? b.updated) - (a.finishedAt ?? a.updated)));
+const table = tableState();
+const OUT_RANK: Record<string, number> = { Failed: 0, NeedsAttention: 1, Completed: 2 };
+const newestFirst = computed(() => [...jobs.value].sort((a, b) => (b.finishedAt ?? b.updated) - (a.finishedAt ?? a.updated)));
+const sorted = computed(() => tableView(newestFirst.value, table, {
+  name: (j) => j.name || "Untitled job",
+  outcome: (j) => OUT_RANK[j.status] ?? 3,
+  docs: (j) => j.rowCount,
+  finished: (j) => -(j.finishedAt ?? 0),
+}, undefined, false).shown);
 const open = computed(() => jobs.value.find((j) => j.id === resultsId.value) ?? null);
 
 async function load(id: string) {
@@ -162,8 +173,9 @@ function mainMessage(r: Row): string {
         <button class="link" @click="expandAll(false)">Collapse all</button></div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th style="width:28px"></th><th>Job</th><th style="width:150px">Outcome</th><th>Documents</th>
-            <th style="width:140px" class="hide-narrow">Finished</th><th style="width:270px"></th></tr></thead>
+          <thead><tr><th style="width:28px"></th><SortTh :state="table" sort-key="name" label="Job" />
+            <SortTh :state="table" sort-key="outcome" label="Outcome" style="width:150px" /><SortTh :state="table" sort-key="docs" label="Documents" />
+            <SortTh :state="table" sort-key="finished" label="Finished" style="width:140px" class="hide-narrow" /><th style="width:270px"></th></tr></thead>
           <tbody>
             <tr v-if="!sorted.length"><td colspan="6" class="muted" style="text-align:center;padding:18px">No finished jobs yet.</td></tr>
             <template v-for="j in sorted" :key="j.id">
@@ -202,7 +214,7 @@ function mainMessage(r: Row): string {
                   <table v-else class="inner">
                     <tbody>
                       <tr v-for="r in importantRows(details.get(j.id)!.rows)" :key="r.n">
-                        <td style="width:36px">{{ r.n }}</td><td>{{ r.file }}</td>
+                        <td style="width:64px"><ThumbCell :job-id="j.id" :row="r" /></td><td style="width:36px">{{ r.n }}</td><td>{{ r.file }}</td>
                         <td style="width:110px"><span class="badge" :class="RESULT_BADGE[resultState(r)]">{{ resultState(r) }}</span></td>
                         <td class="sub">{{ mainMessage(r) }}</td>
                       </tr>

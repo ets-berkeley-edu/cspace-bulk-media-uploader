@@ -221,7 +221,7 @@ class Storage:
     def delete_job_and_files(self, job_id: str) -> list[dict]:
         """Delete a job with its rows, run history, fix copies and staged files. Returns the rows that were deleted."""
         rows = self.get_rows(job_id)
-        keys = {r.get("s3Key") for r in rows} | {r.get("supersededKey") for r in rows}
+        keys = {r.get("s3Key") for r in rows} | {r.get("supersededKey") for r in rows} | {r.get("thumbKey") for r in rows}
         keys |= {r.get("s3Key") for r in self._items(job_id, "FIX#")}
         for k in keys - {None, ""}:
             self.delete_object(k)
@@ -383,15 +383,19 @@ class Storage:
             raise
 
     def save_checks(self, job_id: str, row: dict) -> bool:
-        """Save a row's checks and lookups only if its data hasn't changed since they were computed (same
-        "v"); otherwise a newer save has re-checked it already. Doesn't bump the version."""
+        """Save a row's checks and lookups, and what they set automatically (the protected-file flag and the
+        publish default it implies), only if its data hasn't changed since they were computed (same "v");
+        otherwise a newer save has re-checked it already. Doesn't bump the version."""
         old = int(row.get("v", 0))
         try:
             self.jobs.update_item(
                 Key={"PK": f"JOB#{job_id}", "SK": f"ROW#{row['n']:05d}"},
-                UpdateExpression="SET checks = :c, lookups = :l",
+                UpdateExpression="SET checks = :c, lookups = :l, #p = :p, softSignals = :w, restricted = :r, restrictedAuto = :a, thumbKey = :t",
                 ConditionExpression=(Attr("PK").exists() & Attr("v").not_exists()) if old == 0 else Attr("v").eq(old),
-                ExpressionAttributeValues=_dyn({":c": row.get("checks", []), ":l": row.get("lookups", {})}))
+                ExpressionAttributeNames={"#p": "protected"},
+                ExpressionAttributeValues=_dyn({":c": row.get("checks", []), ":l": row.get("lookups", {}), ":p": row.get("protected"),
+                                                ":w": row.get("softSignals") or [], ":r": bool(row.get("restricted")),
+                                                ":a": bool(row.get("restrictedAuto")), ":t": row.get("thumbKey")}))
             return True
         except ClientError as e:
             if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
@@ -481,6 +485,37 @@ class Storage:
         if version_id:
             kw["VersionId"] = version_id
         return self.s3.get_object(**kw)["Body"]
+
+    def put_bytes(self, key: str, data: bytes, content_type: str) -> None:
+        self.s3.put_object(Bucket=self.s.s3_bucket, Key=key, Body=data, ContentType=content_type)
+
+    def get_bytes(self, key: str) -> bytes | None:
+        try:
+            return self.s3.get_object(Bucket=self.s.s3_bucket, Key=key)["Body"].read()
+        except ClientError:
+            return None
+
+    def store_thumbnail(self, job_id: str, n: int, jpeg: bytes, attempts: int = 5) -> bool:
+        """Store a row's thumbnail and record its key on the row (re-reading the row if it changed meanwhile).
+        Never for a protected row. Returns False if the row is gone or protected."""
+        from .thumbnails import thumb_key
+        key = thumb_key(job_id)
+        self.put_bytes(key, jpeg, "image/jpeg")
+        for _ in range(attempts):
+            row = self.get_row(job_id, n)
+            if not row or row.get("protected"):
+                break
+            old = row.get("thumbKey")
+            row["thumbKey"] = key
+            try:
+                self.put_row(job_id, row)
+            except RowChanged:
+                continue
+            if old:
+                self.delete_object(old)
+            return True
+        self.delete_object(key)
+        return False
 
     def delete_object(self, key: str) -> None:
         self.s3.delete_object(Bucket=self.s.s3_bucket, Key=key)

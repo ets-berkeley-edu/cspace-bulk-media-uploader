@@ -3,13 +3,36 @@
  * The Drafts tab (design: Drafts, scheduling and the job queue): every draft in the tenant, which anyone can
  * preview and edit, one person at a time. Checks are re-run against CollectionSpace each time it is shown.
  */
-import { onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { api } from "../api";
 import { formatTime } from "../lib/files";
-import type { Job } from "../types";
+import { tableState, tableView } from "../lib/table";
+import type { Job, Row, TenantInfo } from "../types";
+import JobDocs from "./JobDocs.vue";
+import SortTh from "./SortTh.vue";
 
+defineProps<{ tenant: TenantInfo }>();
 const emit = defineEmits<{ open: [id: string, mode: "edit" | "preview", takeOverSince?: number] }>();
 const drafts = ref<Job[]>([]);
+const docs = reactive(new Map<string, Row[]>()); // each draft's documents, from its latest check
+const expanded = reactive(new Set<string>());
+const table = tableState();
+const sorted = computed(() => tableView(drafts.value, table, {
+  name: (j) => j.name || "Untitled job",
+  docs: (j) => j.rowCount,
+  checks: (j) => { const c = countsOf(j.id); return c ? -(c.block * 100000 + c.warn) : 1; },
+  saved: (j) => -(j.lastSavedAt ?? 0),
+  editing: (j) => j.editingBy || "~",
+  expires: (j) => j.expiresAt ?? 0,
+}, undefined, false).shown);
+function toggle(j: Job) {
+  if (expanded.has(j.id)) expanded.delete(j.id);
+  else { expanded.add(j.id); if (!docs.has(j.id)) api.job(j.id).then((r) => docs.set(j.id, r.rows)).catch(() => undefined); }
+}
+function expandAll(on: boolean) {
+  if (!on) { expanded.clear(); return; }
+  drafts.value.forEach((j) => { if (!expanded.has(j.id)) toggle(j); });
+}
 const checks = reactive(new Map<string, { block: number; warn: number } | "checking">());
 const confirm = ref<{ id: string; kind: "delete" | "takeover" } | null>(null);
 const error = ref("");
@@ -25,7 +48,7 @@ async function refresh(runChecks = false) {
   if (runChecks) {
     for (const d of drafts.value) {
       checks.set(d.id, "checking");
-      api.check(d.id).then((r) => checks.set(d.id, r.counts)).catch(() => checks.delete(d.id));
+      api.check(d.id).then((r) => { checks.set(d.id, r.counts); docs.set(d.id, r.rows); }).catch(() => checks.delete(d.id));
     }
   }
 }
@@ -66,13 +89,20 @@ async function del(j: Job) {
       edit them, one person at a time; you can take over a draft someone else is editing. A draft that has never run is deleted
       30 days after it was last changed or saved; a fix of a job that has run is reverted instead, and the job returns to Finished jobs. Checks are re-run against CollectionSpace each time this list is shown.</p>
     <div v-if="error" class="msg msg-block">{{ error }}</div>
+    <div v-if="drafts.length" class="list-tools"><button class="link" @click="expandAll(true)">Expand all</button> ·
+      <button class="link" @click="expandAll(false)">Collapse all</button></div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Draft</th><th style="width:60px">Docs</th><th style="width:170px">Checks now</th><th style="width:150px">Last saved</th>
-          <th style="width:110px">Editing</th><th style="width:140px">Expires</th><th style="width:250px"></th></tr></thead>
+        <thead><tr><th style="width:28px"></th><SortTh :state="table" sort-key="name" label="Draft" /><SortTh :state="table" sort-key="docs" label="Docs" style="width:70px" />
+          <SortTh :state="table" sort-key="checks" label="Checks now" style="width:170px" /><SortTh :state="table" sort-key="saved" label="Last saved" style="width:150px" />
+          <SortTh :state="table" sort-key="editing" label="Editing" style="width:110px" /><SortTh :state="table" sort-key="expires" label="Expires" style="width:140px" />
+          <th style="width:250px"></th></tr></thead>
         <tbody>
-          <tr v-if="!drafts.length"><td colspan="7" class="muted" style="text-align:center;padding:18px">No drafts. A job you start in Create / edit job is a draft until you schedule it.</td></tr>
-          <tr v-for="j in drafts" :key="j.id">
+          <tr v-if="!drafts.length"><td colspan="8" class="muted" style="text-align:center;padding:18px">No drafts. A job you start in Create / edit job is a draft until you schedule it.</td></tr>
+          <template v-for="j in sorted" :key="j.id">
+          <tr>
+            <td><button class="chevron" :class="{ open: expanded.has(j.id) }" :aria-expanded="expanded.has(j.id)"
+                        :aria-label="`Show details of ${j.name || 'Untitled job'}`" @click="toggle(j)">▸</button></td>
             <td>{{ j.name || "Untitled job" }}<div class="sub">created by {{ j.createdBy }}</div>
               <div v-if="j.fixFrom" class="sub">🔧 fixing after run {{ j.fixFrom.run }} ({{ j.fixFrom.status === "Failed" ? "failed" : "needed attention" }})</div></td>
             <td>{{ j.rowCount }}</td>
@@ -85,7 +115,8 @@ async function del(j: Job) {
             <td>{{ formatTime(j.lastSavedAt) }}<div class="sub">by {{ j.lastSavedBy || "—" }}</div></td>
             <td><span v-if="j.editingBy" class="lock" :title="`since ${formatTime(j.editingSince)}`">🔒 {{ j.editingByYou ? "You" : j.editingBy }}</span>
               <span v-else class="sub">—</span></td>
-            <td><span :class="{ soon: expiry(j).soon }">{{ expiry(j).text }}</span><div class="sub" :title="j.fixFrom ? 'The edits are discarded and the job returns to Finished jobs as it was' : 'The draft is deleted with its files'">{{ j.fixFrom ? "then reverted" : "then deleted" }}</div></td>
+            <td><span :class="{ soon: expiry(j).soon }">{{ expiry(j).text }}</span><div class="sub" :title="j.fixFrom ? 'The edits are discarded and the job returns to Finished jobs as it was' : 'The draft is deleted with its files'">{{ j.fixFrom ? "then reverted" : "then deleted" }}</div>
+              <div v-if="j.protectedCount" class="sub" title="A draft with protected files expires 7 days after it was last saved">7 days: protected files</div></td>
             <td>
               <div v-if="confirm?.id === j.id && confirm.kind === 'delete'" class="msg msg-warn">
                 Delete this draft? Its {{ j.rowCount }} documents and uploaded files are removed from the BMU; nothing in CollectionSpace is touched<template
@@ -106,6 +137,9 @@ async function del(j: Job) {
               </div>
             </td>
           </tr>
+          <tr v-if="expanded.has(j.id)" class="detail"><td colspan="8">
+            <JobDocs :job="j" :rows="docs.get(j.id)" :tenant="tenant" kind="drafts" @preview="emit('open', j.id, 'preview')" /></td></tr>
+          </template>
         </tbody>
       </table>
     </div>

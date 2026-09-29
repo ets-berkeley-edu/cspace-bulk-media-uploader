@@ -11,7 +11,7 @@ const tenant: TenantInfo = {
   handling: [{ id: "link", label: "Link to existing object", object: "existing", id_rule: "object" },
              { id: "mediaonly", label: "Media only", object: "none", id_rule: "image" }],
 };
-const perms: Perms = { media: true, relations: true, objects: true, readObjects: true, authorities: true };
+const perms: Perms = { media: true, relations: true, objects: true, readObjects: true, authorities: true, groups: true };
 function row(p: Partial<Row> = {}): Row {
   return { n: 1, file: "15-1234_a.jpg", fileOriginal: "15-1234_a.jpg", size: 10, contentType: "image/jpeg", handling: "link",
     obj: "15-1234", objParsed: "15-1234", img: "15-1234_a", parseOk: true, idnum: "15-1234", date: "", restricted: false, type: [],

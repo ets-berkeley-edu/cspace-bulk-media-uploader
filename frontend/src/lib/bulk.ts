@@ -5,9 +5,9 @@
 import type { Row } from "../types";
 
 /** The panel's choices; a missing key means "no change". */
-export type BulkChanges = Partial<Pick<Row, "handling" | "restricted" | "type" | "language" | "creator" | "contributor" | "rightsHolder">>;
+export type BulkChanges = Partial<Pick<Row, "handling" | "restricted" | "type" | "language" | "creator" | "contributor" | "rightsHolder" | "group">>;
 
-type Problem = "done" | "disabled" | "created" | "handling";
+type Problem = "done" | "disabled" | "created" | "handling" | "nogroup" | "grouped";
 
 const PROBLEM_TEXT: Record<Problem, [string, string]> = { // [plural, singular]
   done: ["are already done", "is already done"],
@@ -15,6 +15,8 @@ const PROBLEM_TEXT: Record<Problem, [string, string]> = { // [plural, singular]
   created: ["already created their records in CollectionSpace", "already created its records in CollectionSpace"],
   handling: ["keep their handling because the last run already found or created their objects (🔒)",
              "keeps its handling because the last run already found or created its object (🔒)"],
+  nogroup: ["aren't linked to an object, so they can't join the group", "isn't linked to an object, so it can't join the group"],
+  grouped: ["already have their objects in the group", "already has its object in the group"],
 };
 
 export function isDone(r: Row): boolean {
@@ -23,7 +25,7 @@ export function isDone(r: Row): boolean {
 
 /** True once the row created anything in CollectionSpace (finding an existing object doesn't count). */
 export function isLocked(r: Row): boolean {
-  return Object.entries(r.result?.steps ?? {}).some(([name, st]) => name !== "findObject" && !!st.csid);
+  return Object.entries(r.result?.steps ?? {}).some(([name, st]) => name !== "findObject" && !!st.csid && !st.found && !st.sameAs);
 }
 
 /** A Failed row whose object step already ran keeps its object, so its handling can't change. */
@@ -34,15 +36,21 @@ export function objectStepRan(r: Row): boolean {
 
 /** Would these choices change this row? Choosing a value it already has is no change. */
 export function rowChanges(r: Row, c: BulkChanges): boolean {
-  return (Object.keys(c) as (keyof BulkChanges)[]).some((k) => JSON.stringify(r[k] ?? null) !== JSON.stringify(c[k] ?? null));
+  return (Object.keys(c) as (keyof BulkChanges)[]).some((k) => {
+    const have = k === "group" ? r.group ?? true : r[k];
+    return JSON.stringify(have ?? null) !== JSON.stringify(c[k] ?? null);
+  });
 }
 
-function rowProblem(r: Row, c: BulkChanges): Problem | null {
+/** linking: the handlings that link to an object (only those documents can join the job's group). */
+function rowProblem(r: Row, c: BulkChanges, linking?: Set<string>): Problem | null {
   if (!rowChanges(r, c)) return null;
   if (isDone(r)) return "done";
   if (!r.include) return "disabled";
+  if (c.group !== undefined && c.group !== (r.group ?? true) && r.result?.steps?.addToGroup?.s === "done") return "grouped";
   if (isLocked(r)) return "created";
   if (c.handling !== undefined && c.handling !== r.handling && objectStepRan(r)) return "handling";
+  if (c.group === true && linking && !linking.has(c.handling ?? r.handling)) return "nogroup";
   return null;
 }
 
@@ -59,13 +67,13 @@ export interface BulkVerdict {
 }
 
 /** Can every target take every chosen change? If not, a one-line reason for the greyed-out buttons. */
-export function bulkCheck(targets: Row[], c: BulkChanges, all: boolean): BulkVerdict {
+export function bulkCheck(targets: Row[], c: BulkChanges, all: boolean, linking?: Set<string>): BulkVerdict {
   if (!Object.keys(c).length) return { ok: false, picked: false, why: "Choose a change first." };
   if (!targets.length) {
     return { ok: false, picked: true, why: all ? "No documents still to run: every document is done or disabled." : "No documents to change." };
   }
   const counts = new Map<Problem, number>();
-  targets.forEach((r) => { const p = rowProblem(r, c); if (p) counts.set(p, (counts.get(p) ?? 0) + 1); });
+  targets.forEach((r) => { const p = rowProblem(r, c, linking); if (p) counts.set(p, (counts.get(p) ?? 0) + 1); });
   const bad = [...counts.values()].reduce((a, b) => a + b, 0);
   if (!bad) {
     if (targets.some((r) => rowChanges(r, c))) return { ok: true, picked: true, why: "" };

@@ -5,16 +5,32 @@ import { formatBytes } from "../lib/files";
 import { filenameProblems, idLabel, objectLabel } from "../lib/filenames";
 import { handlingBlocked, rowStatus, worstLevel } from "../lib/status";
 import { canReplaceFile, createdSomething, fixFields, mediaCreated, objectStepRan, stepList, STEP_MARK, stepNote } from "../lib/results";
+import { portalOf } from "../lib/portal";
 import AuthorityInput from "./AuthorityInput.vue";
 import DateInput from "./DateInput.vue";
 import ErrorBox from "./ErrorBox.vue";
+import ThumbCell from "./ThumbCell.vue";
 import RepeatingSelect from "./RepeatingSelect.vue";
 
 const props = defineProps<{
   row: Row; tenant: TenantInfo; perms: Perms; preview?: string; expanded: boolean; readonly: boolean; checking?: boolean;
-  selected?: boolean; languages?: Option[]; otherNames?: string[];
+  selected?: boolean; languages?: Option[]; otherNames?: string[]; uploadingHere?: boolean; groupOn?: boolean; jobId?: string | null;
 }>();
-const emit = defineEmits<{ edit: [changes: Partial<Row>]; remove: []; toggle: []; select: [on: boolean]; replace: [file: File] }>();
+const emit = defineEmits<{ edit: [changes: Partial<Row>]; remove: []; toggle: []; select: [on: boolean]; replace: [file: File]; retry: [] }>();
+
+// Design: a failed upload shows "Upload failed" with Retry and Remove. An upload this page isn't sending
+// (the page that added the file was closed, or it's another person's browser) won't finish on its own.
+const stalled = computed(() => !props.uploadingHere && !mediaCreated(props.row) && ["pending", "uploading", "verifying"].includes(props.row.upload.s));
+const canRetry = computed(() => !props.readonly && props.row.include && !mediaCreated(props.row) && (props.row.upload.s === "failed" || stalled.value));
+const portal = computed(() => portalOf(props.row, props.tenant));
+const confirmRemove = ref(false);
+
+// The job's group: only documents linked to an object can join; once its object is in the group, it stays.
+const inGroup = computed(() => props.row.group ?? true);
+const groupDone = computed(() => props.row.result?.steps?.addToGroup?.s === "done");
+const groupWhy = computed(() => handling.value?.object === "none" ? "Not linked to an object, so it can't join the group"
+  : groupDone.value ? (props.row.result?.steps?.addToGroup?.sameAs ? `Its object was added by document ${props.row.result.steps.addToGroup.sameAs}` : "Its object is in the group")
+  : !props.perms.groups ? "You don't have permission to create groups" : "");
 
 // After a run (design: Fixing a job after a run): a document whose Media record exists changes only what the
 // rerun still needs; a Failed one whose object step ran keeps its handling and object number.
@@ -33,7 +49,8 @@ function pickReplacement(e: Event) {
 }
 const handling = computed(() => props.tenant.handling.find((h) => h.id === props.row.handling));
 
-const status = computed(() => rowStatus(props.row, props.tenant, props.checking));
+const status = computed(() => stalled.value && props.row.include ? { text: "Upload not finished", cls: "b-danger" }
+  : rowStatus(props.row, props.tenant, props.checking));
 const hasWarnings = computed(() => props.row.include && worstLevel(props.row) === "warn");
 const PREFIX: Record<string, string> = { block: "Must fix: ", warn: "Warning: ", info: "" };
 
@@ -59,12 +76,13 @@ function text(field: keyof Row, e: Event) {
 
 <template>
   <tr :class="{ disabled: !row.include }">
-    <td><div class="thumb"><img v-if="preview" :src="preview" alt="" /><span v-else>{{ row.file.split(".").pop()?.toUpperCase() }}</span></div></td>
+    <td><ThumbCell :job-id="jobId" :row="row" :preview="preview" /></td>
     <td class="keep"><input type="checkbox" :checked="selected" :aria-label="`Select ${row.file}`"
       @change="emit('select', ($event.target as HTMLInputElement).checked)" /></td>
     <td class="keep"><button class="chevron" :class="{ open: expanded }" :aria-expanded="expanded" aria-label="Show details" @click="emit('toggle')">▸</button></td>
     <td>
-      <div>{{ row.file }}<span v-if="renamed" class="badge b-accent" style="margin-left:6px" :title="`Original: ${original}`">Renamed</span></div>
+      <div>{{ row.file }}<span v-if="renamed" class="badge b-accent" style="margin-left:6px" :title="`Original: ${original}`">Renamed</span>
+        <span v-if="row.protected" class="badge b-danger" style="margin-left:6px" :title="`Protected file: ${row.protected.reason}`">🔒 Protected</span></div>
       <div class="sub">{{ formatBytes(row.size) }}<template v-if="handling?.object !== 'none'"> · object {{ row.obj || "—" }}</template></div>
     </td>
     <td>
@@ -77,9 +95,20 @@ function text(field: keyof Row, e: Event) {
       <input type="checkbox" :checked="row.restricted" :disabled="ro || !row.include" :aria-label="tenant.publish.header"
              @change="emit('edit', { restricted: ($event.target as HTMLInputElement).checked })" />
     </td>
+    <td><span class="portal" :class="`portal-${portal.k}`" :title="portal.why">{{ portal.k === "pub" ? "●" : "⊘" }} {{ portal.text }}</span></td>
+    <td v-if="groupOn" style="text-align:center">
+      <input type="checkbox" :checked="inGroup && handling?.object !== 'none'" :aria-label="`${row.file} in the job's group`" :title="groupWhy"
+             :disabled="readonly || !row.include || handling?.object === 'none' || groupDone || done || (!perms.groups && !inGroup)"
+             @change="emit('edit', { group: ($event.target as HTMLInputElement).checked })" /></td>
     <td><span class="badge" :class="status.cls">{{ status.text }}</span>
       <span v-if="hasWarnings && status.cls !== 'b-danger'" class="badge b-warn" title="This document has warnings"> !</span>
-      <div v-if="row.upload.s === 'uploading'" class="progress"><span class="up" :style="{ width: (row.upload.pct ?? 0) + '%' }"></span></div>
+      <div v-if="row.upload.s === 'uploading' && !stalled" class="progress"><span class="up" :style="{ width: (row.upload.pct ?? 0) + '%' }"></span></div>
+      <div v-if="canRetry" class="retry-line">
+        <template v-if="!confirmRemove"><button type="button" @click="emit('retry')">Retry</button>
+          <button type="button" @click="confirmRemove = true">Remove</button></template>
+        <template v-else><span class="sub">Remove this document?</span> <button type="button" @click="confirmRemove = false; emit('remove')">Remove</button>
+          <button type="button" @click="confirmRemove = false">Cancel</button></template>
+      </div>
     </td>
     <td class="keep">
       <label v-if="row.result?.state !== 'Done'" class="sub"><input type="checkbox" :checked="row.include" :disabled="readonly"
@@ -87,7 +116,7 @@ function text(field: keyof Row, e: Event) {
     </td>
   </tr>
   <tr v-if="expanded" class="detail">
-    <td colspan="8">
+    <td :colspan="groupOn ? 10 : 9">
       <template v-if="created">
         <div class="msg msg-info">
           <template v-if="done">This document was fully created in CollectionSpace (Media record {{ row.result?.steps?.media?.csid }}). Nothing here can
@@ -158,8 +187,11 @@ function text(field: keyof Row, e: Event) {
       </template>
       <ErrorBox v-for="(nt, i) in row.result?.notices ?? []" :key="'n' + i" :code="nt.code" :detail="nt.detail" notice />
       <div v-for="(c, i) in row.checks" :key="i" class="msg" :class="`msg-${c.level}`"><strong>{{ PREFIX[c.level] }}</strong>{{ c.text }}</div>
-      <div v-if="!readonly && row.include && !createdSomething(row)" style="margin-top:6px"><button class="link" @click="emit('remove')">Delete document</button>
-        <span class="field-note" style="display:inline">Permanent, unlike Include off. Only for documents that haven't created anything in CollectionSpace.</span></div>
+      <div v-if="!readonly && row.include && !createdSomething(row)" style="margin-top:6px">
+        <template v-if="!confirmRemove"><button class="link" @click="confirmRemove = true">Delete document</button>
+          <span class="field-note" style="display:inline">Permanent, unlike Include off. Only for documents that haven't created anything in CollectionSpace.</span></template>
+        <div v-else class="msg msg-warn">Delete “{{ row.file }}” from this job permanently? Its uploaded file is removed; nothing in CollectionSpace is touched.
+          <button @click="confirmRemove = false; emit('remove')">Delete document</button> <button @click="confirmRemove = false">Cancel</button></div></div>
       <div v-else-if="!readonly && createdSomething(row) && !done" class="field-note" style="margin-top:6px">This document already created records in
         CollectionSpace, so it can't be deleted from the job; switch Include off to have the BMU ignore it.</div>
     </td>

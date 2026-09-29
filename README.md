@@ -59,7 +59,7 @@ docker compose up --build
 ```
 
 Open http://localhost:5173. With the simulated CollectionSpace, sign in as `admin`/`admin` (all permissions),
-`limited`/`limited` (can't create objects) or `reader`/`reader` (read only). Sample objects (list them with
+`limited`/`limited` (can't create objects or groups) or `reader`/`reader` (read only). Sample objects (list them with
 `curl localhost:8180/_fake/objects`):
 
 | Object number | For testing |
@@ -72,8 +72,9 @@ Open http://localhost:5173. With the simulated CollectionSpace, sign in as `admi
 | `12-2002` | Sensitive: NAGPRA status and a display restriction at the "restriction" level |
 | `12-2003` | Not sensitive, but a display restriction at the "preference" level (a warning in the design) |
 
-The sensitivity fields are there for the Protected files feature, which isn't built yet; until then these
-objects behave like ordinary ones. The simulator's state is at http://localhost:8180/_fake/state (reset it with
+Documents linked to `12-2001` or `12-2002` become protected files automatically; `12-2003` gives a warning.
+The rules are in `backend/bmu/tenants/pahma.yaml` (`sensitivity`), and the Object field names they read must be
+confirmed on the QA tenant with `scripts/check_cspace.py --object <number> --show-object`. The simulator's state is at http://localhost:8180/_fake/state (reset it with
 `curl -X POST localhost:8180/_fake/reset`).
 
 To watch the job queue, or to cancel a run partway, slow the simulated CollectionSpace down so each create and
@@ -91,12 +92,13 @@ curl -X POST 'localhost:8180/_fake/fail?step=relation&status=403&count=0'       
 curl -X POST 'localhost:8180/_fake/fail?step=media&status=401'                        # sign-in failed (job stops)
 curl -X POST 'localhost:8180/_fake/fail?step=media&status=503&count=0'                # outage: 5 in a row stop the job
 curl -X POST 'localhost:8180/_fake/fail?step=mediaSearch&effect=many'                 # ID in use since scheduling (notice)
+curl -X POST 'localhost:8180/_fake/fail?step=group&status=400'                        # the job's group can't be created
 curl localhost:8180/_fake/fail            # list the rules
 curl -X DELETE localhost:8180/_fake/fail  # clear them
 ```
 
 `match` is compared with the document's identification number, filename and object number. Steps: `media`,
-`upload`, `objectSearch`, `objectCreate`, `relation`, `mediaSearch`.
+`upload`, `objectSearch`, `objectCreate`, `relation`, `mediaSearch`, `group`.
 
 To use the Lyrasis QA tenant instead, set `BMU_CSPACE_URL=https://pahma.qa.collectionspace.org` in `.env`
 and sign in with a QA account. Records created there stay (the BMU never deletes).

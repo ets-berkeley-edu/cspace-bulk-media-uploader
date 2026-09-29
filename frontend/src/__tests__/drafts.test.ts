@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
 import DraftsList from "../components/DraftsList.vue";
+import type { TenantInfo } from "../types";
+const tenant = { name: "PAHMA", handling: [{ id: "link", label: "Link to existing object", object: "existing", id_rule: "object" }] } as unknown as TenantInfo;
 
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -23,7 +25,7 @@ function mockApi() {
 describe("Drafts tab (design: Drafts)", () => {
   it("lists only drafts, with who is editing, checks now and expiry", async () => {
     mockApi();
-    const w = mount(DraftsList);
+    const w = mount(DraftsList, { props: { tenant } });
     await flushPromises();
     const text = w.text();
     expect(text).toContain("mine");
@@ -38,7 +40,7 @@ describe("Drafts tab (design: Drafts)", () => {
 
   it("offers Continue editing for your own draft, and Take over (after a warning) for someone else's", async () => {
     mockApi();
-    const w = mount(DraftsList);
+    const w = mount(DraftsList, { props: { tenant } });
     await flushPromises();
     const rowOf = (name: string) => w.findAll("tbody tr").find((r) => r.text().includes(name))!;
     await rowOf("mine").findAll("button").find((b) => b.text() === "Continue editing")!.trigger("click");

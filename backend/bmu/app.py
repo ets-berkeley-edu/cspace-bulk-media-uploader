@@ -9,7 +9,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -19,8 +19,9 @@ from .crypto import Crypto, make_crypto
 from .cspace import CSpaceClient, CSpaceError
 from .failures import catalog
 from .rows import (PROBLEM_TEXT, apply_edit, can_replace_file, check_rows, clean_filename, created_records, edit_problem,
-                   is_locked, new_row, worst)
+                   is_locked, media_created, new_row, worst)
 from .storage import RowChanged, Storage, now
+from .thumbnails import MAX_BROWSER_BYTES, TIFF_EXTENSIONS, NotAnImage, make_thumbnail, tiff_thumbnail_step
 from .tenant import Tenant, load_tenant
 
 COOKIE = "bmu_session"
@@ -137,9 +138,14 @@ def _editable(job: dict, sess: "Session | None" = None) -> None:
                                              "changed before was saved." if who else "Open this draft for editing first."})
 
 
+def _draft_days(s: "Services", job: dict | None) -> int:
+    """30 days, or 7 if any document is a protected file (design: Drafts, Expiry)."""
+    return s.settings.protected_draft_days if (job or {}).get("protectedCount") else s.settings.draft_days
+
+
 def _saved(s: "Services", sess: "Session", job_id: str) -> None:
     """A change to a draft was saved: record who saved it and restart its expiry."""
-    s.storage.mark_saved(job_id, sess.user, sess.key, s.settings.draft_days)
+    s.storage.mark_saved(job_id, sess.user, sess.key, _draft_days(s, s.storage.get_job(job_id)))
 
 
 def _keep_original(s: "Services", job: dict, row: dict) -> None:
@@ -183,11 +189,12 @@ def _complete_if_clean(s: "Services", sess: "Session", job_id: str) -> bool:
 def _delete_job(s: "Services", sess: "Session", job: dict, rows: list[dict]) -> None:
     """Delete a job and its staged files. Records its runs created stay in CollectionSpace; the audit entry
     lists every one, by row and record type, so they can still be found and finished there."""
-    created = created_records(rows)
+    created = created_records(rows, job)
     s.storage.delete_job_and_files(job["id"])
     c = created["counts"]
-    what = (f"; its runs created {c['media']} Media records ({c['files']} with files), {c['objects']} Objects and "
-            f"{c['relations']} Relations, which stay in CollectionSpace" + (f", {c['unfinished']} unfinished" if c["unfinished"] else "")
+    what = (f"; its runs created {c['media']} Media records ({c['files']} with files), {c['objects']} Objects, "
+            + ("the Group, " if c["groups"] else "") +
+            f"and {c['relations']} Relations, which stay in CollectionSpace" + (f", {c['unfinished']} unfinished" if c["unfinished"] else "")
             if created["csids"] else "; it had created nothing in CollectionSpace")
     s.storage.audit(sess.tenant, "Job deleted", sess.user, job["id"],
                     f"Deleted “{job['name'] or 'Untitled job'}” ({len(rows)} documents){what}.", created["csids"])
@@ -219,7 +226,15 @@ class NewJob(BaseModel):
 
 
 class JobPatch(BaseModel):
-    name: str = Field(max_length=200)
+    name: str | None = Field(default=None, max_length=200)
+    groupOn: bool | None = None  # "Create a group for this job"
+    groupTitle: str | None = Field(default=None, max_length=200)
+
+
+def default_group_title(name: str) -> str:
+    """Design: prefilled with bmu-<job name> (the legacy =job convention)."""
+    slug = re.sub(r"[^a-z0-9]+", "-", (name or "untitled job").lower()).strip("-")
+    return f"bmu-{slug or 'untitled-job'}"
 
 
 class FileSpec(BaseModel):
@@ -371,7 +386,7 @@ def _routes(app: FastAPI) -> None:
         job = _job_or_404(s, sess, job_id)
         rows = s.storage.get_rows(job_id)
         return {"job": _public(job, sess), "rows": rows, "runs": s.storage.get_runs(job_id),
-                "created": created_records(rows)["counts"]}
+                "created": created_records(rows, job)["counts"]}
 
     # ---- Fix and reschedule (design: Fixing a job after a run; Rescheduling after a run) --------------
     @app.post("/api/jobs/{job_id}/fix")
@@ -384,7 +399,7 @@ def _routes(app: FastAPI) -> None:
         if not s.storage.update_job(job_id, {"status": "Draft", "fixFrom": {"status": job["status"], "code": job.get("code", ""),
                                                                             "run": job.get("run", 0)},
                                              "note": "", "lastSavedBy": sess.user, "lastSavedAt": t,
-                                             "expiresAt": t + s.settings.draft_days * 86400}, expect_status=list(FIXABLE)):
+                                             "expiresAt": t + _draft_days(s, job) * 86400}, expect_status=list(FIXABLE)):
             now_job = s.storage.get_job(job_id) or {}
             who = now_job.get("editingBy")
             raise HTTPException(409, f"{who} is already fixing this job; it's in Drafts." if who else
@@ -414,7 +429,7 @@ def _routes(app: FastAPI) -> None:
         It goes to the end of the queue when it is scheduled again."""
         job = _job_or_404(s, sess, job_id)
         if not s.storage.update_job(job_id, {"status": "Draft", "queuePos": None, "note": "", "lastSavedBy": sess.user,
-                                             "lastSavedAt": now(), "expiresAt": now() + s.settings.draft_days * 86400},
+                                             "lastSavedAt": now(), "expiresAt": now() + _draft_days(s, job) * 86400},
                                     expect_status="Queued"):
             raise HTTPException(409, f"The job is {s.storage.get_job(job_id)['status']}; only queued jobs can be edited this way.")
         s.storage.delete_credential(job_id)
@@ -465,11 +480,35 @@ def _routes(app: FastAPI) -> None:
         return _public(s.storage.get_job(job_id), sess)
 
     @app.patch("/api/jobs/{job_id}")
-    def rename_job(job_id: str, body: JobPatch, sess: Session = Depends(current_session), s: Services = Depends(svc)):
-        _editable(_job_or_404(s, sess, job_id), sess)
-        s.storage.update_job(job_id, {"name": body.name.strip()}, expect_status="Draft")
+    def patch_job(job_id: str, body: JobPatch, sess: Session = Depends(current_session), s: Services = Depends(svc)):
+        """The job header: its name, and the job's group (design: Groups). The Group title follows the job name
+        until the user edits it. Once the Group exists in CollectionSpace, it can't be turned off or renamed."""
+        job = _job_or_404(s, sess, job_id)
+        _editable(job, sess)
+        fields: dict[str, Any] = {}
+        name = job.get("name", "") if body.name is None else body.name.strip()
+        if body.name is not None:
+            fields["name"] = name
+        group_made = (job.get("groupStep") or {}).get("s") == "done"
+        if (body.groupOn is not None and body.groupOn != bool(job.get("groupOn"))) or \
+           (body.groupTitle is not None and body.groupTitle.strip() != job.get("groupTitle", "")):
+            if group_made:
+                raise HTTPException(409, "The job's group already exists in CollectionSpace, so it can't be turned off or renamed here.")
+        on = bool(job.get("groupOn")) if body.groupOn is None else body.groupOn
+        if body.groupOn is not None:
+            fields["groupOn"] = on
+            if on and not job.get("groupTitle"):
+                fields.update(groupTitle=default_group_title(name), groupTitleAuto=True)
+        if body.groupTitle is not None:
+            title = body.groupTitle.strip()
+            fields.update(groupTitle=title, groupTitleAuto=title == default_group_title(name))
+        elif body.name is not None and job.get("groupTitleAuto") and not group_made:
+            fields["groupTitle"] = default_group_title(name)  # still the prefilled title: it follows the name
+        if fields:
+            s.storage.update_job(job_id, fields, expect_status="Draft")
         _saved(s, sess, job_id)
-        return _public(s.storage.get_job(job_id), sess)
+        rc = _recheck(s, sess, job_id, targets=set()) if "groupOn" in fields else None
+        return {**_public(s.storage.get_job(job_id), sess), **({"rows": rc["changed"]} if rc else {})}
 
     @app.delete("/api/jobs/{job_id}")
     def delete_job(job_id: str, sess: Session = Depends(current_session), s: Services = Depends(svc)):
@@ -515,7 +554,7 @@ def _routes(app: FastAPI) -> None:
                          for r, f in zip(rows, body.files)]}
 
     @app.post("/api/jobs/{job_id}/rows/{n}/uploaded")
-    def uploaded(job_id: str, n: int, sess: Session = Depends(current_session), s: Services = Depends(svc)):
+    def uploaded(job_id: str, n: int, background: BackgroundTasks, sess: Session = Depends(current_session), s: Services = Depends(svc)):
         _editable(_job_or_404(s, sess, job_id))
         row = s.storage.get_row(job_id, n) or _404()
         head = s.storage.head_object(row["s3Key"])
@@ -524,7 +563,53 @@ def _routes(app: FastAPI) -> None:
         else:
             row["upload"] = {"s": "failed", "reason": "missing" if not head else "size mismatch"}
         s.storage.put_row(job_id, row)
-        return _recheck_after_change(s, sess, job_id, n)
+        result = _recheck_after_change(s, sess, job_id, n)
+        if row["upload"]["s"] == "done" and row["file"].rsplit(".", 1)[-1].lower() in TIFF_EXTENSIONS:
+            background.add_task(tiff_thumbnail_step, s.storage, job_id, n)  # the thumbnail step (a Lambda in AWS)
+        return result
+
+    # ---- thumbnails (design: User interface, Thumbnails) -------------------------------------------
+    @app.post("/api/jobs/{job_id}/rows/{n}/thumbnail")
+    async def put_thumbnail(job_id: str, n: int, request: Request, sess: Session = Depends(current_session), s: Services = Depends(svc)):
+        """The thumbnail the browser made from the local file (JPEG and PNG). It is decoded and written again
+        here, so nothing but pixels is kept; none is stored for a protected file."""
+        _editable(_job_or_404(s, sess, job_id))
+        row = s.storage.get_row(job_id, n) or _404()
+        body = await request.body()
+        if len(body) > MAX_BROWSER_BYTES:
+            raise HTTPException(413, "The thumbnail is too large.")
+        if row.get("protected"):
+            return {"stored": False}
+        try:
+            jpeg = make_thumbnail(body)
+        except NotAnImage:
+            raise HTTPException(422, "Not an image.")
+        return {"stored": s.storage.store_thumbnail(job_id, n, jpeg)}
+
+    @app.get("/api/jobs/{job_id}/rows/{n}/thumbnail")
+    def get_thumbnail(job_id: str, n: int, size: str = "small", sess: Session = Depends(current_session), s: Services = Depends(svc)):
+        """A document's thumbnail, after checking the session and tenant: CollectionSpace's own derivative once
+        the file is there (fetched with your credentials, so CollectionSpace's permissions apply, protected or
+        not), otherwise the staged thumbnail. The browser never gets an S3 URL."""
+        _job_or_404(s, sess, job_id)
+        row = s.storage.get_row(job_id, n) or _404()
+        upload = ((row.get("result") or {}).get("steps") or {}).get("upload") or {}
+        headers = {"Cache-Control": "private, max-age=300"}
+        if upload.get("s") == "done" and upload.get("csid"):
+            client = sess.client(s)
+            try:
+                data, ctype = client.derivative(upload["csid"], "Medium" if size == "large" else "Thumbnail")
+            except CSpaceError as e:
+                raise HTTPException(404 if e.status in (403, 404) else 502, "No thumbnail from CollectionSpace.")
+            finally:
+                client.close()
+            return Response(content=data, media_type=ctype, headers=headers)
+        if row.get("protected") or not row.get("thumbKey"):
+            raise HTTPException(404, "No thumbnail.")
+        data = s.storage.get_bytes(row["thumbKey"])
+        if data is None:
+            raise HTTPException(404, "No thumbnail.")
+        return Response(content=data, media_type="image/jpeg", headers=headers)
 
     @app.post("/api/jobs/{job_id}/rows/{n}/replace-file")
     def replace_file(job_id: str, n: int, body: FileSpec, sess: Session = Depends(current_session), s: Services = Depends(svc)):
@@ -548,8 +633,39 @@ def _routes(app: FastAPI) -> None:
             row["supersededKey"] = row.get("s3Key")  # kept until the rerun starts, in case the fix is abandoned
         elif row.get("s3Key"):
             s.storage.delete_object(row["s3Key"])  # an earlier replacement, never used
+        if row.get("thumbKey"):
+            s.storage.delete_object(row["thumbKey"])
+            row["thumbKey"] = None
         row.update(file=name, fileOriginal=name, size=body.size, contentType=body.type, upload={"s": "pending"},
                    s3Key=f"jobs/{job_id}/{uuid.uuid4().hex}", replacedFor=(row.get("result") or {}).get("run"))
+        s.storage.put_row(job_id, row)
+        return {"row": row, "uploadForm": s.storage.presign_upload(row["s3Key"], body.size)}
+
+    @app.post("/api/jobs/{job_id}/rows/{n}/retry-upload")
+    def retry_upload(job_id: str, n: int, body: FileSpec, sess: Session = Depends(current_session), s: Services = Depends(svc)):
+        """Retry a document's upload that failed or never finished (design: Browser uploads, "Upload failed" with
+        Retry and Remove). The same file is sent again to a new staged key; its row keeps every field."""
+        job = _job_or_404(s, sess, job_id)
+        _editable(job, sess)
+        row = s.storage.get_row(job_id, n) or _404()
+        if (row.get("upload") or {}).get("s") == "done":
+            raise HTTPException(409, "This document's file is already uploaded.")
+        if media_created(row):
+            raise HTTPException(409, "This document's Media record exists; use Replace file instead.")
+        try:
+            name = clean_filename(body.name)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        if name.lower() != (row.get("fileOriginal") or row["file"]).lower():
+            raise HTTPException(422, f"Choose the same file, {row.get('fileOriginal') or row['file']}. To add a different file, add it as a new document.")
+        if body.size > s.settings.max_file_bytes:
+            raise HTTPException(413, f"Too large: {body.name}")
+        _saved(s, sess, job_id)
+        for key in {row.get("s3Key"), row.get("thumbKey")} - {None, ""}:
+            s.storage.delete_object(key)  # whatever part of the failed upload arrived, and its old thumbnail
+        row["thumbKey"] = None
+        row.update(size=body.size, contentType=body.type or row.get("contentType", ""), upload={"s": "pending"},
+                   s3Key=f"jobs/{job_id}/{uuid.uuid4().hex}")
         s.storage.put_row(job_id, row)
         return {"row": row, "uploadForm": s.storage.presign_upload(row["s3Key"], body.size)}
 
@@ -656,6 +772,8 @@ def _routes(app: FastAPI) -> None:
             raise HTTPException(409, f"The job is {job['status']} and can't be scheduled.")
         if job["status"] == "Draft":
             _editable(job, sess)  # only the draft's editor schedules it
+        if job.get("groupOn") and not (job.get("groupTitle") or "").strip():
+            raise HTTPException(409, "Enter a group title, or turn off the job's group.")
         # Roles can change during a session: fetch the permissions again, then check the whole job afresh.
         sess = _refresh_permissions(s, sess)
         result = _recheck(s, sess, job_id, targets=None, refresh=True)
@@ -698,11 +816,13 @@ def _refresh_permissions(s: Services, sess: Session) -> Session:
 def _recheck(s: Services, sess: Session, job_id: str, targets: set[int] | None, refresh: bool = False) -> dict:
     """Re-run the checks on every row (see check_rows) and save the rows whose checks or lookups changed."""
     rows = s.storage.get_rows(job_id)
+    group_on = bool((s.storage.get_job(job_id) or {}).get("groupOn"))
     # a real copy: check_rows updates each row's lookups in place
-    before = {r["n"]: copy.deepcopy((r.get("checks"), r.get("lookups"))) for r in rows}
+    auto = ("checks", "lookups", "protected", "softSignals", "restricted", "restrictedAuto", "thumbKey")
+    before = {r["n"]: copy.deepcopy(tuple(r.get(k) for k in auto)) for r in rows}
     client = sess.client(s)
     try:
-        partial = check_rows(s.tenant, rows, client, sess.perms, targets=targets, refresh=refresh)
+        partial = check_rows(s.tenant, rows, client, sess.perms, targets=targets, refresh=refresh, group_on=group_on)
     except CSpaceError as e:
         raise _cspace_http(e)
     finally:
@@ -710,17 +830,37 @@ def _recheck(s: Services, sess: Session, job_id: str, targets: set[int] | None, 
     changed = []
     for r in rows:
         if r["n"] in partial:  # checked without its lookups: keep what it had
-            r["checks"], r["lookups"] = before[r["n"]]
+            for k, v in zip(auto, before[r["n"]]):
+                r[k] = v
             continue
         # Saved only if the row is unchanged since it was read; if not, whoever changed it re-checks it.
-        if before[r["n"]] != (r.get("checks"), r.get("lookups")) and s.storage.save_checks(job_id, r):
+        if r.get("protected") and r.get("thumbKey"):
+            # Design: if a row becomes protected after its thumbnail was stored, the thumbnail is deleted at once.
+            s.storage.delete_object(r["thumbKey"])
+            r["thumbKey"] = None
+        if before[r["n"]] != tuple(r.get(k) for k in auto) and s.storage.save_checks(job_id, r):
             changed.append(r)
+    _note_protected(s, job_id, rows)
     counts = {"block": 0, "warn": 0}
     for r in rows:
         w = worst(r)
         if w in counts and r.get("include"):
             counts[w] += 1
     return {"rows": rows, "changed": changed, "counts": counts}
+
+
+def _note_protected(s: Services, job_id: str, rows: list[dict]) -> None:
+    """Keep the job's count of protected files, and a draft's expiry: 7 days after the last save when it has
+    protected files, 30 otherwise (design: Drafts, Expiry)."""
+    job = s.storage.get_job(job_id) or {}
+    count = sum(1 for r in rows if r.get("protected") and r.get("include"))
+    if count == int(job.get("protectedCount") or 0):
+        return
+    fields: dict[str, Any] = {"protectedCount": count}
+    if job.get("status") == "Draft" and job.get("lastSavedAt"):
+        days = s.settings.protected_draft_days if count else s.settings.draft_days
+        fields["expiresAt"] = job["lastSavedAt"] + days * 86400
+    s.storage.update_job(job_id, fields)
 
 
 def _recheck_after_change(s: Services, sess: Session, job_id: str, n: int) -> dict:

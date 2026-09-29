@@ -79,6 +79,7 @@ class Permissions:
             "objects": self.can("collectionobjects", "C"),
             "readObjects": self.can("collectionobjects", "R"),
             "authorities": self.can("personauthorities", "R") and self.can("orgauthorities", "R"),
+            "groups": self.can("groups", "C"),
         }
 
     @classmethod
@@ -142,6 +143,10 @@ class CSpaceClient:
         q = f'collectionobjects_common:objectNumber = "{_quote(object_number)}"'
         r = self._request("GET", "collectionobjects", params={"as": q, "wf_deleted": "false", "pgSz": "10"})
         return [csid for csid, num in _list_items(r.content, "objectNumber") if num == object_number]
+
+    def get_object(self, csid: str) -> bytes:
+        """An Object record's XML, all parts (for its sensitivity fields)."""
+        return self._request("GET", f"collectionobjects/{csid}").content
 
     def find_media(self, identification_number: str) -> list[str]:
         q = f'media_common:identificationNumber = "{_quote(identification_number)}"'
@@ -210,8 +215,17 @@ class CSpaceClient:
     def create_object(self, xml: bytes) -> str:
         return self._post_xml("collectionobjects", xml)
 
+    def create_group(self, xml: bytes) -> str:
+        return self._post_xml("groups", xml)
+
     def create_relation(self, xml: bytes) -> str:
         return self._post_xml("relations", xml)
+
+    def derivative(self, blob_csid: str, name: str = "Thumbnail") -> tuple[bytes, str]:
+        """A Blob's derivative image made by CollectionSpace (Thumbnail, Medium, OriginalJpeg), as the
+        CollectionSpace UI shows it: GET blobs/{csid}/derivatives/{name}/content. VERIFY on QA."""
+        r = self._request("GET", f"blobs/{blob_csid}/derivatives/{name}/content")
+        return r.content, r.headers.get("content-type", "image/jpeg")
 
     def media_blob_csid(self, media_csid: str) -> str:
         """The blobCsid CollectionSpace set on a Media record (after PUT media/{csid}/blob)."""

@@ -20,6 +20,7 @@ export interface TenantInfo {
   mediaTypes: Option[];
   languageDefault: string;
   authorityFields: Record<string, string[]>;
+  sensitivity?: { summary: string; explain: string[] };
 }
 
 export interface Perms {
@@ -28,6 +29,7 @@ export interface Perms {
   objects: boolean;
   readObjects: boolean;
   authorities: boolean;
+  groups: boolean;
 }
 
 export interface Me {
@@ -50,6 +52,8 @@ export interface Step {
   code?: string; // failed: the failure code (see Failure)
   detail?: string; // failed: technical detail (HTTP status and step)
   found?: boolean; // done: an existing record was used, not one this job created
+  csid2?: string; // addToGroup: the relation in the other direction
+  sameAs?: number; // addToGroup: another document already added the same object
   obj?: string; // an object step that failed: the object number it failed on
 }
 
@@ -101,6 +105,7 @@ export interface Created {
   files: number;
   objects: number;
   relations: number;
+  groups?: number;
   unfinished: number;
 }
 
@@ -128,6 +133,11 @@ export interface Row {
   description: string;
   copyright: string;
   include: boolean;
+  group?: boolean; // in the job's group (when the job creates one); on by default
+  /** Set automatically from the linked Object (design: Protected files); users never set or clear it. */
+  protected?: { reason: string; hides: boolean } | null;
+  softSignals?: string[]; // Object-level signals that only warn
+  restrictedAuto?: boolean; // Restricted was turned on because the file is protected
   disabledBy?: string;
   disabledAt?: number;
   skipLink?: boolean; // stop linking a Partial row's Media record to an object
@@ -191,6 +201,11 @@ export interface Job {
   runBy?: string;
   startedAt?: number;
   fixFrom?: { status: "NeedsAttention" | "Failed"; code: string; run: number } | null;
+  // the job's group (design: Groups)
+  groupOn?: boolean;
+  groupTitle?: string;
+  groupStep?: { s: "done" | "failed"; csid?: string; code?: string; detail?: string; run?: number } | null;
+  protectedCount?: number; // documents that are protected files (a draft then expires after 7 days)
 }
 
 export interface Term {

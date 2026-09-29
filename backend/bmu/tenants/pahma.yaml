@@ -48,3 +48,40 @@ authority_fields:
   creator: [person, organization]
   contributor: [person, organization]
   rightsHolder: [person, organization]
+
+# Sensitivity and publishing (design: Protected files). The BMU reads the linked Object record and applies
+# these rules: a "protect" rule makes the document a protected file automatically (users can't set or clear
+# it); a "warn" rule is a soft signal that only raises a warning. "hides" marks the rule the museum's public
+# pipeline uses to hide every image of the object (the Public portal column).
+#
+# Each rule matches element names anywhere in the Object record's XML. "within" limits the conditions to one
+# repeating group (for example one access-restriction entry, whose type and level must match together).
+# VERIFY on the QA tenant before relying on them: the element names below are the prototype's best reading of
+# PAHMA's profile (cspace-ui-plugin-profile-pahma.js) and must be confirmed with
+# `python scripts/check_cspace.py --object <number> --show-object`.
+sensitivity:
+  summary: "At PAHMA, culturally sensitive objects hide all their images from the public portal; Restricted controls each image."
+  explain:
+    - "Objects. A status containing “culturally” with the Human Remains department hides every image of that object from the public portal. Documents linked to such objects, or to objects with a NAGPRA status, become protected files automatically."
+    - "Access restrictions on the object. A display/visual or publication restriction at the “restriction” level makes documents protected files; at the “preference” or “recommendation” level you get a warning and decide yourself."
+    - "Each image. Restricted keeps the image off the public portal (it sends approvedForWeb = false). Protected files default to Restricted."
+  protect:
+    - reason: "culturally sensitive object in the Human Remains department"
+      hides: true
+      all:
+        - { element: pahmaObjectStatus, contains: culturally }
+        - { element: responsibleDepartment, contains: Human Remains }
+    - reason: "NAGPRA status on the object"
+      all:
+        - { element: nagpraStatus, present: true }
+    - reason: "display or publication restriction on the object"
+      within: accessRestrictionGroup
+      all:
+        - { element: accessRestrictionType, in: [display/visual, publication] }
+        - { element: accessRestrictionLevel, equals: restriction }
+  warn:
+    - reason: "a display or publication restriction at the preference or recommendation level"
+      within: accessRestrictionGroup
+      all:
+        - { element: accessRestrictionType, in: [display/visual, publication] }
+        - { element: accessRestrictionLevel, in: [preference, recommendation] }

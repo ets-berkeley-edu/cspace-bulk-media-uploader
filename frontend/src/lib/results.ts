@@ -98,6 +98,7 @@ export function importantRows(rows: Row[], n = 10): Row[] {
 export const STEP_LABEL: Record<string, string> = {
   media: "Create Media record", findObject: "Find object", createObject: "Find or create object",
   upload: "Upload file (creates the Blob)", relMediaObject: "Relate Media → Object", relObjectMedia: "Relate Object → Media",
+  addToGroup: "Add object to the job's group",
 };
 export const STEP_MARK: Record<Step["s"], string> = { done: "✓", failed: "✗", skipped: "–", "not run": "·", "not needed": "○" };
 
@@ -106,8 +107,10 @@ export function stepList(r: Row): { key: string; label: string; step: Step }[] {
 }
 
 export function stepNote(key: string, st: Step): string {
+  if (st.s === "skipped" && st.after === "group") return "skipped: the job's group couldn't be created";
   if (st.s === "skipped") return `skipped: needs ${(STEP_LABEL[st.after ?? ""] ?? st.after ?? "").toLowerCase()}`;
-  if (st.s === "not needed") return "not needed: you stopped linking this document";
+  if (st.s === "done" && st.sameAs) return `added by document ${st.sameAs}`;
+  if (st.s === "not needed") return key === "addToGroup" ? "not needed: left out of the group" : "not needed: you stopped linking this document";
   if (st.s === "not run") return "not run";
   if (st.s === "done" && st.found) return key === "findObject" || key === "createObject" ? "found" : "existing";
   return "";
@@ -118,6 +121,7 @@ export function createdText(c: Created): string {
   const n = (k: number, one: string, many: string) => `${k} ${k === 1 ? one : many}`;
   const parts = [`${n(c.media, "Media record", "Media records")} (${c.files} with ${c.files === 1 ? "its file" : "their files"})`];
   if (c.objects) parts.push(n(c.objects, "Object", "Objects"));
+  if (c.groups) parts.push("the job's group");
   if (c.relations) parts.push(n(c.relations, "Relation", "Relations"));
   return parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}` : parts[0];
 }
@@ -142,7 +146,7 @@ export function objectStepRan(r: Row): boolean {
 /** Created anything in CollectionSpace (finding an existing object doesn't count), so it can't be deleted. */
 export function createdSomething(r: Row): boolean {
   if (r.result?.state === "In progress") return true;
-  return Object.entries(r.result?.steps ?? {}).some(([k, s]) => k !== "findObject" && !!s.csid && !s.found);
+  return Object.entries(r.result?.steps ?? {}).some(([k, s]) => k !== "findObject" && !!s.csid && !s.found && !s.sameAs);
 }
 
 /** What a document whose Media record exists may still change: only what the rerun needs. */
