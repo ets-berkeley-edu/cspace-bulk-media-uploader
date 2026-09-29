@@ -7,7 +7,8 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { api } from "../api";
 import { formatTime } from "../lib/files";
 import { tableState, tableView } from "../lib/table";
-import type { Job, Row, TenantInfo } from "../types";
+import type { Created, Job, Row, TenantInfo } from "../types";
+import DeleteJobConfirm from "./DeleteJobConfirm.vue";
 import JobDocs from "./JobDocs.vue";
 import SortTh from "./SortTh.vue";
 
@@ -60,6 +61,13 @@ async function refresh(runChecks = false) {
 onMounted(() => { refresh(true); timer = setInterval(() => refresh(false), 2000); });
 onBeforeUnmount(() => clearInterval(timer));
 
+// What each job's earlier runs created, for the delete confirmation (null: it has never run)
+const created = reactive(new Map<string, Created | null>());
+function askDelete(j: Job) {
+  confirm.value = { id: j.id, kind: "delete" };
+  if (!j.run) created.set(j.id, null);
+  else api.job(j.id).then((r) => created.set(j.id, r.created)).catch(() => created.set(j.id, null));
+}
 async function act(fn: () => Promise<unknown>, done = "") {
   try {
     await fn();
@@ -192,16 +200,12 @@ const pct = (j: Job, k: "done" | "failed") => (j.progress?.total ? (100 * (j.pro
                 Editing takes this job out of the queue and deletes its saved sign-in. It goes to the end of the queue when it’s
                 scheduled again, even if nothing changes. <button @click="edit(j)">Edit anyway</button> <button @click="confirm = null">Cancel</button>
               </div>
-              <div v-else-if="confirm?.id === j.id && confirm.kind === 'delete'" class="msg msg-warn">
-                Delete this job? Its documents and uploaded files are removed from the BMU<template v-if="(j.run ?? 0) > 0">; records
-                its earlier runs created stay in CollectionSpace, and the audit log lists them</template><template v-else>; nothing was
-                created in CollectionSpace</template>.
-                <button @click="act(() => api.deleteJob(j.id), 'Deleted the job.')">Delete</button> <button @click="confirm = null">Cancel</button>
-              </div>
+              <DeleteJobConfirm v-else-if="confirm?.id === j.id && confirm.kind === 'delete'" :job="j" :created="created.get(j.id)"
+                                @confirm="act(() => api.deleteJob(j.id), 'Deleted the job.')" @cancel="confirm = null" />
               <div v-else class="actions">
                 <button @click="emit('open', j.id, 'preview')">Preview</button>
                 <button @click="confirm = { id: j.id, kind: 'edit' }">Edit</button>
-                <button @click="confirm = { id: j.id, kind: 'delete' }">Delete</button>
+                <button @click="askDelete(j)">Delete</button>
               </div>
             </td>
           </tr>

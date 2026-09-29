@@ -1,4 +1,5 @@
 """Protected files (design: Protected files): set automatically from the linked Object's sensitivity."""
+import pytest
 from bmu.sensitivity import evaluate
 from bmu.storage import now
 from bmu.tenant import load_tenant
@@ -45,6 +46,10 @@ def test_documents_linked_to_sensitive_objects_are_protected(api, login, add_upl
     assert any(c["level"] == "info" and c["text"].startswith("Protected file:") for c in hr["checks"])
     assert soft["protected"] is None and any(c["level"] == "warn" and "preference or recommendation" in c["text"] for c in soft["checks"])
     assert plain["protected"] is None
+    # once the image is withheld, the soft signal stays visible as information, not a warning
+    soft = api.patch(f"/api/jobs/{job}/rows/{soft['n']}", json={"restricted": True}).json()["row"]
+    assert not any(c["level"] == "warn" for c in soft["checks"])
+    assert any(c["level"] == "info" and "preference or recommendation" in c["text"] and "withheld" in c["text"] for c in soft["checks"])
     # users can't set or clear the flag
     assert api.patch(f"/api/jobs/{job}/rows/{plain['n']}", json={"protected": {"reason": "x"}}).status_code == 422
     # a protected draft expires after 7 days instead of 30
@@ -107,3 +112,33 @@ def test_protected_uploads_are_removed_from_stopped_jobs_after_7_days(api, login
     assert any("removed this protected file" in c["text"] for c in by_file(r)["12-2001.jpg"]["checks"])
     ok = api.post(f"/api/jobs/{job}/rows/{rows['12-2001.jpg']['n']}/retry-upload", json={"name": "12-2001.jpg", "size": 3, "type": "image/jpeg"})
     assert ok.status_code == 200
+
+
+def test_a_draft_with_protected_files_expires_after_7_days_even_if_they_are_excluded_or_its_sign_in_expired(
+        api, login, add_uploaded, worker, services):
+    """Design (Drafts, Expiry): 7 days if any of its documents is a protected file."""
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["12-2001_1.jpg", "15-1234_1.jpg"])
+    api.post(f"/api/jobs/{job}/check")
+    j = services.storage.get_job(job)
+    assert j["protectedCount"] == 1 and j["expiresAt"] - j["lastSavedAt"] == pytest.approx(7 * 86400, abs=5)
+    api.patch(f"/api/jobs/{job}/rows/1", json={"include": False})  # excluded: the BMU still holds the file
+    api.post(f"/api/jobs/{job}/check")
+    assert services.storage.get_job(job)["protectedCount"] == 1
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    services.storage.update_job(job, {"credentialExpires": 1})
+    assert worker.sweep_expired_sign_ins() == [job]
+    j = services.storage.get_job(job)
+    assert j["status"] == "Draft" and j["expiresAt"] - now() == pytest.approx(7 * 86400, abs=5)
+
+
+def test_a_running_job_past_the_sign_in_limit_loses_its_stored_sign_in(api, login, add_uploaded, worker, services):
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_1.jpg"])
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    services.storage.update_job(job, {"status": "Running", "credentialExpires": 1})
+    assert services.storage.get_credential(job)
+    worker.sweep_expired_sign_ins()
+    assert services.storage.get_credential(job) is None and services.storage.get_job(job)["status"] == "Running"

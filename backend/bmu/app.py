@@ -7,7 +7,7 @@ import re
 import secrets
 import uuid
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
@@ -153,7 +153,7 @@ def _editable(job: dict, sess: "Session | None" = None) -> None:
 
 def _draft_days(s: "Services", job: dict | None) -> int:
     """30 days, or 7 if any document is a protected file (design: Drafts, Expiry)."""
-    return s.settings.protected_draft_days if (job or {}).get("protectedCount") else s.settings.draft_days
+    return s.settings.draft_days_for(job)
 
 
 def _saved(s: "Services", sess: "Session", job_id: str) -> None:
@@ -257,6 +257,9 @@ class FileSpec(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     size: int = Field(ge=1)
     type: str = Field(default="", max_length=200)
+    # Read from the image by the browser before the upload (design: Pre-filling rows from filenames and EXIF)
+    exifDate: str = Field(default="", pattern=r"^(\d{4}-\d{2}-\d{2})?$")
+    orientation: Literal["portrait", "landscape", "square", ""] = ""
 
 
 class AddFiles(BaseModel):
@@ -567,7 +570,7 @@ def _routes(app: FastAPI) -> None:
             raise HTTPException(422, str(e))
         new = []
         for f, name in zip(body.files, names):
-            row = new_row(s.tenant, name, f.size, f.type)
+            row = new_row(s.tenant, name, f.size, f.type, date=f.exifDate, orientation=f.orientation)
             if job.get("fixFrom"):
                 row["addedInFix"] = True  # an abandoned fix removes it again
             new.append(row)
@@ -763,9 +766,11 @@ def _routes(app: FastAPI) -> None:
         if is_locked(row):
             raise HTTPException(409, "This document already created records in CollectionSpace, so it can't be deleted. "
                                      "Check Exclude to have the BMU ignore it.")
-        for key in {row.get("s3Key"), row.get("supersededKey")} - {None, ""}:
-            s.storage.delete_object(key)
-        s.storage.delete_row(job_id, n)
+        # One conditional write: only if the row is as checked and the job is still this session's draft
+        if not s.storage.delete_row_if_unchanged(job_id, row, sess.key):
+            raise HTTPException(409, "This document or job changed while deleting it; nothing was deleted. Reload and try again.")
+        for key in {row.get("s3Key"), row.get("supersededKey"), row.get("thumbKey")} - {None, ""}:
+            s.storage.delete_object(key)  # its staged file, a replacement, and its thumbnail
         s.storage.drop_fix_original(job_id, n)  # deleting is permanent, even if the fix is abandoned
         if job.get("run"):  # the next run lists the documents deleted since the last one
             s.storage.update_job(job_id, {"deletedRows": (job.get("deletedRows") or []) +
@@ -808,14 +813,14 @@ def _routes(app: FastAPI) -> None:
         # Hand the job its own copy of the password, encrypted with the job key; the worker deletes it after the run.
         pw = s.crypto.decrypt("session", sess.password_token, {"user": sess.user, "session": sess.key})
         expires = now() + s.settings.credential_hours * 3600
-        s.storage.put_credential(job_id, sess.user,
-                                 s.crypto.encrypt("job", pw, {"user": sess.user, "job": job_id}), expires)
         t = now()
-        if not s.storage.update_job(job_id, {"status": "Queued", "queuedAt": t, "queuePos": t, "scheduledBy": sess.user, "note": "",
-                                             "credentialExpires": int(expires), "checksAtSchedule": result["counts"],
-                                             "progress": {"total": len(work), "done": 0, "failed": 0}},
-                                    expect_status=list(RESCHEDULABLE)):
-            s.storage.delete_credential(job_id)
+        # One write: the job's sign-in is stored and the job queued together, or neither (design: State rules)
+        if not s.storage.queue_with_credential(
+                job_id, sess.user, s.crypto.encrypt("job", pw, {"user": sess.user, "job": job_id}), expires,
+                {"status": "Queued", "queuedAt": t, "queuePos": t, "scheduledBy": sess.user, "note": "",
+                 "credentialExpires": int(expires), "checksAtSchedule": result["counts"],
+                 "progress": {"total": len(work), "done": 0, "failed": 0}},
+                list(RESCHEDULABLE), sess.key):
             raise HTTPException(409, "The job changed while scheduling; reload and try again.")
         s.storage.close_draft(job_id, sess.key)  # it leaves Drafts
         s.storage.audit(sess.tenant, "Scheduled", sess.user, job_id, f"Scheduled “{job['name']}” with {len(work)} documents.")
@@ -875,7 +880,7 @@ def _note_protected(s: Services, job_id: str, rows: list[dict]) -> None:
     """Keep the job's count of protected files, and a draft's expiry: 7 days after the last save when it has
     protected files, 30 otherwise (design: Drafts, Expiry)."""
     job = s.storage.get_job(job_id) or {}
-    count = sum(1 for r in rows if r.get("protected") and r.get("include"))
+    count = sum(1 for r in rows if r.get("protected"))  # excluded documents' files are still held by the BMU
     if count == int(job.get("protectedCount") or 0):
         return
     fields: dict[str, Any] = {"protectedCount": count}

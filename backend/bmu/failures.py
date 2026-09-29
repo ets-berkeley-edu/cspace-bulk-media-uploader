@@ -52,7 +52,7 @@ def classify(step: str, e: CSpaceError) -> tuple[str, str]:
         return "file_type_rejected", detail
     if step == "media" and status == 400:
         return "media_rejected", detail
-    if step == "createObject" and status == 400:
+    if step in ("createObject", "findOrCreateObject") and status == 400:
         return "object_rejected", detail
     if step == "group":
         return "group_failed", detail  # any other failure creating the job's Group

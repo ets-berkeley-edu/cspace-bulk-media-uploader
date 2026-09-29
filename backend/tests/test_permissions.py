@@ -30,13 +30,26 @@ def test_finding_objects_needs_read_on_objects(api, login, add_uploaded, fake):
     assert any("can't read Object records" in t for t in _texts(r))
 
 
-def test_without_read_on_media_the_id_check_is_a_warning(api, login, add_uploaded, fake):
+def test_without_read_on_media_the_id_check_blocks(api, login, add_uploaded, fake):
     fake.perm_overrides["admin"] = {"media": "CU"}
     login()
     job = new_job(api)
     add_uploaded(job, ["15-1234_1.jpg"])
     r = api.post(f"/api/jobs/{job}/check").json()["rows"][0]
-    assert any(c["level"] == "warn" and "can't read Media records" in c["text"] for c in r["checks"])
+    assert any(c["level"] == "block" and "can't read Media records" in c["text"] for c in r["checks"])
+
+
+def test_a_filled_authority_field_needs_read_on_its_authority(api, login, add_uploaded, fake):
+    fake.perm_overrides["admin"] = {"personauthorities": ""}
+    login()
+    job = new_job(api)
+    n = add_uploaded(job, ["15-1234_1.jpg"])[0]["n"]
+    r = api.post(f"/api/jobs/{job}/check").json()["rows"][0]
+    assert not any("authority" in t for t in _texts(r))  # empty fields need no check
+    ref = "urn:cspace:pahma.cspace.berkeley.edu:personauthorities:name(person):item:name(7475)'Leslie Freund'"
+    r = api.patch(f"/api/jobs/{job}/rows/{n}", json={"creator": ref}).json()["row"]
+    assert any(c["level"] == "block" and "can't read the Person authority" in c["text"] and "Creator" in c["text"]
+               for c in r["checks"])
 
 
 def test_dates_need_the_date_parser(api, login, add_uploaded, fake):
@@ -75,3 +88,20 @@ def test_idle_sessions_are_signed_out_but_polling_is_not_activity(api, login, se
     r = api.get("/api/jobs")
     assert r.status_code == 401 and "30 minutes without activity" in r.json()["detail"]
     assert services.storage.get_session(key) is None
+
+
+def test_the_sweep_deletes_idle_and_expired_sessions_with_their_passwords(api, login, services, worker):
+    """Design: expiry deletes the session record. An abandoned tab never makes the request that would notice."""
+    login()
+    login("limited")
+    login("reader")
+    keys = {i["user"]: i["PK"] for i in services.storage.sessions.scan()["Items"]}
+    services.storage.touch_session(keys["admin"], now() - 31 * 60)  # idle
+    services.storage.sessions.update_item(Key={"PK": keys["limited"]}, UpdateExpression="SET expires = :e",
+                                          ExpressionAttributeValues={":e": int(now()) - 10})  # past the 8 hours
+    assert services.storage.get_session(keys["limited"]) is None  # an expired session read is deleted at once
+    assert services.storage.sweep_sessions(30 * 60) == 1
+    left = {i["user"] for i in services.storage.sessions.scan()["Items"]}
+    assert left == {"reader"}
+    worker.sweep()  # the worker's periodic checks include it
+    assert {i["user"] for i in services.storage.sessions.scan()["Items"]} == {"reader"}

@@ -50,11 +50,18 @@ object_ambiguous:
   explain: When the job ran, more than one object had this object number, so the BMU couldn't tell which one to link. Another object with the same number was probably added after the job was scheduled.
   fix: Correct the object number, or have the duplicate object resolved in CollectionSpace, then choose Fix and reschedule. The Media record and its file already exist.
 
+object_exists:
+  title: Object already exists
+  level: row
+  needs_fix: true
+  explain: The document's handling, "Create new object + link", creates a new object, but when the job ran an object with this number already existed in CollectionSpace. It was probably added after the job was checked. No object was created and the links were skipped; the Media record and its file are unaffected.
+  fix: To link to the existing object, change the document's handling to "Link to existing object" or "Link to object (create if missing)". Or correct the object number. Then choose Fix and reschedule.
+
 object_rejected:
   title: CollectionSpace rejected the new object
   level: row
   needs_fix: true
-  explain: The document's handling creates an object when none exists, but CollectionSpace refused the new Object record, so the Media record couldn't be linked to it.
+  explain: The document's handling creates an object, but CollectionSpace refused the new Object record, so the Media record couldn't be linked to it.
   fix: Check the object number, then choose Fix and reschedule. The Relations were skipped; the Media record and file are unaffected.
 
 no_permission:

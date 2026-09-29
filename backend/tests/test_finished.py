@@ -194,7 +194,9 @@ def test_media_rejected_row_is_editable_except_its_object(api, login, add_upload
     assert j["job"]["status"] == "Completed" and j["created"]["objects"] == 1
 
 
-def test_object_created_since_scheduling_is_found_not_duplicated(api, login, add_uploaded, worker, fake):
+def test_create_fails_when_the_object_appeared_since_scheduling_and_the_row_can_switch_to_linking(api, login, add_uploaded, worker, fake):
+    """Design: "Create new object + link" creates a new object only; one that already exists fails the row
+    (object_exists). The fix may switch the handling to one that links to that object (and only that)."""
     login()
     job = new_job(api)
     add_uploaded(job, ["20-0901.jpg"])
@@ -203,8 +205,48 @@ def test_object_created_since_scheduling_is_found_not_duplicated(api, login, add
     fake.objects["late"] = {"objectNumber": "20-0901", "deleted": False}
     worker.tick()
     j = api.get(f"/api/jobs/{job}").json()
-    st = j["rows"][0]["result"]["steps"]["createObject"]
-    assert st["csid"] == "late" and st["found"] is True and j["created"]["objects"] == 0
+    row = j["rows"][0]
+    st = row["result"]["steps"]["createObject"]
+    assert st["s"] == "failed" and st["code"] == "object_exists" and "found 1 object" in st["detail"]
+    assert row["result"]["state"] == "Partial" and j["created"]["objects"] == 0
+    assert row["result"]["steps"]["relMediaObject"]["s"] == "skipped"
+    assert j["job"]["status"] == "NeedsAttention"
+    assert api.post(f"/api/jobs/{job}/fix").status_code == 200
+    # still "create": the rerun check says the object exists
+    checks = api.post(f"/api/jobs/{job}/check").json()["rows"][0]["checks"]
+    assert any(c["level"] == "block" and "already exists" in c["text"] for c in checks), checks
+    # only a handling that links to the existing object is allowed
+    r = api.patch(f"/api/jobs/{job}/rows/1", json={"handling": "mediaonly"})
+    assert r.status_code == 422 and "links to that object" in r.json()["detail"]
+    assert api.patch(f"/api/jobs/{job}/rows/1", json={"handling": "link"}).status_code == 200
+    checks = api.post(f"/api/jobs/{job}/check").json()["rows"][0]["checks"]
+    assert not [c for c in checks if c["level"] == "block"], checks
+    assert any("find the object" in c["text"] for c in checks), checks
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    worker.tick()
+    j = api.get(f"/api/jobs/{job}").json()
+    steps = j["rows"][0]["result"]["steps"]
+    assert j["job"]["status"] == "Completed" and steps["findObject"]["csid"] == "late" and steps["findObject"]["found"]
+    assert steps["createObject"]["s"] == "not needed" and j["created"]["objects"] == 0
+
+
+def test_link_or_create_links_an_object_that_appeared_and_creates_a_missing_one(api, login, add_uploaded, worker, fake):
+    """Design: "Link to object (create if missing)" links to the object if one exists, and creates it otherwise."""
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["20-0902.jpg", "20-0903.jpg"])
+    for n in (1, 2):
+        api.patch(f"/api/jobs/{job}/rows/{n}", json={"handling": "linkorcreate"})
+    rows = api.post(f"/api/jobs/{job}/check").json()["rows"]
+    assert not [c for r in rows for c in r["checks"] if c["level"] == "block"]
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    fake.objects["late2"] = {"objectNumber": "20-0902", "deleted": False}
+    worker.tick()
+    j = api.get(f"/api/jobs/{job}").json()
+    by = {r["file"]: r["result"]["steps"]["findOrCreateObject"] for r in j["rows"]}
+    assert by["20-0902.jpg"]["csid"] == "late2" and by["20-0902.jpg"]["found"] is True
+    assert by["20-0903.jpg"]["s"] == "done" and not by["20-0903.jpg"].get("found")
+    assert j["job"]["status"] == "Completed" and j["created"]["objects"] == 1
 
 
 # ---- job-level failures -------------------------------------------------------------------------
@@ -223,14 +265,28 @@ def test_sign_in_failure_fails_the_job_and_reschedule_continues(api, login, add_
     assert api.get(f"/api/jobs/{job}").json()["job"]["status"] == "Completed"
 
 
-def test_five_server_errors_in_a_row_stop_the_job(api, login, add_uploaded, worker, fail_on):
+def test_five_failed_requests_in_a_row_stop_the_job(api, login, add_uploaded, worker, fail_on):
+    """Design: five consecutive 5xx or network failures stop the job as "unavailable". They are counted per
+    request: here each document makes three failing requests (Media ID search, create Media, Object search)."""
+    login()
+    job = new_job(api)
+    add_uploaded(job, [f"15-1234_{i}.jpg" for i in range(1, 5)])
+    for step in ("media", "mediaSearch", "objectSearch"):
+        fail_on(step, status=503, count=0)
+    j = run_once(api, job, worker)
+    assert j["job"]["status"] == "Failed" and j["job"]["code"] == "unavailable"
+    assert j["job"]["counts"]["failed"] == 2 and j["job"]["counts"]["notStarted"] == 2
+    assert [(r["result"] or {}).get("state", "Not started") for r in j["rows"]][:2] == ["Failed", "Failed"]
+
+
+def test_failures_between_successful_requests_do_not_stop_the_job(api, login, add_uploaded, worker, fail_on):
+    """A request that fails between ones that succeed is a one-off server error, not an outage."""
     login()
     job = new_job(api)
     add_uploaded(job, [f"15-1234_{i}.jpg" for i in range(1, 7)])
     fail_on("media", status=503, count=0)
     j = run_once(api, job, worker)
-    assert j["job"]["status"] == "Failed" and j["job"]["code"] == "unavailable"
-    assert j["job"]["counts"]["failed"] == 5 and j["job"]["counts"]["notStarted"] == 1
+    assert j["job"]["status"] == "NeedsAttention" and j["job"]["counts"]["failed"] == 6
 
 
 def test_a_running_job_whose_worker_stopped_fails_as_worker_stopped(api, login, add_uploaded, worker, services):
@@ -447,3 +503,30 @@ def test_the_audit_log_keeps_per_row_detail_and_a_csid_index(api, login, add_upl
     assert "rows" not in entry and entry["detailKey"].startswith(f"audit/pahma/{job}/run-002")
     import json
     assert len(json.loads(services.storage.get_bytes(entry["detailKey"]))) == 2
+
+
+def test_periodic_checks_also_run_between_documents_of_a_running_job(api, login, add_uploaded, worker, services):
+    """A long run must not hold up the periodic checks (draft expiry, cleanup, stalled jobs)."""
+    login()
+    stale = new_job(api, "never scheduled")
+    services.storage.update_job(stale, {"expiresAt": 1})  # expired long ago
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_1.jpg", "15-1234_2.jpg"])
+    seen = []
+    real_sweep, real_row = worker.sweep, worker.run_row
+
+    def sweep():
+        seen.append((api.get(f"/api/jobs/{job}").json()["job"]["status"]))
+        real_sweep()
+
+    def run_row(*a, **kw):
+        out = real_row(*a, **kw)
+        worker._last_sweep = 0  # "a minute later"
+        return out
+    worker.sweep, worker.run_row = sweep, run_row
+    worker._last_sweep = 10 ** 12  # nothing due before the run starts
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    worker.tick()
+    assert "Running" in seen
+    assert services.storage.get_job(stale) is None
+    assert api.get(f"/api/jobs/{job}").json()["job"]["status"] == "Completed"

@@ -125,6 +125,19 @@ describe("DocumentRow checks", () => {
     expect(mountRow({ row: row({ result: { state: "Partial", steps: { media: { s: "done", csid: "m" } } } }), runView: true, readonly: true }).text()).toContain("Partial");
   });
 
+  it("puts the identification number before the object number and Language last, marked PRESET while it holds the default", () => {
+    const eng = "urn:cspace:pahma.cspace.berkeley.edu:vocabularies:name(languages):item:name(eng)'English'";
+    const t = { ...tenant, languageDefault: eng };
+    const w = mountRow({ tenant: t, row: row({ language: [eng] }) });
+    const labels = w.findAll(".grid .field > span, .grid .field > label > span, .grid label.field > span").map((x) => x.text());
+    const at = (name: string) => labels.findIndex((l) => l.startsWith(name));
+    expect(at("Identification number")).toBeLessThan(at("Object number"));
+    expect(at("Description")).toBeLessThan(at("Copyright statement"));
+    expect(at("Language")).toBe(labels.length - 1);
+    expect(labels[at("Language")]).toContain("PRESET");
+    const chosen = mountRow({ tenant: t, row: row({ language: [eng], touched: ["language"] }) });
+    expect(chosen.text()).not.toContain("PRESET");
+  });
   it("offers Retry and Remove for a failed upload, or one this page isn't sending", async () => {
     const failed = mountRow({ row: row({ upload: { s: "failed" } }) });
     expect(failed.text()).toContain("Upload failed");

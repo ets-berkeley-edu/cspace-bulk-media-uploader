@@ -6,8 +6,9 @@ import time
 from typing import Any, Callable
 
 from .cspace import CSpaceClient, CSpaceError
+from .filetypes import SUPPORTED_EXTENSIONS, SUPPORTED_HINT
 from .sensitivity import evaluate as evaluate_sensitivity
-from .tenant import Tenant, parse_filename
+from .tenant import OBJECT_STEPS, Tenant, parse_filename
 
 EDITABLE = {"handling", "obj", "idnum", "date", "restricted", "type", "language", "creator", "contributor",
             "rightsHolder", "description", "copyright", "include", "file", "skipLink", "group"}
@@ -74,12 +75,14 @@ def filename_problems(tenant: Tenant, name: str, original: str, other_names: lis
     return errs
 
 
-def new_row(tenant: Tenant, filename: str, size: int, content_type: str) -> dict[str, Any]:
+def new_row(tenant: Tenant, filename: str, size: int, content_type: str, date: str = "", orientation: str = "") -> dict[str, Any]:
+    """A new document. date and orientation: what the browser read from the image's EXIF before the upload; the
+    date pre-fills the Date field (the user can change or clear it)."""
     p = parse_filename(tenant, filename)
     row: dict[str, Any] = {
         "file": filename, "fileOriginal": filename, "size": size, "contentType": content_type or "",
         "handling": tenant.handling[0].id, "objParsed": p["obj"], "obj": p["obj"], "img": p["img"], "parseOk": p["ok"],
-        "idnum": "", "date": "", "restricted": bool(tenant.publish.get("default", False)),
+        "idnum": "", "date": date, "orientation": orientation, "restricted": bool(tenant.publish.get("default", False)),
         "type": [], "language": [tenant.language_default], "creator": "", "contributor": "", "rightsHolder": "", "description": "", "copyright": "",
         "include": True, "group": True, "upload": {"s": "pending"}, "checks": [], "result": None, "touched": [],
     }
@@ -129,11 +132,13 @@ PROBLEM_TEXT = {
     "created": "This document's Media record already exists in CollectionSpace, so only what the rerun still needs can "
                "change here. To change the Media record's fields, edit it in CollectionSpace.",
     "handling": "The last run already found or created this document's object, so its handling and object number can't change.",
+    "relink": "This document's Media record already exists. Its handling can change only after the last run found that "
+              "its object already existed, and only to a handling that links to that object.",
     "grouped": "This document's object is already in the job's group in CollectionSpace.",
 }
 
 FINISHED = ("done", "not needed")
-OBJ_STEPS = ("findObject", "createObject")
+OBJ_STEPS = OBJECT_STEPS
 REL_STEPS = ("relMediaObject", "relObjectMedia")
 
 
@@ -154,16 +159,23 @@ def media_created(row: dict) -> bool:
 def fix_fields(row: dict) -> set[str]:
     """What a user may change on a row whose Media record already exists: only what the rerun still needs.
     A corrected object number when the object step failed on its number; stopping the link when the object
-    wasn't found (or matched several) or relations weren't allowed; Exclude."""
+    wasn't found (or matched several, or already existed) or relations weren't allowed; Exclude. When "Create new
+    object + link" found that its object already existed (object_exists), also the handling, to one that links
+    to the existing object (design: Fixing a job after a run)."""
     st = _steps(row)
     allowed = {"include"}
     obj_codes = {st[n].get("code") for n in OBJ_STEPS if n in st and st[n].get("s") == "failed"}
     rel_codes = {st[n].get("code") for n in REL_STEPS if n in st and st[n].get("s") == "failed"}
-    if obj_codes & {"object_gone", "object_ambiguous", "object_rejected"} and not row.get("skipLink"):
+    if obj_codes & {"object_gone", "object_ambiguous", "object_rejected", "object_exists"} and not row.get("skipLink"):
         allowed.add("obj")
-    if open_steps(row, REL_STEPS) and (obj_codes & {"object_gone", "object_ambiguous"} or "no_permission" in rel_codes):
+    if "object_exists" in obj_codes and not row.get("skipLink"):
+        allowed.add("handling")
+    if open_steps(row, REL_STEPS) and (obj_codes & {"object_gone", "object_ambiguous", "object_exists"} or "no_permission" in rel_codes):
         allowed.add("skipLink")
     return allowed
+
+
+RELINK_OBJECT = ("existing", "either")  # what a row whose Media record exists may switch to after object_exists
 
 
 def can_replace_file(row: dict) -> bool:
@@ -184,6 +196,10 @@ def apply_edit(tenant: Tenant, row: dict, changes: dict[str, Any], other_names: 
     problem = edit_problem(row, changes)
     if problem:
         raise ValueError(PROBLEM_TEXT[problem])
+    if "handling" in changes and changes["handling"] != row.get("handling") and media_created(row):
+        target = tenant.handling_by_id(changes["handling"])
+        if not target or target.object not in RELINK_OBJECT:
+            raise ValueError(PROBLEM_TEXT["relink"])
     changes = {k: v for k, v in changes.items() if row.get(k) != v}
     if "file" in changes:
         errs = filename_problems(tenant, str(changes["file"]).strip(), row.get("fileOriginal") or row["file"], other_names or [])
@@ -252,7 +268,7 @@ def created_records(rows: list[dict], job: dict | None = None) -> dict:
     if g.get("s") == "done":
         c["groups"] = 1
         csids.append({"row": 0, "file": "", "step": "group", "csid": g["csid"]})
-    kind = {"media": "media", "upload": "files", "createObject": "objects", "relMediaObject": "relations",
+    kind = {"media": "media", "upload": "files", "createObject": "objects", "findOrCreateObject": "objects", "relMediaObject": "relations",
             "relObjectMedia": "relations", "addToGroup": "relations"}
     for r in rows:
         st = _steps(r)
@@ -266,10 +282,6 @@ def created_records(rows: list[dict], job: dict | None = None) -> dict:
             c["unfinished"] += 1
     return {"counts": c, "csids": csids}
 
-
-# The design's supported file types, the same for every tenant: images, audio, video and 3D models.
-SUPPORTED_EXTENSIONS = {"jpg", "jpeg", "tif", "tiff", "png", "wav", "mp3", "aac", "mp4", "x3d"}
-SUPPORTED_HINT = "JPEG, TIFF, PNG, WAV, MP3, AAC, MP4 or X3D"
 
 # How long a row's CollectionSpace lookup (object or Media search) is reused while editing. Scheduling always
 # looks everything up again.
@@ -378,6 +390,7 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
             out.append({"level": "block", "text": "Your account can't create relations, so it can't link to objects. Choose a media-only handling."})
         if h.object == "create" and not perms.get("objects"):
             out.append({"level": "block", "text": "Your account can't create Object records. Choose another handling."})
+        # "either" needs create on objects only when its object doesn't exist yet: checked after the lookup below
         if group_on and r.get("group", True) and h.object != "none" and not perms.get("groups"):
             out.append({"level": "block", "text": "Your account can't create groups. Turn off the job's group, or untick this document's Group."})
         obj_csid: str | None = ""  # the linked Object: "" none, None not known yet
@@ -399,13 +412,8 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
                     found = None
                     out.append({"level": "warn", "text": f"Couldn't check object {num} in CollectionSpace ({e.code})."})
                 if found is not None:
-                    obj_csid = found[0] if len(found) == 1 else ""
-                    if h.object == "existing" and not found:
-                        out.append({"level": "block", "text": f"No object {num} in CollectionSpace. Correct the object number, or choose “Create new object + link” or media only."})
-                    elif h.object == "existing" and len(found) > 1:
-                        out.append({"level": "block", "text": f"Object number {num} matches {len(found)} objects in CollectionSpace. Correct the object number so it identifies one object."})
-                    elif h.object == "create" and found:
-                        out.append({"level": "block", "text": f"Object {num} already exists. Choose “Link to existing object” instead."})
+                    obj_csid = found[0] if len(found) == 1 and h.object != "create" else ""
+                    out += object_checks(tenant, h.object, num, found, perms)
         if obj_csid is not None:
             try:
                 sens = sensitivity(r, obj_csid)
@@ -425,12 +433,14 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
                 existing = lookup(r, "media", idn, client.find_media) if perms.get("readMedia", True) else None
             except CSpaceError:
                 existing = None
-            if not perms.get("readMedia", True):
-                out.append({"level": "warn", "text": "Your account can't read Media records, so the BMU can't check whether "
-                                                     f"a Media record with ID {idn} already exists."})
+            if not perms.get("readMedia", True):  # design: a check the row needs but can't run blocks it
+                out.append({"level": "block", "text": "Your account can't read Media records (read on media), so the BMU can't "
+                                                      f"check whether a Media record with ID {idn} already exists. Ask a "
+                                                      "CollectionSpace administrator for the permission."})
             if existing:
                 out.append({"level": "warn", "text": f"A Media record with ID {idn} already exists in CollectionSpace "
                                                      f"(CSID {', '.join(existing[:5])}{' …' if len(existing) > 5 else ''})."})
+        out += authority_read_checks(r, perms)
         if r.get("date") and not perms.get("readDates", True):
             out.append({"level": "block", "text": "Your account can't use CollectionSpace's date parser (read on structureddates), "
                                                   "so the date can't be checked. Clear the date, or ask for the permission."})
@@ -446,8 +456,61 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
                 out.append({"level": "block", "text": f"CollectionSpace can't interpret the date “{r['date']}”. Correct it or clear it."})
         elif (r.get("lookups") or {}).get("date"):
             r["lookups"].pop("date")
+        if r.get("orientation"):  # design: Image orientation, information only (read by the browser from the image)
+            out.append({"level": "info", "text": f"Orientation: {r['orientation']}."})
         r["checks"] = out
     return incomplete
+
+
+AUTHORITY_LABEL = {"creator": "Creator", "contributor": "Contributor", "rightsHolder": "Rights holder"}
+_AUTHORITY_READ = {"personauthorities": ("readPersons", "Person"), "orgauthorities": ("readOrgs", "Organization")}
+
+
+def authority_read_checks(r: dict, perms: dict[str, bool]) -> list[dict]:
+    """A filled authority field is checked against its authority, so the user must be able to read that authority
+    (design: a check the row needs but can't run blocks it). Empty fields need no check."""
+    out = []
+    for field, label in AUTHORITY_LABEL.items():
+        ref = r.get(field) or ""
+        service = next((s for s in _AUTHORITY_READ if f":{s}:" in ref), None)
+        if service and not perms.get(_AUTHORITY_READ[service][0], True):
+            kind = _AUTHORITY_READ[service][1]
+            out.append({"level": "block", "text": f"Your account can't read the {kind} authority, so the BMU can't check "
+                                                  f"{label}. Clear {label}, or ask for read on {service}."})
+    return out
+
+
+def _labels(tenant: Tenant, behaviors: tuple[str, ...]) -> str:
+    """The tenant's handling labels with these object behaviors, quoted and joined with "or"."""
+    names = [f"“{h.label}”" for h in tenant.handling if h.object in behaviors]
+    return " or ".join(names)
+
+
+def object_checks(tenant: Tenant, behavior: str, num: str, found: list[str], perms: dict[str, bool],
+                  rerun: bool = False) -> list[dict]:
+    """Design (Validation while editing): what the object lookup means for each handling's object behavior.
+    Find (existing): exactly one object. Create: none may exist yet. Find or create (either): at most one, and
+    creating it needs create on objects. rerun: the row's Media record exists (Partial), so its handling is
+    fixed, except after object_exists, and "stop linking" is the other way out."""
+    stop = ", or stop linking this document" if rerun else ""
+    if behavior == "create" and found:
+        return [{"level": "block", "text": f"Object {num} already exists in CollectionSpace, and “Create new object + link” "
+                                           f"only creates a new object. To link to it, choose {_labels(tenant, RELINK_OBJECT)}; "
+                                           f"otherwise correct the object number{stop}."}]
+    if behavior != "create" and len(found) > 1:
+        return [{"level": "block", "text": f"Object number {num} matches {len(found)} objects in CollectionSpace. Correct the "
+                                           f"object number so it identifies one object{stop}."}]
+    if behavior == "existing" and not found:
+        media_only = any(h.object == "none" for h in tenant.handling)
+        choices = " or ".join(c for c in (_labels(tenant, ("either", "create")), "media only" if media_only else "") if c)
+        tail = stop if rerun else (f", or choose {choices}" if choices else "")
+        return [{"level": "block", "text": f"No object {num} in CollectionSpace. Correct the object number{tail}."}]
+    # (while editing, "create" without the permission is blocked before the lookup, whatever it finds)
+    if (behavior == "either" or (rerun and behavior == "create")) and not found and not perms.get("objects"):
+        tail = stop if rerun else ", or choose another handling"
+        return [{"level": "block", "text": f"No object {num} in CollectionSpace, and your account can't create Object "
+                                           f"records. Correct the object number{tail}."}]
+    return []
 
 
 def apply_sensitivity(tenant: Tenant, r: dict, sens: dict) -> None:
@@ -477,6 +540,9 @@ def sensitivity_checks(tenant: Tenant, r: dict) -> list[dict]:
     elif r.get("softSignals") and not r.get("restricted"):
         out.append({"level": "warn", "text": f"Object {r.get('obj')} has {', '.join(r['softSignals'])}. Consider checking {header}; "
                                              "nothing is set automatically."})
+    elif r.get("softSignals"):  # design: once the image is withheld, the signal stays visible as information
+        out.append({"level": "info", "text": f"Object {r.get('obj')} has {', '.join(r['softSignals'])}; this image is withheld "
+                                             f"({header} is checked)."})
     return out
 
 
@@ -489,8 +555,14 @@ def _rerun_checks(tenant: Tenant, r: dict, perms: dict[str, bool], lookup, clien
         out.append({"level": "info", "text": f"Protected file: {r['protected']['reason']}."})
     st = _steps(r)
     skip = bool(r.get("skipLink"))
-    todo = list(dict.fromkeys(STEP_TEXT.get(n, n) for n, x in st.items()
-                              if x.get("s") not in FINISHED and not (skip and n in OBJ_STEPS + REL_STEPS + ("addToGroup",))))
+    h = tenant.handling_by_id(r["handling"])
+    obj_step = h.object_step if h else None
+    # An object step of an earlier handling (before a change after object_exists) is no longer planned
+    names = [n for n in st if not (n in OBJ_STEPS and n != obj_step)]
+    if obj_step and obj_step not in st and not object_step_ran(r):
+        names.insert(1, obj_step)
+    todo = list(dict.fromkeys(STEP_TEXT.get(n, n) for n in names
+                              if (st.get(n) or {}).get("s") not in FINISHED and not (skip and n in OBJ_STEPS + REL_STEPS + ("addToGroup",))))
     out.append({"level": "info", "text": ("The rerun will only " + " and ".join(todo) + "." if todo
                                           else "Nothing is left to do for this document; the rerun skips it.")
                 + (" Its remaining object steps are skipped: you stopped linking it to an object." if skip else "")})
@@ -521,8 +593,9 @@ def _rerun_checks(tenant: Tenant, r: dict, perms: dict[str, bool], lookup, clien
     if open_steps(r, REL_STEPS) and not perms.get("relations"):
         out.append({"level": "block", "text": "Your account can't create relations, so this Media record can't be linked to its "
                                               "object. Stop linking it, or have someone who can reschedule the job."})
-    obj_step = next((n for n in OBJ_STEPS if n in st), None)
-    if obj_step and open_steps(r, (obj_step,)):
+    # The handling's object step, if it hasn't found or created the object yet (after the handling changed from
+    # "Create new object + link", the new step hasn't run at all)
+    if obj_step and (st.get(obj_step) or {}).get("s") not in FINISHED and not object_step_ran(r):
         num = (r.get("obj") or "").strip()
         if not num:
             out.append({"level": "block", "text": "Enter the object number, or stop linking this document."})
@@ -533,19 +606,12 @@ def _rerun_checks(tenant: Tenant, r: dict, perms: dict[str, bool], lookup, clien
             found = None
             out.append({"level": "warn", "text": f"Couldn't check object {num} in CollectionSpace ({e.code})."})
         if found is not None:
-            if len(found) > 1:
-                out.append({"level": "block", "text": f"Object number {num} matches {len(found)} objects in CollectionSpace. Correct "
-                                                      "the object number, or stop linking this document."})
-            elif not found and obj_step == "findObject":
-                out.append({"level": "block", "text": f"No object {num} in CollectionSpace. Correct the object number, or stop "
-                                                      "linking this document."})
-            elif not found and not perms.get("objects"):
-                out.append({"level": "block", "text": "Your account can't create Object records. Stop linking this document, or "
-                                                      "have someone who can reschedule the job."})
+            out += object_checks(tenant, h.object, num, found, perms, rerun=True)
     return out
 
 
-STEP_TEXT = {"media": "create the Media record", "findObject": "find the object", "createObject": "find or create the object",
+STEP_TEXT = {"media": "create the Media record", "findObject": "find the object", "createObject": "create the object",
+             "findOrCreateObject": "find or create the object",
              "upload": "upload the file", "relMediaObject": "link it to its object", "relObjectMedia": "link it to its object",
              "addToGroup": "add its object to the job's group"}
 

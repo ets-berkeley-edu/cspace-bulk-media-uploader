@@ -1,22 +1,14 @@
-/** Browser-side file helpers: EXIF capture date, previews and the direct upload to S3. */
+/** Browser-side file helpers: previews and the direct upload to S3. (EXIF: see imageinfo.ts.) */
 
-const EXIF_DATE = /(\d{4}):(\d{2}):(\d{2}) (\d{2}):(\d{2}):(\d{2})/;
-
-/** Find an EXIF date (YYYY:MM:DD HH:MM:SS) near the start of the file; "" if none. Returns YYYY-MM-DD. */
-export async function readExifDate(file: Blob): Promise<string> {
-  try {
-    const buf = new Uint8Array(await file.slice(0, 256 * 1024).arrayBuffer());
-    return exifDateFromBytes(buf);
-  } catch {
-    return "";
-  }
-}
-
-export function exifDateFromBytes(bytes: Uint8Array): string {
-  let text = "";
-  for (let i = 0; i < bytes.length; i += 8192) text += String.fromCharCode(...bytes.subarray(i, i + 8192));
-  const m = EXIF_DATE.exec(text);
-  return m ? `${m[1]}-${m[2]}-${m[3]}` : "";
+/** Run fn over items, at most limit at a time, keeping the results in order. */
+export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const lane = async () => {
+    for (let i = next++; i < items.length; i = next++) out[i] = await fn(items[i]);
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, lane));
+  return out;
 }
 
 export function canPreview(file: File): boolean {
@@ -81,5 +73,24 @@ export function fileKind(name: string): { icon: string; label: string; image: bo
   if (["wav", "mp3", "aac"].includes(ext)) return { icon: "♪", label: "Audio", image: false };
   if (ext === "mp4") return { icon: "▶", label: "Video", image: false };
   if (ext === "x3d") return { icon: "⬡", label: "3D model", image: false };
+  if (ext === "pdf") return { icon: "PDF", label: "PDF document", image: false };
   return { icon: ext.toUpperCase() || "FILE", label: ext.toUpperCase() || "File", image: ["jpg", "jpeg", "png", "tif", "tiff"].includes(ext) };
+}
+
+/** Split chosen files into the ones the BMU accepts and the ones it skips (design: Supported file types).
+ *  Skipped files are never uploaded; the server's row check is the backstop. No list means accept all. */
+export function splitSupported<T extends { name: string }>(files: T[], types: string[] | undefined): { ok: T[]; skipped: T[] } {
+  if (!types?.length) return { ok: files, skipped: [] };
+  const allowed = new Set(types.map((t) => t.toLowerCase()));
+  const ext = (n: string) => (n.includes(".") ? n.split(".").pop()!.toLowerCase() : "");
+  const ok: T[] = [];
+  const skipped: T[] = [];
+  for (const f of files) (allowed.has(ext(f.name)) ? ok : skipped).push(f);
+  return { ok, skipped };
+}
+
+/** The message for files skipped because of their type. */
+export function skippedText(names: string[], hint: string | undefined): string {
+  const shown = names.slice(0, 5).join(", ") + (names.length > 5 ? `, and ${names.length - 5} more` : "");
+  return `${names.length} file${names.length === 1 ? "" : "s"} skipped: ${shown}. The BMU accepts ${hint || "only supported file types"}.`;
 }

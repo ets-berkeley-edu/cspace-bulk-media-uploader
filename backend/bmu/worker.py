@@ -23,16 +23,17 @@ from .cspace.payloads import group_xml, media_xml, object_xml, relation_xml
 from .failures import JOB_LEVEL, classify
 from .filetypes import HEAD_BYTES, mismatch
 from .storage import Storage, now
-from .tenant import Tenant, load_tenant
+from .tenant import OBJECT_STEPS, Tenant, load_tenant
 
 log = logging.getLogger("bmu.worker")
 
 MAX_CONSECUTIVE_SERVER_ERRORS = 5
 INLINE_AUDIT_ROWS = 100  # a run's per-row audit detail goes in the entry up to this many rows, in S3 beyond
-RECORD_TYPE = {"media": "Media", "upload": "Blob", "createObject": "CollectionObject", "relMediaObject": "Relation",
+RECORD_TYPE = {"media": "Media", "upload": "Blob", "createObject": "CollectionObject", "findOrCreateObject": "CollectionObject",
+               "relMediaObject": "Relation",
                "relObjectMedia": "Relation", "addToGroup": "Relation", "group": "Group"}
 STOPPED_JOB = {"unavailable", "worker_stopped"} | JOB_LEVEL  # these end the job as Failed
-OBJECT_STEPS = ("findObject", "createObject", "relMediaObject", "relObjectMedia", "addToGroup")
+LINK_STEPS = OBJECT_STEPS + ("relMediaObject", "relObjectMedia", "addToGroup")  # what "Stop linking" skips
 FINISHED = ("done", "not needed")
 
 
@@ -54,13 +55,13 @@ def plan_steps(tenant: Tenant, row: dict, job: dict | None = None) -> list[tuple
     """A row's steps in order, each with the steps it depends on (design: "Steps within a row").
 
     Create Media record      depends on nothing
-    Find or create Object    depends on nothing
+    Find, create, or find or create the Object (per the handling)       depends on nothing
     Upload file (PUT media/{csid}/blob, which creates the Blob record)   depends on Media
     Create Relations, both directions                                    depend on Media and Object
     Add the Object to the job's Group (if the job creates one and the row is in it)  depends on the Relations
     """
     h = tenant.handling_by_id(row["handling"])
-    obj = {"existing": "findObject", "create": "createObject"}.get(h.object)
+    obj = h.object_step
     steps: list[tuple[str, list[str]]] = [("media", [])]
     if obj:
         steps.append((obj, []))
@@ -145,13 +146,15 @@ class Worker:
                 time.sleep(self.s.worker_poll_seconds)
 
     def sweep(self) -> None:
-        """The periodic checks: sign-ins that expired in the queue, expired drafts and fixes, Completed jobs
-        past their 30 days, and running jobs whose worker stopped."""
+        """The periodic checks: sign-ins that expired in the queue or while running, expired drafts and fixes,
+        Completed jobs past their 30 days, running jobs whose worker stopped, protected files' staged uploads,
+        idle or expired sign-in sessions, and (hourly) abandoned uploads."""
         self.sweep_expired_sign_ins()
         self.sweep_expired_drafts()
         self.sweep_completed()
         self.sweep_stopped_jobs()
         self.sweep_protected_staged()
+        self.storage.sweep_sessions(self.s.session_idle_minutes * 60)
         if now() - self._last_abandoned_sweep > 3600:  # hourly is plenty for a one-day limit
             self._last_abandoned_sweep = now()
             self.sweep_abandoned_uploads()
@@ -162,15 +165,30 @@ class Worker:
         moved = []
         for j in self.storage.list_jobs(self.tenant.key):
             if j["status"] == "Queued" and j.get("credentialExpires") and j["credentialExpires"] < now():
-                if self.storage.update_job(j["id"], {"status": "Draft", "queuePos": None, "lastSavedAt": now(),
-                                                     "expiresAt": now() + self.s.draft_days * 86400,
-                                                     "note": "Sign-in expired while waiting in the queue; schedule it again to run it with your sign-in."},
-                                           expect_status="Queued"):
+                if self._sign_in_expired(j):
+                    moved.append(j["id"])
+            elif j["status"] == "Running" and j.get("credentialExpires") and j["credentialExpires"] < now():
+                # Design (Credentials): the stored sign-in of a job still running past the time limit is deleted too.
+                # The run in progress keeps the copy it decrypted when it started, until it ends.
+                if self.storage.get_credential(j["id"]):
                     self.storage.delete_credential(j["id"])
                     self.storage.audit(self.tenant.key, "Sign-in expired", "BMU", j["id"],
-                                       f"“{j.get('name') or 'Untitled job'}” moved to Drafts: its saved sign-in expired while it waited.")
-                    moved.append(j["id"])
+                                       f"Deleted the saved sign-in of “{j.get('name') or 'Untitled job'}”: it was still running "
+                                       f"{self.s.credential_hours:g} hours after it was scheduled.")
         return moved
+
+    def _sign_in_expired(self, j: dict) -> bool:
+        """A queued job whose saved sign-in expired goes back to Drafts, expiring like any draft (7 days with
+        protected files, 30 otherwise)."""
+        if not self.storage.update_job(j["id"], {"status": "Draft", "queuePos": None, "lastSavedAt": now(),
+                                                 "expiresAt": now() + self.s.draft_days_for(j) * 86400,
+                                                 "note": "Sign-in expired while waiting in the queue; schedule it again to run it with your sign-in."},
+                                       expect_status="Queued"):
+            return False
+        self.storage.delete_credential(j["id"])
+        self.storage.audit(self.tenant.key, "Sign-in expired", "BMU", j["id"],
+                           f"“{j.get('name') or 'Untitled job'}” moved to Drafts: its saved sign-in expired while it waited.")
+        return True
 
     def sweep_expired_drafts(self) -> list[str]:
         """Drafts past their expiry (design: Drafts, Expiry; State rules, Abandoned fixes). A draft that has
@@ -189,7 +207,7 @@ class Worker:
                     rows = self.storage.delete_job_and_files(j["id"])
                     self.storage.audit(self.tenant.key, "Draft expired", "BMU", j["id"],
                                        f"Deleted “{j.get('name') or 'Untitled job'}” ({len(rows)} documents), "
-                                       f"{self.s.draft_days} days after it was last saved; it had never run.")
+                                       f"{self.s.draft_days_for(j)} days after it was last saved; it had never run.")
                     done.append(j["id"])
         return done
 
@@ -218,7 +236,7 @@ class Worker:
                                             "expiresAt": None, "note": ""})
         self.storage.audit(self.tenant.key, "Fix reverted", "BMU", job["id"],
                            f"Fix and reschedule of “{job.get('name') or 'Untitled job'}” was not finished within "
-                           f"{self.s.draft_days} days; the edits were discarded and the job returned to "
+                           f"{self.s.draft_days_for(job)} days; the edits were discarded and the job returned to "
                            f"{'Needs attention' if fix['status'] == 'NeedsAttention' else fix['status']} with its history.")
         return True
 
@@ -286,11 +304,19 @@ class Worker:
                     stopped.append(j["id"])
         return stopped
 
-    def tick(self) -> bool:
-        """Run the next job for this tenant, if any. Returns True if a job ran."""
+    def maybe_sweep(self) -> None:
+        """The periodic checks, at most once a minute. Also called between documents during a run, so a long
+        run doesn't hold up draft expiry, cleanup, or stopping another worker's stalled job."""
         if now() - self._last_sweep > 60:
             self._last_sweep = now()
-            self.sweep()
+            try:
+                self.sweep()
+            except Exception:  # a failed check must never stop the job being run; it is tried again next time
+                log.exception("periodic checks failed")
+
+    def tick(self) -> bool:
+        """Run the next job for this tenant, if any. Returns True if a job ran."""
+        self.maybe_sweep()
         if not self.storage.acquire_lock(self.tenant.key, self.owner, self.s.worker_lock_seconds):
             return False  # another worker is running this tenant's job
         try:
@@ -314,16 +340,17 @@ class Worker:
         job = self.storage.get_job(job_id)
         cred = self.storage.get_credential(job_id)
         if not cred:
-            # The 72-hour sign-in limit passed while waiting: back to Drafts, to be scheduled again.
-            self.storage.update_job(job_id, {"status": "Draft", "note": "Sign-in expired while waiting in the queue. Schedule it again."},
-                                    expect_status=["Queued"])
-            self.storage.audit(self.tenant.key, "Run", "BMU", job_id, "Not run: the job's sign-in expired while it waited.")
+            # The 72-hour sign-in limit passed while waiting (the store's TTL removed it first): back to Drafts.
+            self._sign_in_expired(job)
             return
         run_no = int(job.get("run", 0)) + 1
         self._job_name = job.get("name", "")
         t = now()
-        if not self.storage.update_job(job_id, {"status": "Running", "run": run_no, "startedAt": t, "heartbeatAt": t, "code": "",
-                                                "fixFrom": None, "expiresAt": None, "cancelledBy": ""}, expect_status="Queued"):
+        # Claim it only if it is still Queued and its sign-in is still stored (one conditional write)
+        if not self.storage.claim_job(job_id, {"status": "Running", "run": run_no, "startedAt": t, "heartbeatAt": t, "code": "",
+                                               "fixFrom": None, "expiresAt": None, "cancelledBy": ""}):
+            if not self.storage.get_credential(job_id) and (self.storage.get_job(job_id) or {}).get("status") == "Queued":
+                self._sign_in_expired(job)
             return
         self._start_run(job, run_no, t)
         beat = _Heartbeat(self, job_id)
@@ -420,12 +447,12 @@ class Worker:
                            created if "rows" in where else [], run=run_no, jobName=job.get("name", ""), counts=counts, **where)
 
     def _run_rows(self, job_id: str, client: CSpaceClient, run_no: int, created: list[dict]) -> str:
-        server_errors = 0
         self._job_media = {((r.get("result") or {}).get("steps") or {}).get("media", {}).get("csid")
                            for r in self.storage.get_rows(job_id)} - {None}
         for row in self.storage.get_rows(job_id):
             if not row.get("include") or (row.get("result") or {}).get("state") == "Done":
                 continue
+            self.maybe_sweep()
             job = self.storage.get_job(job_id)
             if job.get("cancelRequested"):
                 return "cancelled"
@@ -434,9 +461,6 @@ class Worker:
             err = self.run_row(client, job_id, row, run_no, created)
             if err in JOB_LEVEL:
                 raise JobStop(err, f"row {row['n']}: {err}")
-            server_errors = server_errors + 1 if err == "server_error" else 0
-            if server_errors >= MAX_CONSECUTIVE_SERVER_ERRORS:
-                raise JobStop("unavailable", "CollectionSpace failed repeatedly")
             self.storage.update_job(job_id, {"progress": _progress(self.storage.get_rows(job_id))})
         return ""
 
@@ -467,7 +491,7 @@ class Worker:
             st = _step(row, name)
             if st.get("s") in FINISHED:
                 continue  # a rerun never repeats a done step
-            if row.get("skipLink") and name in OBJECT_STEPS:
+            if row.get("skipLink") and name in LINK_STEPS:
                 st.clear()
                 st.update(s="not needed")
                 continue
@@ -498,7 +522,7 @@ class Worker:
                 code, detail = (e.code, e.detail) if isinstance(e, _RowError) else classify(name, e)
                 st.clear()
                 st.update(s="failed", code=code, detail=detail, run=run_no)
-                if name in ("findObject", "createObject"):
+                if name in OBJECT_STEPS:
                     st["obj"] = row.get("obj", "")  # the object number that failed, so the editor knows if it changed
                 if not first_error:
                     first_error = code
@@ -508,6 +532,10 @@ class Worker:
                     break
             finally:
                 self.storage.put_row(job_id, row, guard=False)
+            # Design: five requests in a row with a 5xx or no answer stop the job; the row in progress is settled
+            # by _finish, and the documents not reached stay not started.
+            if getattr(client, "failures_in_a_row", 0) >= MAX_CONSECUTIVE_SERVER_ERRORS:
+                raise JobStop("unavailable", f"{client.failures_in_a_row} requests in a row to CollectionSpace failed")
         res["state"] = row_state(res)
         if res["state"] == "Done":
             res["error"] = None
@@ -558,7 +586,7 @@ class Worker:
             st.update(s="skipped", after="group")
             return
         steps = row["result"]["steps"]
-        obj = (steps.get("findObject") or steps.get("createObject"))["csid"]
+        obj = object_csid(steps)
         members = (self.storage.get_job(job_id) or {}).get("groupMembers") or {}
         first = members.get(obj)
         if first and first["n"] != row["n"]:
@@ -612,15 +640,24 @@ class Worker:
         steps = row["result"]["steps"]
         if name == "media":
             return client.create_media(media_xml(self.tenant, row)), False
-        if name in ("findObject", "createObject"):
-            # Find or create: a rerun, or an Object added since scheduling, links to the existing record.
+        if name in OBJECT_STEPS:
+            # Design (Handling per document): "Find object" needs exactly one existing object; "Create object"
+            # needs none to exist (an object added since the job was checked fails the row, object_exists);
+            # "Find or create object" links to the one it finds and creates it only when there is none.
             found = client.find_objects(row["obj"])
+            # the editor's checks reuse this search, so a fix sees what the run saw
+            row.setdefault("lookups", {})["object"] = {"value": row["obj"], "csids": list(found), "at": int(now())}
+            search = f"GET collectionobjects?as=objectNumber = \"{row['obj']}\" found {len(found)} object{'' if len(found) == 1 else 's'}"
+            if name == "createObject":
+                if found:
+                    raise _RowError("object_exists", search)
+                return client.create_object(object_xml(row["obj"])), False
             if len(found) > 1:
-                raise _RowError("object_ambiguous", f"GET collectionobjects?as=objectNumber = \"{row['obj']}\" found {len(found)} objects")
+                raise _RowError("object_ambiguous", search)
             if found:
                 return found[0], True
             if name == "findObject":
-                raise _RowError("object_gone", f"GET collectionobjects?as=objectNumber = \"{row['obj']}\" found no object")
+                raise _RowError("object_gone", search)
             return client.create_object(object_xml(row["obj"])), False
         media = steps["media"]["csid"]
         if name == "upload":
@@ -641,7 +678,7 @@ class Worker:
             finally:
                 body.close()
             return blob or client.media_blob_csid(media), False
-        obj = (steps.get("findObject") or steps.get("createObject"))["csid"]
+        obj = object_csid(steps)
         if name == "relMediaObject":
             subj, subj_type, tgt, tgt_type = media, "Media", obj, "CollectionObject"
         elif name == "relObjectMedia":
@@ -652,6 +689,11 @@ class Worker:
         if existing:
             return existing[0], False
         return client.create_relation(relation_xml(subj, subj_type, tgt, tgt_type)), False
+
+
+def object_csid(steps: dict) -> str:
+    """The CSID of the Object the row's object step found or created."""
+    return next(steps[n]["csid"] for n in OBJECT_STEPS if (steps.get(n) or {}).get("s") == "done")
 
 
 class _RowError(Exception):

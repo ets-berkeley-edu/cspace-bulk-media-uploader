@@ -10,14 +10,29 @@ from typing import Any
 
 import yaml
 
+from .filetypes import SUPPORTED_EXTENSIONS, SUPPORTED_HINT
+
 
 @dataclass(frozen=True)
 class Handling:
     id: str
     label: str
-    object: str  # existing | create | none
+    object: str  # existing | create | either | none (see OBJECT_STEP)
     id_rule: str  # object | image
     legacy: str = ""
+
+    @property
+    def object_step(self) -> str | None:
+        """The row step that finds or creates this handling's Object, or None for media only."""
+        return OBJECT_STEP.get(self.object)
+
+
+# How each handling's object behavior runs (design: Handling per document):
+#   existing  the object must exist: "Find object"; none found fails the row (object_gone)
+#   create    a new object: "Create object"; one that already exists fails the row (object_exists)
+#   either    link to the object if it exists, create it if it doesn't: "Find or create object"
+OBJECT_STEP = {"existing": "findObject", "create": "createObject", "either": "findOrCreateObject"}
+OBJECT_STEPS = tuple(OBJECT_STEP.values())
 
 
 @dataclass(frozen=True)
@@ -60,6 +75,8 @@ class Tenant:
             "filenamePattern": self.filename_pattern.pattern,
             "mediaTypes": [o.__dict__ for o in self.media_types],
             "languageDefault": self.language_default,
+            "fileTypes": list(SUPPORTED_EXTENSIONS),
+            "fileTypesHint": SUPPORTED_HINT,
             "authorityFields": self.authority_fields,
             "sensitivity": {"summary": self.sensitivity.get("summary", ""), "explain": self.sensitivity.get("explain", [])},
         }
@@ -69,6 +86,9 @@ class Tenant:
 def load_tenant(key: str) -> Tenant:
     text = resources.files("bmu.tenants").joinpath(f"{key}.yaml").read_text(encoding="utf-8")
     raw = yaml.safe_load(text)
+    bad = [h["id"] for h in raw["handling"] if h["object"] not in (*OBJECT_STEP, "none")]
+    if bad:
+        raise ValueError(f"{key}.yaml: unknown object behavior in handling {', '.join(bad)}")
     return Tenant(
         key=raw["key"],
         name=raw["name"],

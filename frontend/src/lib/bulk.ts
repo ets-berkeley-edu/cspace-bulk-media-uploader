@@ -31,7 +31,7 @@ export function isLocked(r: Row): boolean {
 /** A Failed row whose object step already ran keeps its object, so its handling can't change. */
 export function objectStepRan(r: Row): boolean {
   const s = r.result?.steps ?? {};
-  return s.findObject?.s === "done" || s.createObject?.s === "done";
+  return s.findObject?.s === "done" || s.createObject?.s === "done" || s.findOrCreateObject?.s === "done";
 }
 
 /** Would these choices change this row? Choosing a value it already has is no change. */
