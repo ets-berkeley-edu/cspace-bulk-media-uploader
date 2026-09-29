@@ -339,7 +339,7 @@ def _routes(app: FastAPI) -> None:
     # ---- authority autocomplete (existing terms only) ------------------------------------
     @app.get("/api/authorities")
     def authorities(field: str, q: str, sess: Session = Depends(current_session), s: Services = Depends(svc)):
-        if len(q.strip()) < 3:
+        if len(q.strip()) < s.tenant.autocomplete["min_length"]:
             return {"terms": []}
         kinds = s.tenant.authority_fields.get(field)
         if not kinds:

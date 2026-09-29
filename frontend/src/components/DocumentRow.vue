@@ -198,9 +198,9 @@ function text(field: keyof Row, e: Event) {
         <DateInput :model-value="row.date" :parsed="row.lookups?.date" :exif="row.dateExif" :disabled="ro" @update:model-value="emit('edit', { date: $event })" />
         <RepeatingSelect label="Media type" word="type" :model-value="row.type" :options="tenant.mediaTypes" :disabled="ro"
                          @update:model-value="emit('edit', { type: $event })" />
-        <AuthorityInput field="creator" label="Creator" :model-value="row.creator" :disabled="ro" @update:model-value="emit('edit', { creator: $event })" />
-        <AuthorityInput field="contributor" label="Contributor" :model-value="row.contributor" :disabled="ro" @update:model-value="emit('edit', { contributor: $event })" />
-        <AuthorityInput field="rightsHolder" label="Rights holder" :model-value="row.rightsHolder" :disabled="ro" @update:model-value="emit('edit', { rightsHolder: $event })" />
+        <AuthorityInput :timing="tenant.autocomplete" field="creator" label="Creator" :model-value="row.creator" :disabled="ro" @update:model-value="emit('edit', { creator: $event })" />
+        <AuthorityInput :timing="tenant.autocomplete" field="contributor" label="Contributor" :model-value="row.contributor" :disabled="ro" @update:model-value="emit('edit', { contributor: $event })" />
+        <AuthorityInput :timing="tenant.autocomplete" field="rightsHolder" label="Rights holder" :model-value="row.rightsHolder" :disabled="ro" @update:model-value="emit('edit', { rightsHolder: $event })" />
         <label class="field wide"><span>Description</span>
           <textarea rows="2" :value="row.description" :disabled="ro" @change="text('description', $event)"></textarea></label>
         <label class="field"><span>Copyright statement</span>

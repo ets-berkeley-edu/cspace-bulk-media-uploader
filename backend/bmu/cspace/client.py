@@ -204,6 +204,12 @@ class CSpaceClient:
                 fields[name] = el.text.strip()
         return fields if any(k.startswith("dateEarliest") for k in fields) else None
 
+    def authority_vocabularies(self, service: str) -> list[dict[str, str]]:
+        """The vocabularies of an authority (e.g. personauthorities): local, shared, ulan… as the server has them."""
+        r = self._request("GET", service, params={"wf_deleted": "false", "pgSz": "0"})
+        return [{"shortIdentifier": _text(i, "shortIdentifier"), "displayName": _text(i, "displayName"), "csid": _text(i, "csid")}
+                for i in _items(SafeET.fromstring(r.content))]
+
     def vocabulary_items(self, vocabulary: str, limit: int = 1000) -> list[dict[str, str]]:
         """Every term of a vocabulary (e.g. languages), as refName and display name."""
         r = self._request("GET", f"vocabularies/urn:cspace:name({vocabulary})/items",

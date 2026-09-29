@@ -28,6 +28,21 @@ describe("AuthorityInput", () => {
     expect(w.emitted("update:modelValue")?.[0]).toEqual([REF]);
   });
 
+  it("uses the tenant's find delay and minimum length (PAHMA: 1000 ms)", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ terms: [] }),
+      { status: 200, headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const w = mount(AuthorityInput, { props: { modelValue: "", field: "creator", label: "Creator", timing: { findDelayMs: 1000, minLength: 4 } } });
+    await w.find("input").setValue("fre");
+    expect(w.text()).toContain("4+ characters");
+    await w.find("input").setValue("freu");
+    await vi.advanceTimersByTimeAsync(900);
+    expect(fetchMock).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(150);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("shows only the display name of the stored refName, and never saves free text", async () => {
     vi.useFakeTimers();
     const w = mount(AuthorityInput, { props: { modelValue: REF, field: "creator", label: "Creator" } });

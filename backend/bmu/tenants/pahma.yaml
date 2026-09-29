@@ -51,6 +51,12 @@ language:
 authorities:
   person: { service: personauthorities, vocabulary: person }
   organization: { service: orgauthorities, vocabulary: organization }
+# Autocomplete timing from the tenant's UI profile (cspace-ui-plugin-profile-pahma sets autocompleteFindDelay:
+# 1000; the minimum length is cspace-ui's default, autocompleteMinLength: 3).
+autocomplete: { find_delay_ms: 1000, min_length: 3 }
+# The CollectionSpace UI's Media fields list person/local,person/shared,organization/local,organization/shared,
+# but PAHMA's profile configures no "shared" Person or Organization vocabulary, so the UI searches local ones only,
+# as here. scripts/check_cspace.py --vocabularies lists what the server has.
 authority_fields:
   creator: [person, organization]
   contributor: [person, organization]

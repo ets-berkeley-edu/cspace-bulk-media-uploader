@@ -8,7 +8,8 @@ import { api } from "../api";
 import { displayName } from "../lib/refname";
 import type { Term } from "../types";
 
-const props = defineProps<{ modelValue: string; field: string; label: string; disabled?: boolean }>();
+const props = defineProps<{ modelValue: string; field: string; label: string; disabled?: boolean;
+  timing?: { findDelayMs: number; minLength: number } }>();
 const emit = defineEmits<{ "update:modelValue": [value: string] }>();
 
 const text = ref(displayName(props.modelValue));
@@ -17,8 +18,10 @@ const open = ref(false);
 const message = ref("");
 const active = ref(-1);
 let timer: ReturnType<typeof setTimeout> | undefined;
-// The CollectionSpace UI's autocomplete timing: search 500 ms after typing stops, from 3 characters.
-const FIND_DELAY_MS = 500;
+// The tenant's CollectionSpace UI timing (its profile's autocompleteFindDelay and autocompleteMinLength);
+// cspace-ui's defaults are 500 ms and 3 characters.
+const findDelay = computed(() => props.timing?.findDelayMs ?? 500);
+const minLength = computed(() => props.timing?.minLength ?? 3);
 let seq = 0;
 
 watch(() => props.modelValue, (v) => { text.value = displayName(v); });
@@ -38,9 +41,9 @@ function onInput() {
   active.value = -1;
   clearTimeout(timer);
   const q = text.value.trim();
-  if (q.length < 3) {
+  if (q.length < minLength.value) {
     terms.value = [];
-    message.value = "Continue typing to find matching terms (3+ characters)";
+    message.value = `Continue typing to find matching terms (${minLength.value}+ characters)`;
     return;
   }
   message.value = "Searching…";
@@ -58,7 +61,7 @@ function onInput() {
     } catch (e) {
       if (mine === seq) message.value = (e as Error).message;
     }
-  }, FIND_DELAY_MS);
+  }, findDelay.value);
 }
 
 function choose(t: Term) {

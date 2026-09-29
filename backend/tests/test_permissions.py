@@ -105,3 +105,17 @@ def test_the_sweep_deletes_idle_and_expired_sessions_with_their_passwords(api, l
     assert left == {"reader"}
     worker.sweep()  # the worker's periodic checks include it
     assert {i["user"] for i in services.storage.sessions.scan()["Items"]} == {"reader"}
+
+
+
+def test_autocomplete_timing_comes_from_the_tenant_profile(api, login):
+    me = login()
+    assert me["tenant"]["autocomplete"] == {"findDelayMs": 1000, "minLength": 3}  # PAHMA's UI profile
+    assert api.get("/api/authorities", params={"field": "creator", "q": "ha"}).json()["terms"] == []
+
+
+def test_authority_vocabularies_are_listed_for_the_check_script(fake):
+    from conftest import factory
+    c = factory("admin", "admin")
+    assert [v["shortIdentifier"] for v in c.authority_vocabularies("personauthorities")] == ["person"]  # no "shared"
+    assert [v["shortIdentifier"] for v in c.authority_vocabularies("orgauthorities")] == ["organization"]

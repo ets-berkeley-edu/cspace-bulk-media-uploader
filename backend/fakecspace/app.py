@@ -505,6 +505,19 @@ def add_failure(step: str, match: str = "", status: int = 500, effect: str = "",
     return {"rules": store.rules}
 
 
+@app.get("/cspace-services/{service}")
+def authority_vocabularies(service: str, request: Request):
+    """The vocabularies of an authority. Like PAHMA's server: local Persons and Organizations only (no "shared")."""
+    if service not in ("personauthorities", "orgauthorities"):
+        return Response(status_code=404)
+    if (d := _check(request, service, "R")):
+        return d
+    short, name = ("person", "Local Persons") if service == "personauthorities" else ("organization", "Local Organizations")
+    item = (f"<list-item><csid>{uuid.uuid5(uuid.NAMESPACE_URL, service)}</csid><shortIdentifier>{short}</shortIdentifier>"
+            f"<displayName>{name}</displayName></list-item>")
+    return _xml(f'<ns2:abstract-common-list xmlns:ns2="http://collectionspace.org/services/jaxb">{item}</ns2:abstract-common-list>')
+
+
 @app.get("/_fake/fail")
 def list_failures():
     return {"rules": store.rules}

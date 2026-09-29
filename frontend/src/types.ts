@@ -21,6 +21,8 @@ export interface TenantInfo {
   languageDefault: string;
   /** File extensions the BMU accepts, and how to name them (design: Supported file types). */
   fileTypes?: string[];
+  /** Autocomplete timing from the tenant's UI profile. */
+  autocomplete?: { findDelayMs: number; minLength: number };
   fileTypesHint?: string;
   authorityFields: Record<string, string[]>;
   sensitivity?: { summary: string; explain: string[] };

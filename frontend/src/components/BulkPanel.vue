@@ -115,11 +115,11 @@ function applyAll() {
             <option value="">Language — no change</option>
             <option v-for="l in languages ?? []" :key="l.value" :value="l.value">{{ l.label }}</option>
           </select>
-          <AuthorityInput v-if="hasField('creator')" field="creator" label="Creator" :model-value="choice.creator" :disabled="readonly"
+          <AuthorityInput :timing="tenant.autocomplete" v-if="hasField('creator')" field="creator" label="Creator" :model-value="choice.creator" :disabled="readonly"
                           @update:model-value="choice.creator = $event" />
-          <AuthorityInput v-if="hasField('contributor')" field="contributor" label="Contributor" :model-value="choice.contributor" :disabled="readonly"
+          <AuthorityInput :timing="tenant.autocomplete" v-if="hasField('contributor')" field="contributor" label="Contributor" :model-value="choice.contributor" :disabled="readonly"
                           @update:model-value="choice.contributor = $event" />
-          <AuthorityInput v-if="hasField('rightsHolder')" field="rightsHolder" label="Rights holder" :model-value="choice.rightsHolder" :disabled="readonly"
+          <AuthorityInput :timing="tenant.autocomplete" v-if="hasField('rightsHolder')" field="rightsHolder" label="Rights holder" :model-value="choice.rightsHolder" :disabled="readonly"
                           @update:model-value="choice.rightsHolder = $event" />
         </div>
 
