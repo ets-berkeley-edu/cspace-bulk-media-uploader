@@ -38,6 +38,11 @@ export const api = {
   job: (id: string) => request<{ job: Job; rows: Row[] }>("GET", `/api/jobs/${id}`),
   renameJob: (id: string, name: string) => request<Job>("PATCH", `/api/jobs/${id}`, { name }),
   deleteJob: (id: string) => request("DELETE", `/api/jobs/${id}`),
+  /** Become the draft's editor; with takeOverSince, take over from the editor the user was warned about. */
+  openJob: (id: string, takeOverSince?: number) =>
+    request<Job>("POST", `/api/jobs/${id}/open`, takeOverSince !== undefined ? { takeOverSince } : {}),
+  closeJob: (id: string) => request("POST", `/api/jobs/${id}/close`),
+  saveDraft: (id: string) => request<Job>("POST", `/api/jobs/${id}/save`),
   addFiles: (id: string, files: { name: string; size: number; type: string }[]) =>
     request<{ rows: Row[] }>("POST", `/api/jobs/${id}/files`, { files }),
   uploaded: (id: string, n: number) => request<RowChange>("POST", `/api/jobs/${id}/rows/${n}/uploaded`),

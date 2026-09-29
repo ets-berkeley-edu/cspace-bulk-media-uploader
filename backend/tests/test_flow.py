@@ -603,3 +603,83 @@ def test_edited_numbers_keep_their_edits_and_derived_ones_follow(api, login, add
     row = api.patch(f"/api/jobs/{job}/rows/{n}", json={"idnum": "MY-ID"}).json()["row"]
     row = api.patch(f"/api/jobs/{job}/rows/{n}", json={"file": "15-1240_1.jpg"}).json()["row"]
     assert row["obj"] == "15-1240" and row["idnum"] == "MY-ID"  # the object number follows; the edited ID doesn't
+
+
+# ---- drafts: saved as you go, one editor at a time, take-over, expiry (design: Drafts) ----------------
+def _second_user(services, user="limited"):
+    from fastapi.testclient import TestClient
+    from bmu.app import create_app
+    c = TestClient(create_app(services), base_url="http://testserver")
+    c.headers["X-BMU"] = "1"
+    assert c.post("/api/login", json={"username": user, "password": user}).status_code == 200
+    return c
+
+
+def test_a_draft_has_one_editor_and_can_be_taken_over(api, login, add_uploaded, services):
+    login()
+    job = new_job(api)
+    n = add_uploaded(job, ["15-1234_a.jpg"])[0]["n"]
+    other = _second_user(services)
+    listed = {j["id"]: j for j in other.get("/api/jobs").json()["jobs"]}[job]
+    assert listed["editingBy"] == "admin" and listed["editingByYou"] is False and "editingSession" not in listed
+    # the other user can preview but not change it, or delete it
+    assert other.get(f"/api/jobs/{job}").status_code == 200
+    r = other.patch(f"/api/jobs/{job}/rows/{n}", json={"description": "x"})
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "not_editing"
+    assert other.delete(f"/api/jobs/{job}").status_code == 409
+    r = other.post(f"/api/jobs/{job}/open")
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "locked"
+    since = r.json()["detail"]["editingSince"]
+    # take over after the warning
+    r = other.post(f"/api/jobs/{job}/open", json={"takeOverSince": since})
+    assert r.status_code == 200 and r.json()["editingBy"] == "limited" and r.json()["editingByYou"]
+    assert other.patch(f"/api/jobs/{job}/rows/{n}", json={"description": "mine now"}).status_code == 200
+    # the first editor's next change is refused; what they saved before is kept
+    r = api.patch(f"/api/jobs/{job}/rows/{n}", json={"description": "too late"})
+    assert r.status_code == 409 and "limited is editing this draft now" in r.json()["detail"]["message"]
+    assert services.storage.get_row(job, n)["description"] == "mine now"
+    # a take-over based on an old warning fails (someone else took it in the meantime)
+    assert api.post(f"/api/jobs/{job}/open", json={"takeOverSince": since}).status_code == 409
+    assert any(a["type"] == "Draft taken over" for a in services.storage.list_audit("pahma"))
+
+
+def test_save_draft_restarts_expiry_and_close_releases(api, login, services):
+    login()
+    job = new_job(api)
+    services.storage.update_job(job, {"lastSavedAt": 1.0, "expiresAt": 2.0})
+    j = api.post(f"/api/jobs/{job}/save").json()
+    assert j["lastSavedBy"] == "admin" and j["expiresAt"] > j["lastSavedAt"] + 29 * 86400
+    assert api.post(f"/api/jobs/{job}/close").status_code == 200
+    assert "editingBy" not in api.get(f"/api/jobs/{job}").json()["job"]
+    assert api.patch(f"/api/jobs/{job}", json={"name": "x"}).status_code == 409  # closed: open it first
+    assert api.post(f"/api/jobs/{job}/open").json()["editingByYou"]
+
+
+def test_signing_out_stops_editing(api, login, services):
+    login()
+    job = new_job(api)
+    api.post("/api/logout")
+    assert "editingBy" not in services.storage.get_job(job)
+
+
+def test_scheduling_takes_the_job_out_of_drafts(api, login, add_uploaded, services):
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_a.jpg"])
+    other = _second_user(services, "admin")  # same user, another browser: not the editor
+    assert other.post(f"/api/jobs/{job}/schedule").status_code == 409
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    assert "editingBy" not in services.storage.get_job(job)
+
+
+def test_expired_drafts_that_never_ran_are_deleted(api, login, add_uploaded, worker, services):
+    login()
+    old, ran, fresh = new_job(api), new_job(api), new_job(api)
+    row = add_uploaded(old, ["15-1234_a.jpg"])[0]
+    services.storage.update_job(old, {"expiresAt": 1.0})
+    services.storage.update_job(ran, {"expiresAt": 1.0, "run": 1})  # a job that has run is never deleted by expiry
+    assert worker.sweep_expired_drafts() == [old]
+    assert services.storage.get_job(old) is None and services.storage.get_rows(old) == []
+    assert services.storage.head_object(row["s3Key"]) is None
+    assert services.storage.get_job(ran) and services.storage.get_job(fresh)
+    assert any(a["type"] == "Draft expired" for a in services.storage.list_audit("pahma"))

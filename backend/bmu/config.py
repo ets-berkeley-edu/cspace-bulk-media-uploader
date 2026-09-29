@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     kms_job_key_id: str | None = None
 
     session_hours: float = 8.0
+    draft_days: int = 30  # a draft that has never run is deleted this long after it was last saved
     credential_hours: float = 72.0
     cookie_secure: bool = True
     max_file_bytes: int = 2 * 1024**3

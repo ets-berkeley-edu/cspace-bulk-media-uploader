@@ -122,6 +122,13 @@ export interface Job {
   finishedAt?: number;
   currentRow?: number;
   progress?: { total: number; done: number; failed: number };
+  // drafts: one editor at a time; saved as you go; expiry (design: Drafts)
+  editingBy?: string;
+  editingSince?: number;
+  editingByYou?: boolean;
+  lastSavedBy?: string;
+  lastSavedAt?: number;
+  expiresAt?: number;
 }
 
 export interface Term {

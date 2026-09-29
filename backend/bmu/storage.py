@@ -150,9 +150,14 @@ class Storage:
         self.sessions.delete_item(Key={"PK": key})
 
     # ---- jobs and rows ------------------------------------------------------------------
-    def create_job(self, tenant: str, user: str, name: str) -> dict:
+    def create_job(self, tenant: str, user: str, name: str, session: str = "", draft_days: int = 30) -> dict:
+        """A new job is a draft, open for editing by the session that created it."""
+        t = now()
         job = {"id": uuid.uuid4().hex[:12], "tenant": tenant, "name": name, "status": "Draft",
-               "createdBy": user, "created": now(), "updated": now(), "rowCount": 0, "nextRow": 1, "run": 0}
+               "createdBy": user, "created": t, "updated": t, "rowCount": 0, "nextRow": 1, "run": 0,
+               "lastSavedBy": user, "lastSavedAt": t, "expiresAt": t + draft_days * 86400}
+        if session:
+            job.update(editingBy=user, editingSession=session, editingSince=t)
         self.jobs.put_item(Item=_dyn({"PK": f"JOB#{job['id']}", "SK": "META", **job}))
         return job
 
@@ -169,6 +174,58 @@ class Storage:
             if "LastEvaluatedKey" not in r:
                 return out
             kw["ExclusiveStartKey"] = r["LastEvaluatedKey"]
+
+    # ---- drafts: one editor at a time (design: Drafts, scheduling and the job queue) ------------
+    def open_draft(self, job_id: str, user: str, session: str, take_over_since: float | None = None) -> bool:
+        """Become the draft's editor: if nobody is editing it, if this session already is, or (take-over) if
+        the editor is still the one the user was warned about (same editingSince)."""
+        cond = Attr("status").eq("Draft") & (Attr("editingSession").not_exists() | Attr("editingSession").eq(session))
+        if take_over_since is not None:
+            cond = Attr("status").eq("Draft") & (cond | Attr("editingSince").eq(_dyn(take_over_since)))
+        try:
+            self.jobs.update_item(
+                Key={"PK": f"JOB#{job_id}", "SK": "META"}, ConditionExpression=cond,
+                UpdateExpression="SET editingBy = :u, editingSession = :s, editingSince = :t",
+                ExpressionAttributeValues=_dyn({":u": user, ":s": session, ":t": now()}))
+            return True
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                return False
+            raise
+
+    def close_draft(self, job_id: str, session: str) -> None:
+        """Stop editing (only the session that is editing can)."""
+        try:
+            self.jobs.update_item(Key={"PK": f"JOB#{job_id}", "SK": "META"}, ConditionExpression=Attr("editingSession").eq(session),
+                                  UpdateExpression="REMOVE editingBy, editingSession, editingSince")
+        except ClientError as e:
+            if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
+                raise
+
+    def mark_saved(self, job_id: str, user: str, session: str, draft_days: int) -> bool:
+        """Every change to a draft is saved at once; this records who saved it last and restarts its expiry.
+        Only for the session that is editing it."""
+        t = now()
+        try:
+            self.jobs.update_item(Key={"PK": f"JOB#{job_id}", "SK": "META"}, ConditionExpression=Attr("editingSession").eq(session),
+                                  UpdateExpression="SET lastSavedBy = :u, lastSavedAt = :t, expiresAt = :e, updated = :t",
+                                  ExpressionAttributeValues=_dyn({":u": user, ":t": t, ":e": t + draft_days * 86400}))
+            return True
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                return False
+            raise
+
+    def delete_job_and_files(self, job_id: str) -> list[dict]:
+        """Delete a job, its rows and their staged files. Returns the rows that were deleted."""
+        rows = self.get_rows(job_id)
+        for r in rows:
+            if r.get("s3Key"):
+                self.delete_object(r["s3Key"])
+            self.jobs.delete_item(Key={"PK": f"JOB#{job_id}", "SK": f"ROW#{r['n']:05d}"})
+        self.delete_credential(job_id)
+        self.jobs.delete_item(Key={"PK": f"JOB#{job_id}", "SK": "META"})
+        return rows
 
     def update_job(self, job_id: str, fields: dict, expect_status: str | list[str] | None = None) -> bool:
         """Set fields on a job. With expect_status, only if the job is in that status (returns False otherwise)."""
