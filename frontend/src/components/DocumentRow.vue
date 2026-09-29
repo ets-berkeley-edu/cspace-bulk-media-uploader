@@ -15,6 +15,7 @@ import RepeatingSelect from "./RepeatingSelect.vue";
 const props = defineProps<{
   row: Row; tenant: TenantInfo; perms: Perms; preview?: string; expanded: boolean; readonly: boolean; checking?: boolean;
   selected?: boolean; languages?: Option[]; otherNames?: string[]; uploadingHere?: boolean; groupOn?: boolean; jobId?: string | null;
+  runView?: boolean; // the job is running: Status shows each document's run state
 }>();
 const emit = defineEmits<{ edit: [changes: Partial<Row>]; remove: []; toggle: []; select: [on: boolean]; replace: [file: File]; retry: [] }>();
 
@@ -49,8 +50,15 @@ function pickReplacement(e: Event) {
 }
 const handling = computed(() => props.tenant.handling.find((h) => h.id === props.row.handling));
 
-const status = computed(() => stalled.value && props.row.include ? { text: "Upload not finished", cls: "b-danger" }
-  : rowStatus(props.row, props.tenant, props.checking));
+const RUN_BADGE: Record<string, string> = { "In progress": "b-accent", Done: "b-ok", Partial: "b-warn", Failed: "b-danger", "Not started": "b-muted" };
+const status = computed(() => {
+  if (props.runView) {
+    if (!props.row.include) return { text: "Disabled — ignored", cls: "b-accent" };
+    const s = props.row.result?.state ?? "Not started";
+    return { text: s === "In progress" ? "▶ In progress" : s, cls: RUN_BADGE[s] ?? "b-muted" };
+  }
+  return stalled.value && props.row.include ? { text: "Upload not finished", cls: "b-danger" } : rowStatus(props.row, props.tenant, props.checking);
+});
 const hasWarnings = computed(() => props.row.include && worstLevel(props.row) === "warn");
 const PREFIX: Record<string, string> = { block: "Must fix: ", warn: "Warning: ", info: "" };
 
@@ -101,7 +109,7 @@ function text(field: keyof Row, e: Event) {
              :disabled="readonly || !row.include || handling?.object === 'none' || groupDone || done || (!perms.groups && !inGroup)"
              @change="emit('edit', { group: ($event.target as HTMLInputElement).checked })" /></td>
     <td><span class="badge" :class="status.cls">{{ status.text }}</span>
-      <span v-if="hasWarnings && status.cls !== 'b-danger'" class="badge b-warn" title="This document has warnings"> !</span>
+      <span v-if="hasWarnings && !runView && status.cls !== 'b-danger'" class="badge b-warn" title="This document has warnings"> !</span>
       <div v-if="row.upload.s === 'uploading' && !stalled" class="progress"><span class="up" :style="{ width: (row.upload.pct ?? 0) + '%' }"></span></div>
       <div v-if="canRetry" class="retry-line">
         <template v-if="!confirmRemove"><button type="button" @click="emit('retry')">Retry</button>

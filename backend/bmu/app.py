@@ -32,6 +32,8 @@ FIXABLE = ("NeedsAttention", "Failed")
 
 ClientFactory = Callable[[str, str], CSpaceClient]
 
+AUTOCOMPLETE_PAGE = 20  # the first page of each source, as the CollectionSpace UI fetches
+
 # Vocabularies the BMU offers whole (their terms change rarely, so they are cached for an hour).
 VOCABULARIES = ("languages",)
 VOCAB_CACHE_SECONDS = 3600
@@ -112,10 +114,21 @@ class Session(BaseModel):
 
 
 def current_session(request: Request, s: Services = Depends(svc)) -> Session:
+    """The signed-in session. Design (Login and session): an idle timeout (30 minutes) and an absolute one
+    (8 hours) bound how long a password sits in the session store. Background refreshes (X-BMU-Poll) don't count
+    as activity, so an open tab left alone still signs out."""
     token = request.cookies.get(COOKIE)
     item = s.storage.get_session(_hash(token)) if token else None
     if not item:
         raise HTTPException(401, "Please sign in with your CollectionSpace account.")
+    t = now()
+    last = float(item.get("lastSeen") or item.get("expires", t) - s.settings.session_hours * 3600)
+    if t - last > s.settings.session_idle_minutes * 60:
+        s.storage.delete_session(item["PK"])
+        raise HTTPException(401, f"You were signed out after {s.settings.session_idle_minutes} minutes without activity. "
+                                 "Please sign in again; everything you changed was saved.")
+    if request.headers.get("x-bmu-poll") != "1" and t - last > 60:
+        s.storage.touch_session(item["PK"], t)
     return Session(key=item["PK"], user=item["user"], tenant=item["tenant"], perms=item["perms"],
                    password_token=item["password"])
 
@@ -196,8 +209,11 @@ def _delete_job(s: "Services", sess: "Session", job: dict, rows: list[dict]) -> 
             + ("the Group, " if c["groups"] else "") +
             f"and {c['relations']} Relations, which stay in CollectionSpace" + (f", {c['unfinished']} unfinished" if c["unfinished"] else "")
             if created["csids"] else "; it had created nothing in CollectionSpace")
+    big = len(created["csids"]) > 500  # a 1,000-row job's CSIDs go in S3, the entry points to them
     s.storage.audit(sess.tenant, "Job deleted", sess.user, job["id"],
-                    f"Deleted “{job['name'] or 'Untitled job'}” ({len(rows)} documents){what}.", created["csids"])
+                    f"Deleted “{job['name'] or 'Untitled job'}” ({len(rows)} documents){what}.", [] if big else created["csids"],
+                    jobName=job.get("name", ""), counts=c,
+                    **({"detailKey": s.storage.put_audit_detail(sess.tenant, job["id"], 0, created["csids"])} if big else {}))
 
 
 def _public(job: dict, sess: "Session") -> dict:
@@ -287,7 +303,7 @@ def _routes(app: FastAPI) -> None:
         key = _hash(token)
         expires = now() + s.settings.session_hours * 3600
         s.storage.put_session(key, {
-            "user": body.username, "tenant": s.tenant.key, "perms": perms.summary, "expires": int(expires),
+            "user": body.username, "tenant": s.tenant.key, "perms": perms.summary, "expires": int(expires), "lastSeen": now(),
             "password": s.crypto.encrypt("session", body.password, {"user": body.username, "session": key}),
         })
         response.set_cookie(COOKIE, token, httponly=True, secure=s.settings.cookie_secure, samesite="strict",
@@ -325,14 +341,21 @@ def _routes(app: FastAPI) -> None:
         kinds = s.tenant.authority_fields.get(field)
         if not kinds:
             raise HTTPException(400, "Not an authority field")
+        # As in the CollectionSpace UI, sources the user can't read are dropped silently.
+        readable = {"personauthorities": sess.perms.get("readPersons", True), "orgauthorities": sess.perms.get("readOrgs", True)}
+        kinds = [k for k in kinds if readable.get(s.tenant.authorities[k]["service"], True)]
+        if not kinds:
+            return {"terms": [], "total": 0, "message": "Your CollectionSpace account can't read the Person or Organization authorities, so it can't search them."}
         client = sess.client(s)
         try:
-            terms = []
+            terms, total, more = [], 0, False
             for kind in kinds:
                 a = s.tenant.authorities[kind]
-                for t in client.search_terms(a["service"], a["vocabulary"], q.strip()):
-                    terms.append({**t, "source": kind})
-            return {"terms": terms}
+                found, n = client.search_terms_page(a["service"], a["vocabulary"], q.strip(), AUTOCOMPLETE_PAGE)
+                terms += [{**t, "source": kind} for t in found]
+                total += n
+                more = more or n > len(found)
+            return {"terms": terms, "total": total, "more": more}
         except CSpaceError as e:
             raise _cspace_http(e)
         finally:
@@ -545,12 +568,11 @@ def _routes(app: FastAPI) -> None:
         new = []
         for f, name in zip(body.files, names):
             row = new_row(s.tenant, name, f.size, f.type)
-            row["s3Key"] = f"jobs/{job_id}/{uuid.uuid4().hex}"  # design: staged files keep random keys, no names
             if job.get("fixFrom"):
                 row["addedInFix"] = True  # an abandoned fix removes it again
             new.append(row)
         rows = s.storage.add_rows(job_id, new)
-        return {"rows": [{**r, "uploadForm": s.storage.presign_upload(r["s3Key"], f.size)}
+        return {"rows": [{**r, "uploadForm": s.storage.presign_upload(r["s3Key"], f.size, f.type)}
                          for r, f in zip(rows, body.files)]}
 
     @app.post("/api/jobs/{job_id}/rows/{n}/uploaded")
@@ -637,9 +659,9 @@ def _routes(app: FastAPI) -> None:
             s.storage.delete_object(row["thumbKey"])
             row["thumbKey"] = None
         row.update(file=name, fileOriginal=name, size=body.size, contentType=body.type, upload={"s": "pending"},
-                   s3Key=f"jobs/{job_id}/{uuid.uuid4().hex}", replacedFor=(row.get("result") or {}).get("run"))
+                   s3Key=s.storage.staging_key(job_id, n), replacedFor=(row.get("result") or {}).get("run"))
         s.storage.put_row(job_id, row)
-        return {"row": row, "uploadForm": s.storage.presign_upload(row["s3Key"], body.size)}
+        return {"row": row, "uploadForm": s.storage.presign_upload(row["s3Key"], body.size, body.type)}
 
     @app.post("/api/jobs/{job_id}/rows/{n}/retry-upload")
     def retry_upload(job_id: str, n: int, body: FileSpec, sess: Session = Depends(current_session), s: Services = Depends(svc)):
@@ -665,9 +687,9 @@ def _routes(app: FastAPI) -> None:
             s.storage.delete_object(key)  # whatever part of the failed upload arrived, and its old thumbnail
         row["thumbKey"] = None
         row.update(size=body.size, contentType=body.type or row.get("contentType", ""), upload={"s": "pending"},
-                   s3Key=f"jobs/{job_id}/{uuid.uuid4().hex}")
+                   s3Key=s.storage.staging_key(job_id, n))
         s.storage.put_row(job_id, row)
-        return {"row": row, "uploadForm": s.storage.presign_upload(row["s3Key"], body.size)}
+        return {"row": row, "uploadForm": s.storage.presign_upload(row["s3Key"], body.size, body.type)}
 
     @app.post("/api/jobs/{job_id}/rows/{n}/upload-failed")
     def upload_failed(job_id: str, n: int, sess: Session = Depends(current_session), s: Services = Depends(svc)):

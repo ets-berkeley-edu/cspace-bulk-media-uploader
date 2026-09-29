@@ -20,6 +20,8 @@ describe("AuthorityInput", () => {
     expect(w.text()).toContain("3+ characters");
     await input.setValue("freu");
     await vi.advanceTimersByTimeAsync(300);
+    expect(fetchMock).not.toHaveBeenCalled(); // the CollectionSpace UI's 500 ms find delay
+    await vi.advanceTimersByTimeAsync(250);
     await flushPromises();
     expect(fetchMock).toHaveBeenCalledWith("/api/authorities?field=creator&q=freu", expect.anything());
     await w.find(".ac-item").trigger("mousedown");
@@ -102,6 +104,12 @@ describe("DocumentRow checks", () => {
     const mediaOnly = mountRow({ row: row({ handling: "mediaonly" }), groupOn: true,
       tenant: { ...tenant, handling: [...tenant.handling, { id: "mediaonly", label: "Media only", object: "none", id_rule: "image" }] } });
     expect((mediaOnly.find('input[aria-label="15-1234_a.jpg in the job\'s group"]').element as HTMLInputElement).disabled).toBe(true);
+  });
+
+  it("in a running job's preview, Status shows each document's run state", () => {
+    expect(mountRow({ row: row({ result: { state: "In progress", steps: {} } }), runView: true, readonly: true }).text()).toContain("▶ In progress");
+    expect(mountRow({ row: row(), runView: true, readonly: true }).text()).toContain("Not started");
+    expect(mountRow({ row: row({ result: { state: "Partial", steps: { media: { s: "done", csid: "m" } } } }), runView: true, readonly: true }).text()).toContain("Partial");
   });
 
   it("offers Retry and Remove for a failed upload, or one this page isn't sending", async () => {

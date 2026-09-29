@@ -98,7 +98,7 @@ def test_upload_too_large_then_replace_file_and_rerun(api, login, add_uploaded, 
     assert r.status_code == 200, r.text
     new = r.json()["row"]
     assert new["upload"]["s"] == "pending" and new["s3Key"] != old_key and new["supersededKey"] == old_key
-    services.storage.s3.put_object(Bucket=services.settings.s3_bucket, Key=new["s3Key"], Body=b"small")
+    services.storage.s3.put_object(Bucket=services.settings.s3_bucket, Key=new["s3Key"], Body=b"\xff\xd8\xffsm")
     after = api.post(f"/api/jobs/{job}/rows/{n}/uploaded").json()["row"]
     assert after["upload"]["s"] == "done" and not [c for c in after["checks"] if c["level"] != "info"]
 
@@ -411,3 +411,39 @@ def test_ids_shared_within_the_job_are_not_reported_as_new_duplicates(api, login
     add_uploaded(job, ["12-5678_1.jpg", "12-5678_2.jpg"])  # the same identification number, warned in the editor
     rows = run_once(api, job, worker)["rows"]
     assert all(not r["result"].get("notices") for r in rows)
+
+
+def test_a_file_whose_content_does_not_match_its_name_is_rejected_before_upload(api, login, add_uploaded, worker, fake):
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_1.tif"], content=b"\xff\xd8\xff\xe0 really a JPEG")
+    row = run_once(api, job, worker)["rows"][0]
+    st = row["result"]["steps"]["upload"]
+    assert st["code"] == "file_type_rejected" and "content is JPEG" in st["detail"]
+    assert row["result"]["state"] == "Partial" and not fake.blobs  # nothing was sent to CollectionSpace
+
+
+def test_the_audit_log_keeps_per_row_detail_and_a_csid_index(api, login, add_uploaded, worker, services, fail_on, monkeypatch):
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_1.jpg", "12-5678_1.jpg"])
+    fail_on("upload", status=413, match="12-5678")
+    j = run_once(api, job, worker)
+    entry = next(a for a in services.storage.list_audit("pahma") if a["type"] == "Run")
+    rows = {r["file"]: r for r in entry["rows"]}
+    assert rows["12-5678_1.jpg"]["errors"] == ["upload_too_large"] and rows["12-5678_1.jpg"]["obj"] == "12-5678"
+    assert rows["15-1234_1.jpg"]["state"] == "Done" and set(rows["15-1234_1.jpg"]["csids"]) >= {"media", "upload"}
+    media = j["rows"][0]["result"]["steps"]["media"]["csid"]
+    found = services.storage.find_csid(media)
+    assert found["job"] == job and found["recordType"] == "Media" and found["run"] == 1 and found["row"] == 1
+    assert services.storage.find_csid(j["rows"][0]["result"]["steps"]["findObject"]["csid"]) is None  # found, not created
+    # a large run's detail goes to S3
+    import bmu.worker as w
+    monkeypatch.setattr(w, "INLINE_AUDIT_ROWS", 1)
+    api.post(f"/api/jobs/{job}/fix")
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    worker.tick()
+    entry = next(a for a in services.storage.list_audit("pahma") if a["type"] == "Run" and a.get("run") == 2)
+    assert "rows" not in entry and entry["detailKey"].startswith(f"audit/pahma/{job}/run-002")
+    import json
+    assert len(json.loads(services.storage.get_bytes(entry["detailKey"]))) == 2

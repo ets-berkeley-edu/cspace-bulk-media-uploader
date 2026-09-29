@@ -30,6 +30,11 @@ export interface Perms {
   readObjects: boolean;
   authorities: boolean;
   groups: boolean;
+  mediaUpdate?: boolean; // attaching the file (PUT media/{csid}/blob)
+  readMedia?: boolean;
+  readPersons?: boolean;
+  readOrgs?: boolean;
+  readDates?: boolean;
 }
 
 export interface Me {

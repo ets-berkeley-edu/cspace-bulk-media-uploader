@@ -40,7 +40,7 @@ let timer: ReturnType<typeof setInterval> | undefined;
 
 async function refresh(runChecks = false) {
   try {
-    drafts.value = (await api.jobs()).jobs.filter((j) => j.status === "Draft").sort((a, b) => (b.lastSavedAt ?? 0) - (a.lastSavedAt ?? 0));
+    drafts.value = (await api.jobs(!runChecks)).jobs.filter((j) => j.status === "Draft").sort((a, b) => (b.lastSavedAt ?? 0) - (a.lastSavedAt ?? 0));
     error.value = "";
   } catch (e) {
     error.value = (e as Error).message;

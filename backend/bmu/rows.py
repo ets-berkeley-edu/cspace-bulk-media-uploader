@@ -368,6 +368,12 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
                                                   f"Supported types: {SUPPORTED_HINT}."})
         if not perms.get("media"):
             out.append({"level": "block", "text": "Your CollectionSpace account can't create Media records."})
+        elif not perms.get("mediaUpdate", True):
+            out.append({"level": "block", "text": "Your account can't update Media records, which attaching the file needs "
+                                                  "(update on media). Ask a CollectionSpace administrator for the permission."})
+        if h.object != "none" and not perms.get("readObjects", True):
+            out.append({"level": "block", "text": "Your account can't read Object records, so the BMU can't find this document's "
+                                                  "object. Choose a media-only handling, or ask for read on objects."})
         if h.object != "none" and not perms.get("relations"):
             out.append({"level": "block", "text": "Your account can't create relations, so it can't link to objects. Choose a media-only handling."})
         if h.object == "create" and not perms.get("objects"):
@@ -416,13 +422,19 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
             if seen_ids.get(idn, 0) > 1:
                 out.append({"level": "warn", "text": f"Another document in this job also has ID {idn}."})
             try:
-                existing = lookup(r, "media", idn, client.find_media)
+                existing = lookup(r, "media", idn, client.find_media) if perms.get("readMedia", True) else None
             except CSpaceError:
                 existing = None
+            if not perms.get("readMedia", True):
+                out.append({"level": "warn", "text": "Your account can't read Media records, so the BMU can't check whether "
+                                                     f"a Media record with ID {idn} already exists."})
             if existing:
                 out.append({"level": "warn", "text": f"A Media record with ID {idn} already exists in CollectionSpace "
                                                      f"(CSID {', '.join(existing[:5])}{' …' if len(existing) > 5 else ''})."})
-        if r.get("date"):
+        if r.get("date") and not perms.get("readDates", True):
+            out.append({"level": "block", "text": "Your account can't use CollectionSpace's date parser (read on structureddates), "
+                                                  "so the date can't be checked. Clear the date, or ask for the permission."})
+        elif r.get("date"):
             # Design (Structured dates): parsed by CollectionSpace's own parser; a date it can't interpret
             # blocks, which is stricter than its own UI.
             try:

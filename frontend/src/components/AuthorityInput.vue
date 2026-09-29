@@ -17,6 +17,8 @@ const open = ref(false);
 const message = ref("");
 const active = ref(-1);
 let timer: ReturnType<typeof setTimeout> | undefined;
+// The CollectionSpace UI's autocomplete timing: search 500 ms after typing stops, from 3 characters.
+const FIND_DELAY_MS = 500;
 let seq = 0;
 
 watch(() => props.modelValue, (v) => { text.value = displayName(v); });
@@ -48,13 +50,15 @@ function onInput() {
       const r = await api.terms(props.field, q);
       if (mine !== seq) return;
       terms.value = r.terms;
-      message.value = r.terms.length
-        ? `${r.terms.length} matching ${r.terms.length === 1 ? "term" : "terms"} found`
+      const total = r.total ?? r.terms.length;
+      message.value = r.message ? r.message
+        : r.more ? `${total} matching terms; showing the first ${r.terms.length}. Continue typing to narrow the results.`
+        : r.terms.length ? `${total} matching ${total === 1 ? "term" : "terms"} found`
         : "No matching terms found. New terms are added in CollectionSpace.";
     } catch (e) {
       if (mine === seq) message.value = (e as Error).message;
     }
-  }, 250);
+  }, FIND_DELAY_MS);
 }
 
 function choose(t: Term) {

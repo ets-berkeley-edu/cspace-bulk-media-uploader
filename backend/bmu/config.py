@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     # Endpoint the browser uses for presigned uploads (differs from s3_endpoint inside Docker)
     s3_public_endpoint: str | None = None
     s3_bucket: str = "bmu-staging"
+    s3_kms_key_id: str | None = None  # SSE-KMS key for staged files (AWS); uploads must use it
+    upload_url_seconds: int = 900  # a presigned upload is good for about 15 minutes
+    abandoned_upload_hours: float = 24  # staged files no document refers to are deleted after about a day
     table_prefix: str = "bmu"
     create_tables: bool = False  # local development only
 
@@ -32,7 +35,8 @@ class Settings(BaseSettings):
     kms_session_key_id: str | None = None
     kms_job_key_id: str | None = None
 
-    session_hours: float = 8.0
+    session_hours: float = 8.0  # absolute session timeout
+    session_idle_minutes: int = 30  # signed out after this long without activity
     draft_days: int = 30  # a draft that has never run is deleted (a fix is reverted) this long after it was last saved
     completed_days: int = 30  # a Completed job is removed this long after it finished
     protected_draft_days: int = 7  # a draft with a protected file expires this long after it was last saved
