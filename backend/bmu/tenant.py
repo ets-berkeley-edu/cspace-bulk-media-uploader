@@ -56,6 +56,7 @@ class Tenant:
             "handling": [h.__dict__ for h in self.handling],
             "publish": self.publish,
             "filenameHint": self.filename_hint,
+            "filenamePattern": self.filename_pattern.pattern,
             "mediaTypes": [o.__dict__ for o in self.media_types],
             "languageDefault": self.language_default,
             "authorityFields": self.authority_fields,

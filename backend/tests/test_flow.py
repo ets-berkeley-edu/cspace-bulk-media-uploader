@@ -560,3 +560,46 @@ def test_a_new_lookup_on_a_row_that_already_has_lookups_is_saved(api, login, add
     assert services.storage.get_row(job, n)["lookups"].get("object")  # already has lookups
     api.patch(f"/api/jobs/{job}/rows/{n}", json={"date": "circa 1850"})
     assert services.storage.get_row(job, n)["lookups"]["date"]["ok"] is True
+
+
+# ---- filenames: cleaned on add, renamed with the filename rules (design: Filenames; Editable names) -------
+def test_filenames_are_cleaned_when_added_and_staged_under_random_keys(api, login):
+    login()
+    job = new_job(api)
+    rows = api.post(f"/api/jobs/{job}/files", json={"files": [{"name": "C:\\Users\\me\\15-1234_a.jpg", "size": 3, "type": "image/jpeg"},
+                                                               {"name": "x" * 150 + ".tif", "size": 3, "type": "image/tiff"}]}).json()["rows"]
+    assert rows[0]["file"] == "15-1234_a.jpg" and rows[0]["objParsed"] == "15-1234"
+    assert len(rows[1]["file"]) == 100 and rows[1]["file"].endswith(".tif")
+    assert "15-1234" not in rows[0]["s3Key"] and rows[0]["s3Key"].count("/") == 2
+    r = api.post(f"/api/jobs/{job}/files", json={"files": [{"name": "../../etc/passwd..jpg", "size": 3, "type": "image/jpeg"}]})
+    assert r.status_code == 422
+
+
+def test_renaming_reparses_the_numbers_and_rechecks(api, login, add_uploaded):
+    login()
+    job = new_job(api)
+    a, b = add_uploaded(job, ["IMG 4411.jpg", "1-2345_1.jpg"])
+    row = api.post(f"/api/jobs/{job}/check").json()["rows"][0]
+    assert any("No object number" in t for t in _checks(row, "block"))
+    for bad, why in [("1-2345 3.jpg", "Remove spaces"), ("1-2345_3.png", "Keep the extension .jpg"), ("1-2345_1.JPG", "already has this name"),
+                     ("x/1-2345_3.jpg", "Remove slashes"), ("bad name!.jpg", "Use only letters"), ("_x.jpg", "filename pattern")]:
+        r = api.patch(f"/api/jobs/{job}/rows/{a['n']}", json={"file": bad})
+        assert r.status_code == 422 and why in r.json()["detail"], (bad, r.text)
+    row = api.patch(f"/api/jobs/{job}/rows/{a['n']}", json={"file": "1-2345_3.jpg"}).json()["row"]
+    assert (row["file"], row["fileOriginal"], row["objParsed"], row["obj"], row["idnum"]) == ("1-2345_3.jpg", "IMG 4411.jpg", "1-2345", "1-2345", "1-2345")
+    assert not _checks(row, "block")
+    assert api.post(f"/api/jobs/{job}/rows/bulk", json={"rows": [a["n"]], "changes": {"file": "x.jpg"}}).status_code == 422
+
+
+def test_edited_numbers_keep_their_edits_and_derived_ones_follow(api, login, add_uploaded):
+    login()
+    job = new_job(api)
+    n = add_uploaded(job, ["15-1234_a.jpg"])[0]["n"]
+    row = api.patch(f"/api/jobs/{job}/rows/{n}", json={"obj": "1-2345"}).json()["row"]
+    assert row["idnum"] == "1-2345"  # the ID follows the edited object number
+    row = api.patch(f"/api/jobs/{job}/rows/{n}", json={"file": "12-5678_a.jpg"}).json()["row"]
+    assert row["objParsed"] == "12-5678" and row["obj"] == "1-2345"  # the edited object number is kept
+    row = api.patch(f"/api/jobs/{job}/rows/{n}", json={"obj": "12-5678"}).json()["row"]  # "Use parsed value"
+    row = api.patch(f"/api/jobs/{job}/rows/{n}", json={"idnum": "MY-ID"}).json()["row"]
+    row = api.patch(f"/api/jobs/{job}/rows/{n}", json={"file": "15-1240_1.jpg"}).json()["row"]
+    assert row["obj"] == "15-1240" and row["idnum"] == "MY-ID"  # the object number follows; the edited ID doesn't

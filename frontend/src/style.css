@@ -144,3 +144,11 @@ code { font-size: 11px; }
 
 .field-note { display: block; font-size: 11px; color: var(--text-muted); margin-top: 2px; min-height: 1em; }
 .field-note.bad { color: var(--text-danger); }
+
+/* editable numbers and names: "(parsed)" / "edited — differs from …" */
+.num-state { font-style: normal; font-weight: 600; }
+.field.edited .num-state, .field.edited > label > span { color: var(--text-warning); }
+.field .msg { margin-top: 3px; }
+div.field { font-size: 12px; color: var(--text-secondary); }
+div.field > label { display: block; }
+div.field > label > span { display: block; margin-bottom: 2px; }
