@@ -4,47 +4,74 @@ A prototype of the new Bulk Media Uploader (BMU) for UC Berkeley's CollectionSpa
 legacy `uploadmedia` Django webapp in `cspace-webapps-common`. It follows the design document
 "New BMU (uploadmedia): High-Level Architecture" and its UI mockup.
 
-This first iteration covers the **core run path for PAHMA**:
+It implements the design for **PAHMA**. Not built yet: the other tenants, the TIFF quality checks, the audit-log
+screen (the audit entries are written), the Restricted Media option, tuning for 1,000-document jobs and the AWS
+deployment.
 
-- Sign in with your CollectionSpace account (HTTP Basic, checked against `accounts/0/accountperms`).
-- Create a job, drop files. The browser uploads each file straight to S3 with a presigned POST, reads its
-  EXIF date and shows a local preview.
-- Edit each document's handling (link to an existing object, create a new object and link, or media only),
-  Restricted, identification number, date, media type, creator/contributor/rights holder (autocomplete of
-  existing authority terms; values are refNames), description and copyright.
-- Checks while editing, as in the design: each document is checked against CollectionSpace when its file is
-  added and whenever it changes (object found and not ambiguous, permissions, duplicate IDs, file type, date),
-  with the results on the row as "Must fix" or "Warning". Schedule job stays disabled until nothing needs
-  fixing, then fetches permissions again and re-checks the whole job.
-- A worker runs the job one row at a time, following the design's steps: create the Media record, find (or
-  create the skeletal) Object, attach the file with a multipart `PUT media/{csid}/blob` (CollectionSpace
-  creates the Blob record and sets `blobCsid`), and relate Media and Object both ways. Each step records its
-  CSID; a step whose dependencies failed is skipped. A rerun runs only unfinished steps, retries an upload
-  against the existing Media record, and checks for existing Relations first.
-- Finished jobs: each job's outcome (Completed, Needs attention, Failed), documents by result and its run
-  history. View results shows every document's steps, CSIDs and the run that did each, and every failure in
-  plain language (title, explanation, what to do, technical detail on request) from the failure catalog in
-  `backend/bmu/failures.yaml`. Fix and reschedule (or Reschedule, when every failure only needs another run)
-  moves the job to Drafts: done documents are read-only, a document whose Media record exists takes only what
-  the rerun needs (a corrected object number, stopping the link to an object, a replacement file), and a fix
-  not scheduled within 30 days is reverted. Jobs that need attention or failed can be deleted from the BMU
-  (never from CollectionSpace); Completed jobs are removed 30 days after they finish.
-- Credentials: the password is encrypted at rest (a session key while signed in, a separate job key while a
-  job waits or runs, for at most 72 hours) and deleted when the run ends, whatever the outcome.
-- One job per tenant at a time (a lock with a heartbeat), and an audit entry for each run.
+## What it does
 
-The goal is the full design document and UI mockup; this is the first part of it.
+- **Sign in** with your CollectionSpace account (HTTP Basic). The BMU reads your permissions
+  (`accounts/0/accountperms`) and roles (`accounts/0/accountroles`). Creating or editing jobs needs create and
+  update on Media records; without them you can only view jobs.
+- **Create a job and add files.** The browser uploads each file straight to S3 with a presigned POST (with Retry
+  and Remove if an upload fails), reads its EXIF date and orientation, and shows a thumbnail. Accepted: JPEG, TIFF,
+  PNG, PDF, WAV, MP3, AAC, MP4 and X3D; other files are skipped with a message. Filenames follow PAHMA's rule: the
+  object number, optionally followed by `_` and anything else (`15-1234_a.jpg`, `1-2345_01_b.tif`); a name can be
+  corrected in the editor.
+- **Edit each document:** its handling (Link to existing object, Link to object (create if missing), Create new
+  object + link, Media only (no object)), Restricted, identification number, date (parsed by CollectionSpace's own
+  date parser), media types and languages (repeating), creator, contributor and rights holder (autocomplete of
+  existing authority terms; values are refNames), description and copyright. The side panel applies changes to
+  the selected documents or to all. Handling options can carry presets (PAHMA has none configured). Documents can
+  be excluded from a job, or deleted if they created nothing in CollectionSpace. Large jobs are paged, sorted and
+  filtered.
+- **Groups:** "Create a group for this job" creates one CollectionSpace Group and adds every linked Object to it.
+  Its title is typed, or filled with **Use the job name** or **Use a timestamp** (`bmu-YYYY-MM-DD-HH-MM-SS`).
+- **Checks while editing:** each document is checked against CollectionSpace when its file is added and whenever
+  it changes, with the results on the row as "Must fix", "Warning" or information: the object found and not
+  ambiguous (or not existing, for Create new object + link), permissions (including read permissions each check
+  needs), duplicate identification numbers, file type, the date, and that each authority term, language and media
+  type still exists (a renamed term is updated to its current name). Protected files (Objects the tenant's rules
+  mark sensitive) get no stored thumbnail and a "don't publish" default; the Public portal column shows what the
+  public will see.
+- **Drafts:** every change is saved as it's made. Anyone in the tenant can open a draft, one person at a time,
+  with take-over. Drafts expire 30 days after they were last saved (7 if a document is a protected file).
+- **Submit job** (only when nothing needs fixing) checks the whole job again with fresh permissions and adds it
+  to the end of the job queue, with the submitter's password saved encrypted for at most 72 hours.
+- **Job scheduling:** queued jobs start at the tenant's run times (by default every day at 7:00 PM Pacific), one
+  job at a time per tenant, in queue order. Users with the CollectionSpace role **BMU_Scheduler**
+  (`ROLE_<tenant id>_BMU_SCHEDULER`) can change the run days and times, pause and resume the queue, reorder it,
+  and give a job Run now, its own run time or a hold. Everyone sees when each job will run. Cancel run is for
+  schedulers and the person who submitted the job. A job whose saved sign-in expires while it waits moves back to
+  Drafts.
+- **The run:** a worker runs each document's steps in order: check its values in CollectionSpace again, create
+  the Media record, find or create the Object, attach the file (`PUT media/{csid}/blob`, which creates the Blob),
+  relate Media and Object both ways, and add the Object to the job's Group. Before the first document, and again
+  just before each one, the worker checks that its terms, languages and media types still exist: a renamed term
+  is used under its current name (with a notice); a document whose value no longer exists fails before anything
+  is created for it. Each step records its CSID; a step whose dependencies failed is skipped. A rerun runs only
+  unfinished steps. Five failed requests in a row, or a refused sign-in, stop the job.
+- **Finished jobs:** each job's outcome (Completed, Needs attention, Failed), documents by result and run history.
+  View results shows every document's steps and CSIDs, and every failure in plain language (title, explanation,
+  what to do, technical detail) from the failure catalog in `backend/bmu/failures.yaml`. **Fix and reschedule**
+  (or **Reschedule**, when every failure only needs another run) moves the job to Drafts; a fix that isn't
+  submitted within 30 days is reverted. Jobs that need attention or failed can be deleted from the BMU (never from
+  CollectionSpace: the BMU only creates records). Completed jobs are removed 30 days after they finish.
+- **Credentials:** the password is encrypted at rest (a session key while you're signed in, a separate job key
+  while a job waits or runs) and deleted when the run ends, whatever the outcome.
 
 ## Layout
 
 | Path | What |
 | --- | --- |
-| `backend/bmu/` | FastAPI app (`app.py`), worker (`worker.py`), CollectionSpace client and payloads (`cspace/`), storage (DynamoDB, S3), credential encryption, row checks |
-| `backend/bmu/tenants/pahma.yaml` | PAHMA configuration carried over from the legacy `uploadmedia.cfg` |
+| `backend/bmu/` | FastAPI app (`app.py`), worker (`worker.py`), row checks (`rows.py`), job scheduling (`schedule.py`), CollectionSpace client and payloads (`cspace/`), storage (DynamoDB, S3), credential encryption |
+| `backend/bmu/tenants/pahma.yaml` | PAHMA configuration: handling options, filename rule, field lists, sensitivity rules, scheduler roles |
+| `backend/bmu/failures.yaml` | The failure catalog: every failure code with its title, explanation and what to do |
 | `backend/fakecspace/` | A simulated CollectionSpace API for development and tests (not CollectionSpace) |
 | `backend/tests/` | pytest: unit tests and the full run path with moto (AWS) and the simulated CollectionSpace |
 | `frontend/` | Vue 3 + TypeScript app (Vite, Vitest) |
 | `scripts/check_cspace.py` | Checks the BMU's calls against a real CollectionSpace server |
+| `scripts/find_csid.py` | Finds which BMU job created a CollectionSpace record |
 | `docker-compose.yml` | Local stack: web, worker, Vue dev server, DynamoDB Local, moto (S3), simulated CollectionSpace |
 
 ## Run it locally
@@ -53,14 +80,24 @@ Requires Docker.
 
 ```sh
 cp .env.example .env
-# put two random keys in .env:
+# put two random keys in .env (BMU_SESSION_KEY_B64 and BMU_JOB_KEY_B64):
 python3 -c "import os,base64;print(base64.b64encode(os.urandom(32)).decode())"
 docker compose up --build
 ```
 
-Open http://localhost:5173. With the simulated CollectionSpace, sign in as `admin`/`admin` (all permissions),
-`limited`/`limited` (can't create objects or groups) or `reader`/`reader` (read only). Sample objects (list them with
-`curl localhost:8180/_fake/objects`):
+Open http://localhost:5173. With the simulated CollectionSpace, sign in as:
+
+| User | Permissions |
+| --- | --- |
+| `admin` / `admin` | Everything, and the BMU_Scheduler role |
+| `limited` / `limited` | Can't create objects or groups; not a scheduler |
+| `reader` / `reader` | Read only: can view jobs but not create or edit them |
+
+Submitted jobs wait for the run time (7:00 PM Pacific). To have them start at once while you try things, set
+`BMU_ALWAYS_RUN_TIME=true` in `.env` (or start with `BMU_ALWAYS_RUN_TIME=true docker compose up`); pause and hold
+still apply. Without it, sign in as `admin` and use **Run now** in the Job queue.
+
+Sample objects (list them with `curl localhost:8180/_fake/objects`):
 
 | Object number | For testing |
 | --- | --- |
@@ -70,15 +107,36 @@ Open http://localhost:5173. With the simulated CollectionSpace, sign in as `admi
 | `3-1004` | Deleted in CollectionSpace, so searches don't find it |
 | `12-2001` | Sensitive: culturally sensitive, Human Remains department |
 | `12-2002` | Sensitive: NAGPRA status and a display restriction at the "restriction" level |
-| `12-2003` | Not sensitive, but a display restriction at the "preference" level (a warning in the design) |
+| `12-2003` | Not sensitive, but a display restriction at the "preference" level (a warning) |
 
 Documents linked to `12-2001` or `12-2002` become protected files automatically; `12-2003` gives a warning.
 The rules are in `backend/bmu/tenants/pahma.yaml` (`sensitivity`), and the Object field names they read must be
-confirmed on the QA tenant with `scripts/check_cspace.py --object <number> --show-object`. The simulator's state is at http://localhost:8180/_fake/state (reset it with
-`curl -X POST localhost:8180/_fake/reset`).
+confirmed on the QA tenant with `scripts/check_cspace.py --object <number> --show-object`.
+
+The sample Persons are Madeleine W. Fang, Leslie Freund, Natasha Johnson, Michael T. Black, Linda Waterfield and
+Zachary Williams; the sample Organizations are the Phoebe A. Hearst Museum of Anthropology and the University of
+California at Berkeley Regents. The languages are English, Spanish, French, German, Chinese, Japanese, Hawaiian
+and Navajo (codes `eng`, `spa`, `fre`, `ger`, `chi`, `jpn`, `haw`, `nav`).
+
+The simulator's state is at http://localhost:8180/_fake/state; reset it with `curl -X POST localhost:8180/_fake/reset`.
+
+### Changing things in the simulated CollectionSpace
 
 To watch the job queue, or to cancel a run partway, slow the simulated CollectionSpace down so each create and
 upload takes a while: `curl -X POST 'localhost:8180/_fake/slow?seconds=2'` (`seconds=0` turns it off).
+
+To see how the BMU handles terms and languages that change after a document was filled in:
+
+```sh
+curl -X POST 'localhost:8180/_fake/delete-term?name=Natasha%20Johnson'              # soft-deleted (how=gone: not found)
+curl -X POST 'localhost:8180/_fake/rename-term?name=Leslie%20Freund&to=Leslie%20F.%20Freund'
+curl -X POST 'localhost:8180/_fake/delete-language?code=spa'                         # leaves the language list
+curl -X POST 'localhost:8180/_fake/rename-language?code=spa&to=Espa%C3%B1ol'
+```
+
+A draft shows a deleted term as "Must fix" and takes a renamed one's current name. A queued job's preview says so
+too; when the job runs, a document with a deleted value fails before anything is created (`value_missing`), and
+one with a renamed term is sent with the current name (notice `term_renamed`).
 
 To see how the BMU reports failures, make the simulated CollectionSpace fail on purpose. Rules apply only to
 job runs (not to the editor's checks) and are used up after one matching request unless you pass `count=0`:
@@ -91,14 +149,17 @@ curl -X POST 'localhost:8180/_fake/fail?step=media&status=400&match=12-5678'    
 curl -X POST 'localhost:8180/_fake/fail?step=relation&status=403&count=0'             # no permission for relations
 curl -X POST 'localhost:8180/_fake/fail?step=media&status=401'                        # sign-in failed (job stops)
 curl -X POST 'localhost:8180/_fake/fail?step=media&status=503&count=0'                # outage: 5 in a row stop the job
-curl -X POST 'localhost:8180/_fake/fail?step=mediaSearch&effect=many'                 # ID in use since scheduling (notice)
+curl -X POST 'localhost:8180/_fake/fail?step=mediaSearch&effect=many'                 # ID in use since submission (notice)
 curl -X POST 'localhost:8180/_fake/fail?step=group&status=400'                        # the job's group can't be created
+curl -X POST 'localhost:8180/_fake/fail?step=termRead&status=503&match=7475'          # a term can't be read at run time
 curl localhost:8180/_fake/fail            # list the rules
 curl -X DELETE localhost:8180/_fake/fail  # clear them
 ```
 
-`match` is compared with the document's identification number, filename and object number. Steps: `media`,
-`upload`, `objectSearch`, `objectCreate`, `relation`, `mediaSearch`, `group`.
+`match` is compared with the document's identification number, filename, object number and group title (for
+`termRead`, the term's short identifier or display name). Steps: `media`, `upload`, `objectSearch`,
+`objectCreate`, `relation`, `mediaSearch`, `group`, `termRead`. Add `client=any` to make a rule apply to the
+editor's checks as well.
 
 To use the Lyrasis QA tenant instead, set `BMU_CSPACE_URL=https://pahma.qa.collectionspace.org` in `.env`
 and sign in with a QA account. Records created there stay (the BMU never deletes).
@@ -113,13 +174,18 @@ cd frontend && npm ci && npm test && npm run typecheck && npm run build
 ## Checking against the real CollectionSpace
 
 The CollectionSpace calls in `backend/bmu/cspace/client.py` were checked against the PAHMA QA tenant. To
-recheck them (for example against another tenant), run the check script from a machine that can reach the server:
+recheck them (for example against another tenant), run the check script from a machine that can reach the
+server. It is read-only unless you pass `--create`.
 
 ```sh
 pip install -e backend
 export CSPACE_URL=https://pahma.qa.collectionspace.org CSPACE_USER=... CSPACE_PASSWORD=...
 python scripts/check_cspace.py --object <an existing object number> --term <3+ letters of a person's name>
-python scripts/check_cspace.py --create    # also creates one test Media/Object pair (BMU-TEST-<time>)
+python scripts/check_cspace.py --object <number> --show-object   # the Object's fields and the sensitivity verdict
+python scripts/check_cspace.py --vocabularies                    # the Person and Organization vocabularies
+python scripts/check_cspace.py --roles                           # your roles, and whether you're a BMU scheduler
+python scripts/check_cspace.py --terms person:<short id> ...     # read terms as the BMU does (deleted, merged, renamed)
+python scripts/check_cspace.py --create                          # also creates one test Media/Object pair (BMU-TEST-<time>)
 ```
 
 ## Security notes
@@ -129,19 +195,25 @@ python scripts/check_cspace.py --create    # also creates one test Media/Object 
 - In AWS, set `BMU_CRYPTO_MODE=kms` with separate KMS keys for sessions and jobs
   (`BMU_KMS_SESSION_KEY_ID`, `BMU_KMS_JOB_KEY_ID`); the local mode uses keys from the environment.
 - File uploads go directly from the browser to S3 with a write-only presigned POST for one key
-  (`staging/<tenant>/<job>/<row>/<random>`), the file's size and content type, for 15 minutes; set
-  `BMU_S3_KMS_KEY_ID` in AWS to require SSE-KMS. The worker checks each file's real type from its first bytes
-  before streaming it to CollectionSpace. No presigned download URLs are given to anyone; thumbnails are served
-  by the web app after checking the session.
+  (`staging/<tenant>/<job>/<row>/<random>`), the file's size (at most 2 GB for now) and content type, for
+  15 minutes; set `BMU_S3_KMS_KEY_ID` in AWS to require SSE-KMS. The worker checks each file's real type from its
+  first bytes before streaming it to CollectionSpace. A staged file is deleted as soon as its upload to
+  CollectionSpace succeeds; a protected file's staged upload is also removed 7 days after its job stopped. No
+  presigned download URLs are given to anyone; thumbnails are served by the web app after checking the session.
 - Sessions end after 30 minutes without activity (`BMU_SESSION_IDLE_MINUTES`) or 8 hours in all
   (`BMU_SESSION_HOURS`); the lists' background refreshes don't count as activity.
+- Schedule and queue changes check the BMU_Scheduler role on the server each time, so removing the role takes
+  effect at once.
 
 ## Audit log
 
-Every run, row deletion, job deletion, take-over and expired or reverted draft is written to the audit table.
-A run's entry lists each document's filename, object number, CSIDs and error codes (in S3 under `audit/` for
-runs over 100 documents). Each record the BMU creates is also indexed by its CSID, so you can find which job
-made it, even after the job is deleted:
+The audit table records, with who and when: every run (each document's filename, object number, CSIDs and error
+codes, in S3 under `audit/` for runs over 100 documents), submitted jobs, moves to Drafts, take-overs, jobs
+becoming Completed, row and job deletions, expired and reverted drafts, expired Completed jobs, expired sign-ins,
+removed protected uploads, and every schedule and queue change (schedule changed, queue paused or resumed, Run
+now, run time set or cleared, job held or released, queue reordered, run cancelled). A finished run and its audit
+entry are written together, and the run keeps the entry's key. Each record the BMU creates is also indexed by its
+CSID, so you can find which job made it, even after the job is deleted:
 
 ```sh
 cd backend && python ../scripts/find_csid.py <csid>
