@@ -4,9 +4,10 @@
  * interface; UI mockup). The apply buttons stay greyed out, with a one-line reason, until every target
  * document can take every chosen change.
  */
-import { computed, reactive, ref } from "vue";
+import { computed, nextTick, reactive, ref, watch } from "vue";
 import { applyAllTargets, bulkCheck, includeTargets, type BulkChanges } from "../lib/bulk";
 import { handlingBlocked } from "../lib/status";
+import { createdSomething } from "../lib/results";
 import type { Option, Perms, Row, TenantInfo } from "../types";
 import AuthorityInput from "./AuthorityInput.vue";
 
@@ -14,7 +15,7 @@ const props = defineProps<{
   rows: Row[]; selected: Set<number>; tenant: TenantInfo; perms: Perms; readonly: boolean; busy: boolean; languages?: Option[];
   groupOn?: boolean;
 }>();
-const emit = defineEmits<{ apply: [targets: number[], changes: BulkChanges]; include: [targets: number[], include: boolean] }>();
+const emit = defineEmits<{ apply: [targets: number[], changes: BulkChanges]; include: [targets: number[], include: boolean]; delete: [targets: number[]] }>();
 
 const KEY = "bmuPanelCollapsed";
 function remembered(): boolean {
@@ -55,6 +56,31 @@ const verdict = computed(() => anySelected.value
   : bulkCheck(applyAllTargets(props.rows), changes.value, true, linking.value));
 const toExclude = computed(() => includeTargets(selectedRows.value, false));
 const toInclude = computed(() => includeTargets(selectedRows.value, true));
+// Delete selected (design: Deleting a row): documents that created something in CollectionSpace stay.
+const toDelete = computed(() => selectedRows.value.filter((r) => !createdSomething(r)));
+const keptCount = computed(() => selectedRows.value.length - toDelete.value.length);
+const deletesAll = computed(() => toDelete.value.length > 0 && toDelete.value.length === props.rows.length);
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+const deleteQuestion = computed(() => {
+  const k = toDelete.value.length;
+  return `Delete ${plural(k, "selected document")} from this job permanently? `
+    + `${k === 1 ? "Its uploaded file is removed" : "Their uploaded files are removed"}; nothing in CollectionSpace is touched.`
+    + (keptCount.value ? ` ${plural(keptCount.value, "selected document")} already created records in CollectionSpace and will stay (use Exclude for those).` : "")
+    + (deletesAll.value ? " That's every document in the job, so the job is deleted too." : "");
+});
+const confirmDelete = ref(false);
+const deleteCancel = ref<HTMLButtonElement | null>(null);
+watch(() => toDelete.value.length, (k) => { if (!k) confirmDelete.value = false; });
+async function askDelete() {
+  confirmDelete.value = true;
+  await nextTick();
+  deleteCancel.value?.focus();
+}
+/** Sends every selected document: the server deletes those it may and reports the ones it kept. */
+function doDelete() {
+  confirmDelete.value = false;
+  emit("delete", selectedRows.value.map((r) => r.n));
+}
 const hasField = (f: string) => (props.tenant.authorityFields[f] ?? []).length > 0;
 
 function applySelected() {
@@ -134,6 +160,14 @@ function applyAll() {
           <button :disabled="readonly || busy || !toExclude.length" title="Have the BMU ignore the selected documents"
                   @click="emit('include', toExclude.map((r) => r.n), false)">Exclude selected</button>
           <button :disabled="readonly || busy || !toInclude.length" @click="emit('include', toInclude.map((r) => r.n), true)">Include selected</button>
+          <button v-if="!confirmDelete" :disabled="readonly || busy || !toDelete.length"
+                  :title="anySelected && !toDelete.length ? 'The selected documents already created records in CollectionSpace, so they can\'t be deleted; use Exclude instead.' : 'Delete the selected documents from this job permanently'"
+                  @click="askDelete">Delete selected</button>
+          <div v-else class="bulk-confirm" role="group" aria-label="Confirm deleting the selected documents">
+            <span>{{ deleteQuestion }}</span>
+            <button class="danger" :disabled="readonly || busy" @click="doDelete">Delete {{ plural(toDelete.length, "document") }}</button>
+            <button ref="deleteCancel" @click="confirmDelete = false">Cancel</button>
+          </div>
         </div>
       </div>
       <button v-if="collapsed" class="bulk-rail" tabindex="-1" aria-hidden="true" title="Show panel" @click="toggle(true)">

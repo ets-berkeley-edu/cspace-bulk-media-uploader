@@ -62,3 +62,12 @@ export function cycleSort(st: TableState, key: string): void {
   else { st.sort = null; st.dir = 1; }
   st.page = 1;
 }
+
+/**
+ * The editor's document table: preview, select, expand, document, handling, publish, public portal, status and
+ * exclude, plus the Group column when the job has a group and the Delete column while the job can be edited.
+ * Detail rows and empty-table rows span all of them.
+ */
+export function editorColumns(groupOn: boolean, deletable: boolean): number {
+  return 9 + (groupOn ? 1 : 0) + (deletable ? 1 : 0);
+}

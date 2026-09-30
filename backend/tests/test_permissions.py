@@ -66,6 +66,7 @@ def test_an_account_without_create_and_update_on_media_can_view_jobs_but_not_cre
         reader.patch(f"/api/jobs/{draft}/rows/{n}", json={"description": "x"}),
         reader.post(f"/api/jobs/{draft}/rows/bulk", json={"rows": [n], "changes": {"description": "x"}}),
         reader.delete(f"/api/jobs/{draft}/rows/{n}"),
+        reader.post(f"/api/jobs/{draft}/rows/delete", json={"rows": [n]}),
         reader.post(f"/api/jobs/{draft}/schedule"),
         reader.post(f"/api/jobs/{queued}/edit"),
         reader.post(f"/api/jobs/{failed}/fix"),

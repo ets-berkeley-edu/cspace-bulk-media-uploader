@@ -12,7 +12,7 @@ import RunNow from "./RunNow.vue";
 import DocumentRow from "./DocumentRow.vue";
 import PagerBar from "./PagerBar.vue";
 import SortTh from "./SortTh.vue";
-import { tableState, tableView } from "../lib/table";
+import { editorColumns, tableState, tableView } from "../lib/table";
 import { portalOf } from "../lib/portal";
 import { groupTimestampTitle } from "../lib/schedule";
 
@@ -87,6 +87,9 @@ const editable = computed(() => !job.value || (job.value.status === "Draft" && !
 const lockedBy = computed(() => job.value?.status === "Draft" && job.value.editingBy && !job.value.editingByYou
   ? { who: job.value.editingBy, since: job.value.editingSince } : null);
 const confirmTakeOver = ref(false);
+// Documents can be deleted (the Delete column) only while this page can change the job.
+const rowsReadonly = computed(() => readonly.value || !editable.value);
+const columns = computed(() => editorColumns(!!job.value?.groupOn, !rowsReadonly.value));
 const savedNote = ref("");
 const counts = computed(() => jobCounts(rows.value));
 // The job's group (design: Groups): on/off and its title; fixed once the Group exists in CollectionSpace.
@@ -386,21 +389,59 @@ async function remove(row: Row) {
   if (!job.value) return;
   const r = await api.deleteRow(job.value.id, row.n).catch(failed);
   if (!r) return;
-  if (r.jobStatus && r.jobStatus !== "Draft") {
-    if (r.jobStatus === "Deleted") {
-      message.value = { cls: "msg-info", text: "That was the job's last document, so the job was deleted." };
-      job.value = null;
-      rows.value = [];
-      return;
-    }
-    await refreshJob();
-    completedNote();
+  await removed([row.n], r);
+}
+
+/** Delete selected (the bulk-change panel): the server deletes those it may and skips the others. */
+async function removeMany(targets: number[]) {
+  if (!job.value || !targets.length) return;
+  busy.value = true;
+  message.value = null;
+  try {
+    const r = await api.deleteRows(job.value.id, targets);
+    const k = r.deleted.length;
+    const created = r.skipped.filter((x) => x.code === "created").length;
+    const other = r.skipped.length - created;
+    const text = `Deleted ${k} document${k === 1 ? "" : "s"}.`
+      + (created ? ` ${created} couldn't be deleted because ${created === 1 ? "it" : "they"} already created records in CollectionSpace.` : "")
+      + (other ? ` ${other} ${other === 1 ? "wasn't" : "weren't"} deleted because ${other === 1 ? "it" : "they"} changed meanwhile; reload and try again.` : "");
+    const done = await removed(r.deleted, r); // the job was deleted, or completed: removed() said so
+    const shown = message.value as { cls: string; text: string } | null;
+    if (!done) message.value = { cls: created || other ? "msg-warn" : "msg-info", text };
+    else if (r.jobStatus !== "Deleted" && shown) message.value = { ...shown, text: `${text} ${shown.text}` };
+  } catch (e) {
+    await failed(e);
+  } finally {
+    busy.value = false;
   }
-  rows.value = rows.value.filter((x) => x.n !== row.n);
-  selected.delete(row.n);
+}
+
+/** Documents were deleted: drop them from the table and the selection. True if the job was deleted or completed
+ * (the page shows that instead). */
+async function removed(ns: number[], r: { others: Row[]; jobStatus?: string }): Promise<boolean> {
+  if (r.jobStatus === "Deleted") {
+    message.value = { cls: "msg-info", text: "That was the job's last document, so the job was deleted." };
+    job.value = null;
+    rows.value = [];
+    selected.clear();
+    creating = null; // files added next start a new job, not the deleted one
+    return true;
+  }
+  const gone = new Set(ns);
+  rows.value = rows.value.filter((x) => !gone.has(x.n));
+  ns.forEach((n) => {
+    selected.delete(n);
+    expanded.delete(n);
+    const u = previews.get(n);
+    if (u) URL.revokeObjectURL(u);
+    previews.delete(n);
+  });
   r.others.forEach((o) => replace(o));
-  const u = previews.get(row.n);
-  if (u) URL.revokeObjectURL(u);
+  if (r.jobStatus && r.jobStatus !== "Draft") {
+    await refreshJob();
+    return completedNote();
+  }
+  return false;
 }
 
 function select(n: number, on: boolean) {
@@ -558,7 +599,7 @@ function toggle(n: number) {
     <div class="editor-split">
     <BulkPanel ref="bulkPanel" :rows="rows" :selected="selected" :tenant="me.tenant" :perms="me.perms" :readonly="!editable" :busy="busy" :languages="languages"
                :group-on="!!job?.groupOn"
-               @apply="(t, c) => bulk(t, c, true)" @include="(t, on) => bulk(t, { include: on }, false)" />
+               @apply="(t, c) => bulk(t, c, true)" @include="(t, on) => bulk(t, { include: on }, false)" @delete="removeMany" />
     <div class="grid-main">
     <PagerBar v-if="rows.length" :state="table" :total="view.total" :of="view.of" :pages="view.pages" :start="view.start" noun="documents" :filters="docFilters" />
     <div v-if="selected.size" class="sel-banner"><strong>{{ selected.size.toLocaleString() }}</strong> selected<template
@@ -581,12 +622,13 @@ function toggle(n: number) {
           <SortTh v-if="job?.groupOn" :state="table" sort-key="group" label="Group" style="width:70px" />
           <SortTh :state="table" sort-key="status" label="Status" style="width:150px" />
           <SortTh :state="table" sort-key="include" label="Exclude" style="width:80px" title="To exclude a document from a job, check the box." />
+          <th v-if="!rowsReadonly" class="del-col"><span class="sr-only">Delete</span></th>
         </tr></thead>
         <tbody>
-          <tr v-if="!rows.length"><td :colspan="job?.groupOn ? 10 : 9" class="muted" style="text-align:center;padding:18px">No documents yet. Drop files in the box above, or browse, to add them to this job.</td></tr>
-          <tr v-else-if="!view.shown.length"><td :colspan="job?.groupOn ? 10 : 9" class="muted" style="text-align:center;padding:18px">No documents match this filter.</td></tr>
+          <tr v-if="!rows.length"><td :colspan="columns" class="muted" style="text-align:center;padding:18px">No documents yet. Drop files in the box above, or browse, to add them to this job.</td></tr>
+          <tr v-else-if="!view.shown.length"><td :colspan="columns" class="muted" style="text-align:center;padding:18px">No documents match this filter.</td></tr>
           <DocumentRow v-for="r in view.shown" :key="r.n" :row="r" :tenant="me.tenant" :perms="me.perms" :checking="checking.has(r.n)" :preview="previews.get(r.n)"
-                       :expanded="expanded.has(r.n)" :readonly="readonly || !editable" :selected="selected.has(r.n)" :languages="languages"
+                       :expanded="expanded.has(r.n)" :readonly="rowsReadonly" :selected="selected.has(r.n)" :languages="languages"
                        :other-names="rows.filter((x) => x.n !== r.n).map((x) => x.file)" :last="rows.length === 1"
                        :uploading-here="uploadingHere.has(r.n)" :group-on="!!job?.groupOn" :job-id="job?.id" :run-view="job?.status === 'Running'"
                        @toggle="toggle(r.n)" @edit="edit(r, $event)" @remove="remove(r)" @select="select(r.n, $event)" @replace="replaceFile(r, $event)"

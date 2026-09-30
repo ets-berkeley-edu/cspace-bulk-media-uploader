@@ -88,6 +88,10 @@ export const api = {
   bulk: (id: string, rows: number[], changes: Partial<Row>) =>
     request<{ rows: Row[] }>("POST", `/api/jobs/${id}/rows/bulk`, { rows, changes }),
   deleteRow: (id: string, n: number) => request<{ ok: boolean; others: Row[]; jobStatus?: string }>("DELETE", `/api/jobs/${id}/rows/${n}`),
+  /** Delete selected: deletes every listed document that may be deleted; the others are skipped, each with why. */
+  deleteRows: (id: string, rows: number[]) =>
+    request<{ deleted: number[]; skipped: { n: number; file: string; code: "created" | "changed" | "missing"; reason: string }[];
+      others: Row[]; jobStatus?: string }>("POST", `/api/jobs/${id}/rows/delete`, { rows }),
   /** Check rows against CollectionSpace: the given rows, or (no rows) any whose lookups are stale. */
   check: (id: string, rows?: number[]) =>
     request<{ rows: Row[]; counts: { block: number; warn: number } }>("POST", `/api/jobs/${id}/check`, rows ? { rows } : {}),

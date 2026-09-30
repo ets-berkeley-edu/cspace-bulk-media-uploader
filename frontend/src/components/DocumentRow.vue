@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import type { Handling, Option, Perms, Row, TenantInfo } from "../types";
 import { formatBytes } from "../lib/files";
 import { filenameProblems, idLabel, objectLabel } from "../lib/filenames";
@@ -7,6 +7,7 @@ import { handlingBlocked, rowStatus, worstLevel } from "../lib/status";
 import { canReplaceFile, createdSomething, fixFields, mediaCreated, objectStepRan, RELINK_OBJECT, stepList, STEP_MARK, stepNote } from "../lib/results";
 import { portalOf } from "../lib/portal";
 import { isPreset, PRESETTABLE, type Presettable } from "../lib/presets";
+import { editorColumns } from "../lib/table";
 import AuthorityInput from "./AuthorityInput.vue";
 import DateInput from "./DateInput.vue";
 import ErrorBox from "./ErrorBox.vue";
@@ -27,6 +28,32 @@ const stalled = computed(() => !props.uploadingHere && !mediaCreated(props.row) 
 const canRetry = computed(() => !props.readonly && props.row.include && !mediaCreated(props.row) && (props.row.upload.s === "failed" || stalled.value));
 const portal = computed(() => portalOf(props.row, props.tenant));
 const confirmRemove = ref(false);
+
+// Delete (design: Deleting a row): the trash button at the end of the row, for any document that hasn't created
+// anything in CollectionSpace, excluded or not. Only while the job can be edited; the column isn't there otherwise.
+const cols = computed(() => editorColumns(!!props.groupOn, !props.readonly));
+const deletable = computed(() => !createdSomething(props.row));
+const DEL_TITLE = "Delete document";
+const deleteTitle = computed(() => deletable.value ? DEL_TITLE : props.row.result?.interrupted
+  ? "The last run stopped while working on this document, so it may have created a record in CollectionSpace. It can't be deleted; use Exclude instead."
+  : "This document already created records in CollectionSpace, so it can't be deleted; use Exclude instead.");
+const confirmDelete = ref(false);
+const delButton = ref<HTMLButtonElement | null>(null);
+const delCancel = ref<HTMLButtonElement | null>(null);
+async function askDelete() {
+  confirmDelete.value = true;
+  await nextTick();
+  delCancel.value?.focus();
+}
+async function cancelDelete() {
+  confirmDelete.value = false;
+  await nextTick();
+  delButton.value?.focus();
+}
+function doDelete() {
+  confirmDelete.value = false;
+  emit("remove");
+}
 
 // The job's group: only documents linked to an object can join; once its object is in the group, it stays.
 const inGroup = computed(() => props.row.group ?? true);
@@ -138,9 +165,26 @@ function text(field: keyof Row, e: Event) {
              :aria-label="`Exclude ${row.file} from the job`" title="Checked: the BMU ignores this document"
              @change="emit('edit', { include: !($event.target as HTMLInputElement).checked })" />
     </td>
+    <td v-if="!readonly" class="keep del-col">
+      <button ref="delButton" type="button" class="row-del" :class="{ armed: confirmDelete }" :disabled="!deletable"
+              :aria-label="DEL_TITLE" :title="deleteTitle" @click="askDelete">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M2.5 4h11M6.5 4V2.5h3V4M4 4l.7 9.5h6.6L12 4M6.8 6.5v4.5M9.2 6.5v4.5"/></svg>
+      </button>
+    </td>
+  </tr>
+  <tr v-if="confirmDelete && !readonly" class="del-confirm">
+    <td :colspan="cols">
+      <div class="confirm-line" role="group" :aria-label="`Delete ${row.file}`">
+        <span>Delete “{{ row.file }}”? Its uploaded file is removed; nothing in CollectionSpace is touched.<template v-if="last">
+          This is the job's last document, so the job is deleted too.</template></span>
+        <button type="button" class="danger" @click="doDelete">Delete</button>
+        <button ref="delCancel" type="button" @click="cancelDelete">Cancel</button>
+      </div>
+    </td>
   </tr>
   <tr v-if="expanded" class="detail">
-    <td :colspan="groupOn ? 10 : 9">
+    <td :colspan="cols">
       <template v-if="created">
         <div class="msg msg-info">
           <template v-if="done">This document was fully created in CollectionSpace (Media record {{ row.result?.steps?.media?.csid }}). Nothing here can
@@ -212,13 +256,7 @@ function text(field: keyof Row, e: Event) {
       </template>
       <ErrorBox v-for="(nt, i) in row.result?.notices ?? []" :key="'n' + i" :code="nt.code" :detail="nt.detail" notice />
       <div v-for="(c, i) in row.checks" :key="i" class="msg" :class="`msg-${c.level}`"><strong>{{ PREFIX[c.level] }}</strong>{{ c.text }}</div>
-      <div v-if="!readonly && row.include && !createdSomething(row)" style="margin-top:6px">
-        <template v-if="!confirmRemove"><button class="link" @click="confirmRemove = true">Delete document</button>
-          <span class="field-note" style="display:inline">Permanent, unlike Exclude. Only for documents that haven't created anything in CollectionSpace.</span></template>
-        <div v-else class="msg msg-warn">Delete “{{ row.file }}” from this job permanently? Its uploaded file is removed; nothing in CollectionSpace is touched.<template v-if="last">
-          This is the job's last document, so the job is deleted too.</template>
-          <button @click="confirmRemove = false; emit('remove')">Delete document</button> <button @click="confirmRemove = false">Cancel</button></div></div>
-      <div v-else-if="!readonly && createdSomething(row) && !done" class="field-note" style="margin-top:6px">{{ row.result?.interrupted
+      <div v-if="!readonly && createdSomething(row) && !done" class="field-note" style="margin-top:6px">{{ row.result?.interrupted
         ? "The last run stopped while working on this document, so it may have created a record in CollectionSpace that the BMU couldn't record. It can't be deleted from the job; check Exclude to have the BMU ignore it, or submit the job to finish it."
         : "This document already created records in CollectionSpace, so it can't be deleted from the job; check Exclude to have the BMU ignore it." }}</div>
     </td>
