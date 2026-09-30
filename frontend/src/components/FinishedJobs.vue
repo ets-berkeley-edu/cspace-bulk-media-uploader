@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import TrashIcon from "./TrashIcon.vue";
 import ChevronIcon from "./ChevronIcon.vue";
 /**
  * The Finished jobs tab (design: Finished jobs and error messages): jobs that have run, newest first, with
@@ -146,7 +147,7 @@ function removedOn(j: Job) {
                             @confirm="del(open)" @cancel="confirmDelete = null" />
           <template v-else>
             <button class="primary" :disabled="busy || !!editWhy" :title="fixTitle(open)" @click="fix(open)">{{ fixLabel(open) }}</button>
-            <button :disabled="!!editWhy" :title="editWhy" @click="askDelete(open)">Delete</button>
+            <button class="job-del" :disabled="!!editWhy" :title="editWhy || 'Delete job'" @click="askDelete(open)"><TrashIcon /><span class="sr-only">Delete</span></button>
           </template>
         </template>
         <span v-else class="sub">Removed {{ removedOn(open) }}</span>
@@ -184,7 +185,7 @@ function removedOn(j: Job) {
                     <button @click="viewResults(j)">View results</button>
                     <template v-if="j.status !== 'Completed'">
                       <button :disabled="busy || !!editWhy" :title="fixTitle(j)" @click="fix(j)">{{ fixLabel(j) }}</button>
-                      <button :disabled="!!editWhy" :title="editWhy" @click="askDelete(j)">Delete</button>
+                      <button class="job-del" :disabled="!!editWhy" :title="editWhy || 'Delete job'" @click="askDelete(j)"><TrashIcon /><span class="sr-only">Delete</span></button>
                     </template>
                     <span v-else class="sub">Removed {{ removedOn(j) }}</span>
                   </div>

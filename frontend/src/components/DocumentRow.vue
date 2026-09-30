@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import TrashIcon from "./TrashIcon.vue";
 import ChevronIcon from "./ChevronIcon.vue";
 import { computed, nextTick, ref, watch } from "vue";
 import type { Handling, Option, Perms, Row, TenantInfo } from "../types";
@@ -171,8 +172,7 @@ function text(field: keyof Row, e: Event) {
     <td v-if="!readonly" class="keep del-col">
       <button ref="delButton" type="button" class="row-del" :class="{ armed: confirmDelete }" :disabled="!deletable"
               :aria-label="DEL_TITLE" :title="deleteTitle" @click="askDelete">
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M2.5 4h11M6.5 4V2.5h3V4M4 4l.7 9.5h6.6L12 4M6.8 6.5v4.5M9.2 6.5v4.5"/></svg>
+        <TrashIcon />
       </button>
     </td>
   </tr>
