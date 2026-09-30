@@ -175,6 +175,14 @@ describe("DocumentRow checks", () => {
     expect(stalled.findAll("button").some((b) => b.text() === "Retry")).toBe(true);
     expect(mountRow({ row: row({ upload: { s: "pending" } }), uploadingHere: true }).text()).toContain("Waiting to upload");
   });
+  it("warns that removing a failed upload that is the job's last document deletes the job", async () => {
+    const last = mountRow({ row: row({ upload: { s: "failed" } }), last: true });
+    await last.findAll("button").find((b) => b.text() === "Remove")!.trigger("click");
+    expect(last.text()).toContain("Remove this document? This is the job's last document, so the job is deleted too.");
+    const other = mountRow({ row: row({ upload: { s: "failed" } }) });
+    await other.findAll("button").find((b) => b.text() === "Remove")!.trigger("click");
+    expect(other.text()).not.toContain("last document");
+  });
 });
 
 import RepeatingSelect from "../components/RepeatingSelect.vue";

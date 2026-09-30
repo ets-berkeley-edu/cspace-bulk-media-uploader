@@ -129,7 +129,7 @@ function text(field: keyof Row, e: Event) {
       <div v-if="canRetry" class="retry-line">
         <template v-if="!confirmRemove"><button type="button" @click="emit('retry')">Retry</button>
           <button type="button" @click="confirmRemove = true">Remove</button></template>
-        <template v-else><span class="sub">Remove this document?</span> <button type="button" @click="confirmRemove = false; emit('remove')">Remove</button>
+        <template v-else><span class="sub">Remove this document?<template v-if="last"> This is the job's last document, so the job is deleted too.</template></span> <button type="button" @click="confirmRemove = false; emit('remove')">Remove</button>
           <button type="button" @click="confirmRemove = false">Cancel</button></template>
       </div>
     </td>

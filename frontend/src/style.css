@@ -223,3 +223,4 @@ table.inner td { background: var(--surface-2); }
 .field-preset > span { color: var(--text-preset); }
 .preset-tag { font-size: 9px; font-weight: 600; font-style: normal; padding: 1px 5px; border-radius: 10px; margin-left: 4px;
   background: var(--bg-preset); color: var(--text-preset); }
+.jd-more { margin: 4px 0 6px; }

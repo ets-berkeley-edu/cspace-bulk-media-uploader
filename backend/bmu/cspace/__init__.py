@@ -1,1 +1,1 @@
-from .client import CSpaceClient, CSpaceError, Permissions  # noqa: F401
+from .client import CSpaceClient, CSpaceError, CSpaceUnavailable, Permissions  # noqa: F401

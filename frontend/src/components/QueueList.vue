@@ -7,20 +7,20 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { api } from "../api";
 import { formatTime } from "../lib/files";
 import { tableState, tableView } from "../lib/table";
-import type { Created, Job, Row, TenantInfo } from "../types";
-import DeleteJobConfirm from "./DeleteJobConfirm.vue";
+import type { Job, Row, TenantInfo } from "../types";
+import JobActions from "./JobActions.vue";
 import JobDocs from "./JobDocs.vue";
 import SortTh from "./SortTh.vue";
 
-defineProps<{ tenant: TenantInfo }>();
-const emit = defineEmits<{ open: [id: string, mode: "edit" | "preview"] }>();
+/** editWhy: why this user can't create or edit jobs (design: Permissions in the UI); "" when they can. */
+defineProps<{ tenant: TenantInfo; editWhy?: string }>();
+const emit = defineEmits<{ open: [id: string, mode: "edit" | "preview", takeOverSince?: number] }>();
 const docs = reactive(new Map<string, Row[]>());
 const expanded = reactive(new Set<string>());
 // Sorting only changes the view: jobs still run in queue order, and moving is off until the sort is cleared.
 const table = tableState();
 const jobs = ref<Job[]>([]);
 const checks = reactive(new Map<string, { block: number; warn: number }>());
-const confirm = ref<{ id: string; kind: "edit" | "cancel" | "delete" } | null>(null);
 const error = ref("");
 const flash = ref("");
 const dragId = ref<string | null>(null);
@@ -61,17 +61,9 @@ async function refresh(runChecks = false) {
 onMounted(() => { refresh(true); timer = setInterval(() => refresh(false), 2000); });
 onBeforeUnmount(() => clearInterval(timer));
 
-// What each job's earlier runs created, for the delete confirmation (null: it has never run)
-const created = reactive(new Map<string, Created | null>());
-function askDelete(j: Job) {
-  confirm.value = { id: j.id, kind: "delete" };
-  if (!j.run) created.set(j.id, null);
-  else api.job(j.id).then((r) => created.set(j.id, r.created)).catch(() => created.set(j.id, null));
-}
 async function act(fn: () => Promise<unknown>, done = "") {
   try {
     await fn();
-    confirm.value = null;
     flash.value = done;
     await refresh();
   } catch (e) {
@@ -79,9 +71,10 @@ async function act(fn: () => Promise<unknown>, done = "") {
   }
 }
 const move = (j: Job, to: number) => act(() => api.moveJob(j.id, Math.max(0, to)), `Moved “${j.name || "Untitled job"}” to position ${running.value.length + Math.max(0, to) + 1}.`);
-async function edit(j: Job) {
-  await act(() => api.editQueued(j.id));
-  if (!error.value) emit("open", j.id, "edit");
+async function done(msg: string) {
+  flash.value = msg;
+  error.value = "";
+  await refresh();
 }
 
 // drag and drop among the queued jobs
@@ -156,16 +149,7 @@ const pct = (j: Job, k: "done" | "failed") => (j.progress?.total ? (100 * (j.pro
               <div v-else-if="j.currentFile" class="sub" title="Document in progress">▶ {{ j.currentFile }}</div>
             </td>
             <td>
-              <div v-if="confirm?.id === j.id && confirm.kind === 'cancel'" class="msg msg-warn">
-                Stop this run? The worker finishes the document it’s on, then stops; documents it hasn’t reached stay not started,
-                and nothing already created is undone.
-                <button @click="act(() => api.cancelRun(j.id))">Cancel run</button> <button @click="confirm = null">Keep running</button>
-              </div>
-              <div v-else class="actions">
-                <button @click="emit('open', j.id, 'preview')">Preview</button>
-                <button :disabled="!!j.cancelRequested" title="Stop after the document in progress" @click="confirm = { id: j.id, kind: 'cancel' }">Cancel run</button>
-                <button disabled title="A running job can't be deleted">Delete</button>
-              </div>
+              <JobActions :job="j" kind="queue" :edit-why="editWhy" @open="(id, m) => emit('open', id, m)" @done="done" @error="error = $event" />
             </td>
           </tr>
           <tr v-if="expanded.has(j.id)" class="detail"><td colspan="8">
@@ -196,17 +180,7 @@ const pct = (j: Job, k: "done" | "failed") => (j.progress?.total ? (100 * (j.pro
                 {{ signIn(j)!.soon ? "⚠ sign-in expires in" : "sign-in kept" }} ~{{ signIn(j)!.hours }} h</div></td>
             <td><span class="badge b-accent">Queued</span></td>
             <td>
-              <div v-if="confirm?.id === j.id && confirm.kind === 'edit'" class="msg msg-warn">
-                Editing takes this job out of the queue and deletes its saved sign-in. It goes to the end of the queue when it’s
-                scheduled again, even if nothing changes. <button @click="edit(j)">Edit anyway</button> <button @click="confirm = null">Cancel</button>
-              </div>
-              <DeleteJobConfirm v-else-if="confirm?.id === j.id && confirm.kind === 'delete'" :job="j" :created="created.get(j.id)"
-                                @confirm="act(() => api.deleteJob(j.id), 'Deleted the job.')" @cancel="confirm = null" />
-              <div v-else class="actions">
-                <button @click="emit('open', j.id, 'preview')">Preview</button>
-                <button @click="confirm = { id: j.id, kind: 'edit' }">Edit</button>
-                <button @click="askDelete(j)">Delete</button>
-              </div>
+              <JobActions :job="j" kind="queue" :edit-why="editWhy" @open="(id, m) => emit('open', id, m)" @done="done" @error="error = $event" />
             </td>
           </tr>
           <tr v-if="expanded.has(j.id)" class="detail"><td colspan="8">

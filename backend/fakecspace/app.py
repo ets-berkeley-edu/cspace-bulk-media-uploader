@@ -242,6 +242,12 @@ def _language_ref(code: str) -> str:
     return f"urn:cspace:{DOMAIN}:vocabularies:name(languages):item:name({code})'{LANGUAGES[code]}'"
 
 
+def _page(items: list, request: Request, default: int = 40) -> list:
+    """One page of a list, as CollectionSpace pages it: pgSz=0 means every item."""
+    size = int(request.query_params.get("pgSz") or default)
+    return items if size == 0 else items[:size]
+
+
 @app.get("/cspace-services/{service}/urn:cspace:name({vocab})/items")
 def search_terms(service: str, vocab: str, request: Request):
     if service == "vocabularies" and vocab == "languages":
@@ -249,7 +255,7 @@ def search_terms(service: str, vocab: str, request: Request):
             return d
         items = "".join(f"<list-item><csid>{uuid.uuid5(uuid.NAMESPACE_URL, c)}</csid><shortIdentifier>{c}</shortIdentifier>"
                         f"<displayName>{escape(n)}</displayName><refName>{escape(_language_ref(c))}</refName></list-item>"
-                        for c, n in LANGUAGES.items())
+                        for c, n in _page(list(LANGUAGES.items()), request))
         return _xml(f'<ns2:abstract-common-list xmlns:ns2="http://collectionspace.org/services/jaxb">{items}</ns2:abstract-common-list>')
     if service not in ("personauthorities", "orgauthorities"):
         return Response(status_code=404)
@@ -258,7 +264,7 @@ def search_terms(service: str, vocab: str, request: Request):
     q = request.query_params.get("pt", "").lower()
     names = PEOPLE if service == "personauthorities" else ORGS
     matches = [n for n in names if q in n.lower()]
-    page = matches[:int(request.query_params.get("pgSz", "40") or 40)]
+    page = _page(matches, request)
     items = "".join(
         f"<list-item><csid>{uuid.uuid5(uuid.NAMESPACE_URL, n)}</csid><termDisplayName>{escape(n)}</termDisplayName>"
         f"<refName>{escape(_ref(service, vocab, n))}</refName></list-item>"

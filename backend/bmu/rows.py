@@ -283,6 +283,17 @@ def created_records(rows: list[dict], job: dict | None = None) -> dict:
     return {"counts": c, "csids": csids}
 
 
+def describe_deletion(job: dict, documents: int, created: dict, finished_by_sweep: bool = False) -> str:
+    """The "Job deleted" audit entry's text: the job, and what its runs created, which stays in CollectionSpace."""
+    c = created["counts"]
+    what = (f"; its runs created {c['media']} Media records ({c['files']} with files), {c['objects']} Objects, "
+            + ("the Group, " if c["groups"] else "") +
+            f"and {c['relations']} Relations, which stay in CollectionSpace" + (f", {c['unfinished']} unfinished" if c["unfinished"] else "")
+            if created["csids"] else "; it had created nothing in CollectionSpace")
+    sweep = " The BMU finished the deletion, which had stopped part way." if finished_by_sweep else ""
+    return f"Deleted “{job.get('name') or 'Untitled job'}” ({documents} documents){what}.{sweep}"
+
+
 # How long a row's CollectionSpace lookup (object or Media search) is reused while editing. Scheduling always
 # looks everything up again.
 LOOKUP_TTL_SECONDS = 600
@@ -290,7 +301,7 @@ LOOKUP_TTL_SECONDS = 600
 
 def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: dict[str, bool],
                targets: set[int] | None = None, refresh: bool = False, group_on: bool = False,
-               set_publish: bool = True) -> set[int]:
+               set_publish: bool = True, group_exists: bool = False) -> set[int]:
     """Set each row's checks: [{level: block|warn|info, text}]. "block" rows must be fixed before scheduling.
 
     The editor calls this for the rows that just changed (targets) and re-evaluates every row, because some
@@ -299,7 +310,8 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
     whose lookup is missing, for a different value or older than LOOKUP_TTL_SECONDS query CollectionSpace.
     targets=None means every row may query; refresh=True ignores stored lookups (used at scheduling).
     set_publish=False (a job that isn't a draft): a newly protected file is reported, but its publish setting
-    is left as the user scheduled it.
+    is left as the user scheduled it. group_exists: the job's Group was created by an earlier run, so joining it
+    needs create on relations only, not on groups.
     Returns the rows whose lookups weren't known, so their checks are partial and must not be saved.
     """
     now = time.time()
@@ -366,7 +378,7 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
             continue
         h = tenant.handling_by_id(r["handling"])
         if media_created(r):
-            r["checks"] = _rerun_checks(tenant, r, perms, lookup, client, group_on)
+            r["checks"] = _rerun_checks(tenant, r, perms, lookup, client, group_on, group_exists)
             continue
         up = (r.get("upload") or {}).get("s")
         if up == "failed" and (r.get("upload") or {}).get("reason") == "removed":
@@ -394,7 +406,9 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
         if h.object == "create" and not perms.get("objects"):
             out.append({"level": "block", "text": "Your account can't create Object records. Choose another handling."})
         # "either" needs create on objects only when its object doesn't exist yet: checked after the lookup below
-        if group_on and r.get("group", True) and h.object != "none" and not perms.get("groups"):
+        # Design (Groups): create on groups only while the job's Group doesn't exist yet; relating the Object to an
+        # existing Group needs create on relations, checked above for every handling that links to an object.
+        if group_on and r.get("group", True) and h.object != "none" and not group_exists and not perms.get("groups"):
             out.append({"level": "block", "text": "Your account can't create groups. Turn off the job's group, or untick this document's Group."})
         obj_csid: str | None = ""  # the linked Object: "" none, None not known yet
         if h.object != "none" and object_step_ran(r):
@@ -506,8 +520,9 @@ def object_checks(tenant: Tenant, behavior: str, num: str, found: list[str], per
         return [{"level": "block", "text": f"Object number {num} matches {len(found)} objects in CollectionSpace. Correct the "
                                            f"object number so it identifies one object{stop}."}]
     if behavior == "existing" and not found:
-        media_only = any(h.object == "none" for h in tenant.handling)
-        choices = " or ".join(c for c in (_labels(tenant, ("either", "create")), "media only" if media_only else "") if c)
+        # Only choices the user may pick: creating the object needs create on objects (and relations, to link it)
+        creatable = _labels(tenant, ("either", "create")) if perms.get("objects") and perms.get("relations") else ""
+        choices = " or ".join(c for c in (creatable, _labels(tenant, ("none",))) if c)
         tail = stop if rerun else (f", or choose {choices}" if choices else "")
         return [{"level": "block", "text": f"No object {num} in CollectionSpace. Correct the object number{tail}."}]
     # (while editing, "create" without the permission is blocked before the lookup, whatever it finds)
@@ -555,7 +570,7 @@ def sensitivity_checks(tenant: Tenant, r: dict) -> list[dict]:
 
 
 def _rerun_checks(tenant: Tenant, r: dict, perms: dict[str, bool], lookup, client: CSpaceClient,
-                  group_on: bool = False) -> list[dict]:
+                  group_on: bool = False, group_exists: bool = False) -> list[dict]:
     """Checks for a row whose Media record already exists (Partial): only what the rerun still has to do.
     Its fields, identification number and date went to CollectionSpace already and aren't checked again."""
     out: list[dict[str, str]] = []
@@ -594,19 +609,30 @@ def _rerun_checks(tenant: Tenant, r: dict, perms: dict[str, bool], lookup, clien
             ext = r["file"].rsplit(".", 1)[-1].lower() if "." in r["file"] else ""
             if ext not in SUPPORTED_EXTENSIONS:
                 out.append({"level": "block", "text": f"The BMU doesn't accept .{ext or '(no extension)'} files. Supported types: {SUPPORTED_HINT}."})
+        if not perms.get("mediaUpdate", True):  # the upload is PUT media/{csid}/blob, as on the main path
+            out.append({"level": "block", "text": "Your account can't update Media records, which attaching the file needs "
+                                                  "(update on media). Ask a CollectionSpace administrator for the permission."})
     if skip:
         return out
-    if group_on and r.get("group", True) and not _group_done(r) and not perms.get("groups"):
+    in_group = group_on and r.get("group", True) and not _group_done(r)
+    if in_group and not group_exists and not perms.get("groups"):  # the job's Group hasn't been created yet
         out.append({"level": "block", "text": "Your account can't create groups. Turn off the job's group, or untick this document's Group."})
     if open_steps(r, REL_STEPS) and not perms.get("relations"):
         out.append({"level": "block", "text": "Your account can't create relations, so this Media record can't be linked to its "
                                               "object. Stop linking it, or have someone who can reschedule the job."})
+    elif in_group and not perms.get("relations"):  # joining the Group is two relations too
+        out.append({"level": "block", "text": "Your account can't create relations, so this document's object can't be added to "
+                                              "the job's group. Untick this document's Group, or have someone who can reschedule the job."})
     # The handling's object step, if it hasn't found or created the object yet (after the handling changed from
     # "Create new object + link", the new step hasn't run at all)
     if obj_step and (st.get(obj_step) or {}).get("s") not in FINISHED and not object_step_ran(r):
         num = (r.get("obj") or "").strip()
         if not num:
             out.append({"level": "block", "text": "Enter the object number, or stop linking this document."})
+            return out
+        if not perms.get("readObjects", True):  # design: a check the row needs but can't run blocks it
+            out.append({"level": "block", "text": "Your account can't read Object records, so the BMU can't find this document's "
+                                                  "object. Ask for read on objects, or have someone who can reschedule the job."})
             return out
         try:
             found = lookup(r, "object", num, client.find_objects)

@@ -25,6 +25,14 @@ class CSpaceError(Exception):
         self.status = status
 
 
+class CSpaceUnavailable(CSpaceError):
+    """A request the client refused to send: the last requests in a row all failed (design: Job-level failures,
+    five failed requests in a row stop the job). Nothing reached CollectionSpace."""
+
+    def __init__(self, failures: int):
+        super().__init__("unavailable", f"{failures} requests in a row to CollectionSpace failed; no further request was sent")
+
+
 def _code_for_status(status: int) -> str:
     if status == 401:
         return "auth"
@@ -119,15 +127,20 @@ class CSpaceClient:
         self._http = http or httpx.Client(timeout=timeout, follow_redirects=False)
         self._auth = httpx.BasicAuth(username, password)
         self._headers = {"User-Agent": agent}
-        # Consecutive requests that got a 5xx or no answer at all; any other answer resets it. The worker stops a
-        # job as "unavailable" when it reaches five (design: Job-level failures).
+        # Consecutive requests that got a 5xx or no answer at all; a success resets it, a 4xx leaves it. The worker
+        # stops a job as "unavailable" when it reaches five (design: Job-level failures): it sets max_failures_in_a_row,
+        # and from then on this client sends nothing more (CSpaceUnavailable), even in the middle of a step that makes
+        # several requests. None (the web app's per-request clients): no limit.
         self.failures_in_a_row = 0
+        self.max_failures_in_a_row: int | None = None
 
     def close(self) -> None:
         self._http.close()
 
     # -- low level ----------------------------------------------------------------------
     def _request(self, method: str, path: str, **kw) -> httpx.Response:
+        if self.max_failures_in_a_row is not None and self.failures_in_a_row >= self.max_failures_in_a_row:
+            raise CSpaceUnavailable(self.failures_in_a_row)
         try:
             headers = {**self._headers, **kw.pop("headers", {})}
             r = self._http.request(method, self.base + path, auth=self._auth, headers=headers, **kw)
@@ -215,10 +228,11 @@ class CSpaceClient:
         return [{"shortIdentifier": _text(i, "shortIdentifier"), "displayName": _text(i, "displayName"), "csid": _text(i, "csid")}
                 for i in _items(SafeET.fromstring(r.content))]
 
-    def vocabulary_items(self, vocabulary: str, limit: int = 1000) -> list[dict[str, str]]:
-        """Every term of a vocabulary (e.g. languages), as refName and display name."""
+    def vocabulary_items(self, vocabulary: str) -> list[dict[str, str]]:
+        """Every term of a vocabulary (e.g. languages), as refName and display name: pgSz=0 asks for all items,
+        the same call the CollectionSpace UI makes (design: Vocabularies)."""
         r = self._request("GET", f"vocabularies/urn:cspace:name({vocabulary})/items",
-                          params={"wf_deleted": "false", "pgSz": str(limit)})
+                          params={"pgSz": "0", "wf_deleted": "false"})
         out = []
         for item in _items(SafeET.fromstring(r.content)):
             ref = _text(item, "refName")

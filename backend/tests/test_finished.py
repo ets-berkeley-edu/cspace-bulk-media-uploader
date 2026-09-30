@@ -414,7 +414,7 @@ def test_an_abandoned_fix_is_reverted(api, login, add_uploaded, worker, services
     services.storage.s3.put_object(Bucket=services.settings.s3_bucket, Key=new_key, Body=b"abc")
     add_uploaded(job, ["1-2345.jpg"])
     assert len(api.get(f"/api/jobs/{job}").json()["rows"]) == 3
-    services.storage.update_job(job, {"expiresAt": now() - 1})
+    services.storage.update_job(job, {"draftExpiresAt": now() - 1})  # a fix's expiry (design: State rules)
     assert worker.sweep_expired_drafts() == [job]
     j = api.get(f"/api/jobs/{job}").json()
     assert j["job"]["status"] == "NeedsAttention" and j["job"]["fixFrom"] is None and not j["job"].get("editingBy")
@@ -599,3 +599,233 @@ def test_a_deletion_that_stopped_part_way_is_finished_by_the_sweep(api, login, a
     add_uploaded(job, ["15-1234_1.jpg"])
     services.storage.update_job(job, {"status": "Deleting", "deletingSince": now() - 700})
     assert worker.sweep_unfinished_deletions() == [job] and services.storage.get_job(job) is None
+
+
+# ---- temporary states are finished by the sweep after ten minutes -------------------------------------
+def test_a_job_left_stopping_is_finished_as_worker_stopped(api, login, add_uploaded, worker, services):
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_1.jpg"])
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    row = services.storage.get_row(job, 1)
+    row["result"] = {"state": "In progress", "steps": {"media": {"s": "done", "csid": "m1", "run": 1}}, "run": 1}
+    services.storage.put_row(job, row, guard=False)
+    services.storage.put_run(job, {"run": 1, "startedAt": now() - 900, "outcome": "Running"})
+    # the sweep that stopped it was itself interrupted right after setting Stopping
+    services.storage.update_job(job, {"status": "Stopping", "stoppingSince": now() - 60, "run": 1, "scheduledBy": "admin"})
+    assert worker.sweep_interrupted_transitions() == []  # not yet: it may still be finishing
+    services.storage.update_job(job, {"stoppingSince": now() - 700})
+    worker.sweep()
+    j = api.get(f"/api/jobs/{job}").json()
+    assert j["job"]["status"] == "Failed" and j["job"]["code"] == "worker_stopped"
+    assert j["rows"][0]["result"]["state"] == "Partial" and j["runs"][0]["outcome"] == "Failed"
+    assert services.storage.get_credential(job) is None
+    assert worker.sweep_interrupted_transitions() == []  # done once
+
+
+def test_a_job_left_reverting_is_reverted_again(api, login, add_uploaded, worker, services, fail_on):
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_1.jpg", "12-5678_1.jpg"])
+    fail_on("media", status=400, match="12-5678")
+    run_once(api, job, worker)
+    api.post(f"/api/jobs/{job}/fix")
+    api.patch(f"/api/jobs/{job}/rows/2", json={"description": "changed while fixing"})
+    add_uploaded(job, ["1-2345.jpg"])
+    # the revert was interrupted part way: one added document already removed, the rest not done
+    services.storage.update_job(job, {"status": "Reverting", "revertingSince": now() - 700})
+    services.storage.delete_row(job, 3)
+    assert worker.sweep_interrupted_transitions() == [job]
+    j = api.get(f"/api/jobs/{job}").json()
+    assert j["job"]["status"] == "NeedsAttention" and j["job"]["fixFrom"] is None and not j["job"].get("editingBy")
+    assert set(by_file(j)) == {"15-1234_1.jpg", "12-5678_1.jpg"} and by_file(j)["12-5678_1.jpg"]["description"] == ""
+    assert services.storage.fix_originals(job) == []
+    assert [a["type"] for a in services.storage.list_audit("pahma")].count("Fix reverted") == 1
+
+
+def test_an_expiry_left_part_way_is_finished_with_one_audit_entry(api, login, add_uploaded, worker, services):
+    login()
+    done = new_job(api, "done long ago")
+    add_uploaded(done, ["12-5678_1.jpg"])
+    assert run_once(api, done, worker)["job"]["status"] == "Completed"
+    draft = new_job(api, "old draft")
+    add_uploaded(draft, ["15-1234_1.jpg"])
+    services.storage.update_job(draft, {"status": "Expiring", "expiringFrom": "Draft", "expiringSince": now() - 700})
+    # interrupted after its audit entry was written
+    services.storage.update_job(done, {"status": "Expiring", "expiringFrom": "Completed", "expiringSince": now() - 700})
+    assert services.storage.audit_once("pahma", done, "Expiring", "expiryAudited", "Job expired", "BMU", "Removed …")
+    assert sorted(worker.sweep_interrupted_transitions()) == sorted([draft, done])
+    assert services.storage.get_job(draft) is None and services.storage.get_rows(draft) == []
+    assert services.storage.get_job(done) is None and services.storage.get_runs(done) == []
+    types = [a["type"] for a in services.storage.list_audit("pahma")]
+    assert types.count("Draft expired") == 1 and types.count("Job expired") == 1
+
+
+# ---- deleting a job: the complete audit entry comes first -------------------------------------------
+def test_a_job_deletion_writes_its_audit_entry_before_deleting_anything(api, login, add_uploaded, worker, services, fail_on, monkeypatch):
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_1.jpg", "12-5678_1.jpg"])
+    fail_on("upload", status=413, match="12-5678")
+    run_once(api, job, worker)
+
+    def crash(job_id):
+        raise RuntimeError("web app stopped")
+    monkeypatch.setattr(services.storage, "delete_job_and_files", crash)
+    import pytest
+    with pytest.raises(RuntimeError):
+        api.delete(f"/api/jobs/{job}")
+    monkeypatch.undo()
+    entry = next(a for a in services.storage.list_audit("pahma") if a["type"] == "Job deleted")
+    assert entry["user"] == "admin" and entry["jobName"] == "Finished test" and entry["counts"]["media"] == 2
+    assert {c["step"] for c in entry["csids"]} == {"media", "upload", "relMediaObject", "relObjectMedia"}
+    j = services.storage.get_job(job)
+    assert j["status"] == "Deleting" and j["deletedBy"] == "admin" and j["deleteAudited"] is True
+    services.storage.update_job(job, {"deletingSince": now() - 700})
+    assert worker.sweep_unfinished_deletions() == [job]
+    assert services.storage.get_job(job) is None and services.storage.get_rows(job) == []
+    assert [a["type"] for a in services.storage.list_audit("pahma")].count("Job deleted") == 1
+
+
+def test_a_deletion_stopped_before_its_audit_entry_is_audited_by_the_sweep_for_the_user(api, login, add_uploaded, worker, services, fail_on):
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_1.jpg"])
+    fail_on("upload", status=413)
+    run_once(api, job, worker)
+    assert services.storage.begin_delete(job, ["NeedsAttention"], "a-session", "admin")  # then the web app stopped
+    services.storage.update_job(job, {"deletingSince": now() - 700})
+    assert worker.sweep_unfinished_deletions() == [job] and services.storage.get_job(job) is None
+    entries = [a for a in services.storage.list_audit("pahma") if a["type"] == "Job deleted"]
+    assert len(entries) == 1 and entries[0]["user"] == "admin"
+    assert {c["step"] for c in entries[0]["csids"]} == {"media", "relMediaObject", "relObjectMedia"}
+    assert "finished the deletion" in entries[0]["detail"]
+
+
+def test_the_deletion_audit_entry_is_written_once_even_if_the_sweep_overlaps(api, login, services):
+    login()
+    job = new_job(api)
+    assert services.storage.begin_delete(job, ["Draft"], services.storage.get_job(job)["editingSession"], "admin")
+    created = {"counts": {}, "csids": []}
+    assert services.storage.audit_job_deleted("pahma", job, "admin", "web app", created) is True
+    assert services.storage.audit_job_deleted("pahma", job, "admin", "sweep", created) is False
+    assert [a["detail"] for a in services.storage.list_audit("pahma") if a["type"] == "Job deleted"] == ["web app"]
+
+
+# ---- five failed requests in a row: nothing is sent after the fifth -----------------------------------
+def test_no_request_is_sent_after_the_fifth_failure_in_a_row(api, login, add_uploaded, worker, fake, fail_on):
+    """The duplicate-ID search fails as the fifth failure in a row: the create in the same step must not follow."""
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_1.jpg"])
+    fail_on("mediaSearch", status=503, count=0)
+    real = worker.client_factory
+
+    def four_failed_already(u, p):
+        c = real(u, p)
+        c.failures_in_a_row = 4
+        return c
+    worker.client_factory = four_failed_already
+    media_before = len(fake.media)
+    j = run_once(api, job, worker)
+    assert j["job"]["status"] == "Failed" and j["job"]["code"] == "unavailable"
+    assert len(fake.media) == media_before  # create_media was never sent
+    assert j["rows"][0]["result"]["steps"]["media"]["s"] == "not run"
+
+
+def test_the_client_refuses_to_send_once_the_limit_is_reached(fake):
+    import pytest
+    from bmu.cspace import CSpaceError, CSpaceUnavailable
+    from conftest import factory
+    c = factory("admin", "admin")
+    c.failures_in_a_row = 5
+    assert c.find_objects("15-1234")  # the web app's clients have no limit
+    c.failures_in_a_row, c.max_failures_in_a_row = 5, 5
+    sent = []
+    real = c._http.request
+    c._http.request = lambda *a, **k: sent.append(a) or real(*a, **k)
+    with pytest.raises(CSpaceUnavailable) as e:
+        c.find_objects("15-1234")
+    assert isinstance(e.value, CSpaceError) and e.value.code == "unavailable" and sent == []
+
+
+def test_the_group_step_stops_the_job_when_the_client_refuses_to_send(api, login, add_uploaded, worker, fake, monkeypatch):
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_1.jpg"])
+    api.patch(f"/api/jobs/{job}", json={"groupOn": True})
+    from bmu.cspace import CSpaceClient
+
+    def unavailable(self, xml):
+        self.failures_in_a_row = 5
+        return CSpaceClient._request(self, "POST", "groups")
+    monkeypatch.setattr(CSpaceClient, "create_group", unavailable)
+    j = run_once(api, job, worker)
+    assert j["job"]["status"] == "Failed" and j["job"]["code"] == "unavailable"
+    assert not j["job"].get("groupStep")  # not recorded as a failed Group: nothing was sent
+    assert not fake.groups
+
+
+# ---- a sign-in failure while creating the Group settles the row -----------------------------------------
+def test_a_sign_in_failure_creating_the_group_fails_the_step_not_the_row(api, login, add_uploaded, worker, fail_on):
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_1.jpg", "12-5678_1.jpg"])
+    api.patch(f"/api/jobs/{job}", json={"groupOn": True})
+    fail_on("group", status=401)
+    j = run_once(api, job, worker)
+    assert j["job"]["status"] == "Failed" and j["job"]["code"] == "auth"
+    first = j["rows"][0]["result"]
+    assert first["state"] == "Partial" and "interrupted" not in first  # CollectionSpace refused it: nothing was created
+    assert first["steps"]["addToGroup"]["s"] == "failed" and first["steps"]["addToGroup"]["code"] == "auth"
+    assert first["error"]["code"] == "auth"
+    assert j["rows"][1]["result"] is None  # not reached
+    api.post(f"/api/jobs/{job}/fix")
+    assert api.delete(f"/api/jobs/{job}/rows/2").status_code == 200
+
+
+# ---- housekeeping --------------------------------------------------------------------------------------
+def test_deleted_rows_move_to_the_run_item_when_the_run_starts(api, login, add_uploaded, worker, services, fail_on):
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_1.jpg", "12-5678_1.jpg", "1-2345.jpg"])
+    fail_on("media", status=400, match="12-5678")
+    fail_on("media", status=500, match="1-2345")
+    run_once(api, job, worker)
+    api.post(f"/api/jobs/{job}/fix")
+    assert api.delete(f"/api/jobs/{job}/rows/3").status_code == 200
+    assert [d["file"] for d in services.storage.get_job(job)["deletedRows"]] == ["1-2345.jpg"]
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    worker.tick()
+    j = api.get(f"/api/jobs/{job}").json()
+    assert [d["file"] for d in j["runs"][1]["deletedBefore"]] == ["1-2345.jpg"]
+    assert j["job"]["deletedRows"] == []
+
+
+def test_a_fixs_expiry_is_kept_in_draft_expires_at_not_the_ttl_attribute(api, login, add_uploaded, worker, services, fail_on):
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["12-5678_1.jpg", "15-1234_1.jpg"])
+    fail_on("media", status=400, match="12-5678")
+    run_once(api, job, worker)
+    shown = api.post(f"/api/jobs/{job}/fix").json()
+    item = services.storage.get_job(job)
+    assert item.get("expiresAt") is None and item["draftExpiresAt"] > now() + 29 * 86400
+    assert shown["expiresAt"] == item["draftExpiresAt"]  # the API still shows it as the draft's expiresAt
+    listed = {x["id"]: x for x in api.get("/api/jobs").json()["jobs"]}[job]
+    assert listed["expiresAt"] == item["draftExpiresAt"]
+    services.storage.update_job(job, {"draftExpiresAt": now() + 100})
+    api.patch(f"/api/jobs/{job}/rows/1", json={"description": "saved again"})  # a save restarts it, still there
+    item = services.storage.get_job(job)
+    assert item.get("expiresAt") is None and item["draftExpiresAt"] > now() + 29 * 86400
+    assert worker.sweep_expired_drafts() == []
+    services.storage.update_job(job, {"draftExpiresAt": now() - 1})
+    assert worker.sweep_expired_drafts() == [job]
+    item = services.storage.get_job(job)
+    assert item["status"] == "NeedsAttention" and item.get("draftExpiresAt") is None and item.get("expiresAt") is None
+    # a fix that is scheduled and runs leaves no draft expiry behind
+    api.post(f"/api/jobs/{job}/fix")
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    worker.tick()
+    item = services.storage.get_job(job)
+    assert item["status"] == "Completed" and item.get("draftExpiresAt") is None and item["expiresAt"] > now() + 29 * 86400

@@ -18,16 +18,20 @@ from botocore.exceptions import ClientError
 
 from .config import Settings, get_settings
 from .crypto import Crypto, make_crypto
-from .cspace import CSpaceClient, CSpaceError
+from .cspace import CSpaceClient, CSpaceError, CSpaceUnavailable
 from .cspace.payloads import group_xml, media_xml, object_xml, relation_xml
 from .failures import JOB_LEVEL, classify
 from .filetypes import HEAD_BYTES, mismatch
-from .storage import Storage, now
+from .rows import created_records, describe_deletion
+from .storage import Storage, draft_expiry, expiry_of, now
 from .tenant import OBJECT_STEPS, Tenant, load_tenant
 
 log = logging.getLogger("bmu.worker")
 
 MAX_CONSECUTIVE_SERVER_ERRORS = 5
+# A job left in a temporary state (Stopping, Reverting, Expiring, Deleting) this long was interrupted part way (the
+# process stopped): the sweep finishes what the state was doing. Each of those steps is safe to repeat.
+TRANSIENT_GRACE_SECONDS = 600
 INLINE_AUDIT_ROWS = 100  # a run's per-row audit detail goes in the entry up to this many rows, in S3 beyond
 RECORD_TYPE = {"media": "Media", "upload": "Blob", "createObject": "CollectionObject", "findOrCreateObject": "CollectionObject",
                "relMediaObject": "Relation",
@@ -147,13 +151,15 @@ class Worker:
 
     def sweep(self) -> None:
         """The periodic checks: sign-ins that expired in the queue or while running, expired drafts and fixes,
-        Completed jobs past their 30 days, running jobs whose worker stopped, protected files' staged uploads,
-        idle or expired sign-in sessions, and (hourly) abandoned uploads."""
+        Completed jobs past their 30 days, running jobs whose worker stopped, deletions and other temporary states
+        (Stopping, Reverting, Expiring) left part way, protected files' staged uploads, idle or expired sign-in
+        sessions, and (hourly) abandoned uploads."""
         self.sweep_expired_sign_ins()
         self.sweep_expired_drafts()
         self.sweep_completed()
         self.sweep_stopped_jobs()
         self.sweep_unfinished_deletions()
+        self.sweep_interrupted_transitions()
         self.sweep_protected_staged()
         self.storage.sweep_sessions(self.s.session_idle_minutes * 60)
         if now() - self._last_abandoned_sweep > 3600:  # hourly is plenty for a one-day limit
@@ -162,14 +168,43 @@ class Worker:
 
     def sweep_unfinished_deletions(self) -> list[str]:
         """A deletion that stopped half way (the web app was stopped after marking the job Deleting) is finished
-        after ten minutes; its sign-in is already gone and the audit entry was not written, so it is written here."""
+        after ten minutes; its sign-in is already gone. The web app writes the complete audit entry before deleting
+        anything, so normally only the leftovers are removed here. If the web app stopped before writing it, nothing
+        was deleted yet, and the entry is written here from the job as it still is, under the user who deleted it
+        (storage.audit_job_deleted writes it at most once, even if the web app is still deleting)."""
         done = []
         for j in self.storage.list_jobs(self.tenant.key):
-            if j["status"] == "Deleting" and float(j.get("deletingSince") or 0) < now() - 600:
+            if j["status"] == "Deleting" and float(j.get("deletingSince") or 0) < now() - TRANSIENT_GRACE_SECONDS:
+                if not j.get("deleteAudited"):
+                    rows = self.storage.get_rows(j["id"])
+                    created = created_records(rows, j)
+                    self.storage.audit_job_deleted(self.tenant.key, j["id"], j.get("deletedBy") or "BMU",
+                                                   describe_deletion(j, len(rows), created, finished_by_sweep=True), created,
+                                                   jobName=j.get("name", ""))
                 self.storage.delete_job_and_files(j["id"])
-                self.storage.audit(self.tenant.key, "Job deleted", "BMU", j["id"],
-                                   f"Finished deleting “{j.get('name') or 'Untitled job'}”, whose deletion had stopped part way.")
                 done.append(j["id"])
+        return done
+
+    def sweep_interrupted_transitions(self) -> list[str]:
+        """Design (State rules): the worker's own temporary states are finished like an interrupted deletion, ten
+        minutes after the job entered them (the *Since field set with the state). Stopping: the stopped run is
+        ended as worker_stopped (what sweep_stopped_jobs does). Reverting: the abandoned fix is reverted again.
+        Expiring: the expired draft or Completed job is deleted again. Each is safe to repeat part way."""
+        done = []
+        limit = now() - TRANSIENT_GRACE_SECONDS
+        for j in self.storage.list_jobs(self.tenant.key):
+            status = j["status"]
+            since = float(j.get({"Stopping": "stoppingSince", "Reverting": "revertingSince",
+                                 "Expiring": "expiringSince"}.get(status, "")) or 0)
+            if status not in ("Stopping", "Reverting", "Expiring") or since >= limit:
+                continue
+            if status == "Stopping":
+                self._stop(j)
+            elif status == "Reverting":
+                self._revert(j)
+            else:
+                self._expire(j)
+            done.append(j["id"])
         return done
 
     def sweep_expired_sign_ins(self) -> list[str]:
@@ -194,7 +229,7 @@ class Worker:
         """A queued job whose saved sign-in expired goes back to Drafts, expiring like any draft (7 days with
         protected files, 30 otherwise)."""
         if not self.storage.update_job(j["id"], {"status": "Draft", "queuePos": None, "lastSavedAt": now(),
-                                                 "expiresAt": now() + self.s.draft_days_for(j) * 86400,
+                                                 **draft_expiry(j, now() + self.s.draft_days_for(j) * 86400),
                                                  "note": "Sign-in expired while waiting in the queue; schedule it again to run it with your sign-in."},
                                        expect_status="Queued"):
             return False
@@ -207,29 +242,49 @@ class Worker:
         """Drafts past their expiry (design: Drafts, Expiry; State rules, Abandoned fixes). A draft that has
         never run is deleted with its rows and staged files. A fix of a job that has run is reverted: its
         edits are discarded and the job returns to Needs attention or Failed with its rows, run history and
-        CSIDs intact. Both are written to the audit log."""
+        CSIDs intact. Both are written to the audit log. A fix's expiry is its draftExpiresAt (see draft_expiry)."""
         done = []
         for j in self.storage.list_jobs(self.tenant.key):
-            if j["status"] != "Draft" or not j.get("expiresAt") or j["expiresAt"] >= now():
+            expires = expiry_of(j) if j["status"] == "Draft" else None
+            if not expires or expires >= now():
                 continue
             if j.get("fixFrom"):
                 if self.revert_fix(j):
                     done.append(j["id"])
             elif not j.get("run"):
-                if self.storage.update_job(j["id"], {"status": "Expiring"}, expect_status="Draft"):
-                    rows = self.storage.delete_job_and_files(j["id"])
-                    self.storage.audit(self.tenant.key, "Draft expired", "BMU", j["id"],
-                                       f"Deleted “{j.get('name') or 'Untitled job'}” ({len(rows)} documents), "
-                                       f"{self.s.draft_days_for(j)} days after it was last saved; it had never run.")
+                if self.storage.update_job(j["id"], {"status": "Expiring", "expiringSince": now(), "expiringFrom": "Draft"},
+                                           expect_status="Draft"):
+                    self._expire({**j, "expiringFrom": "Draft"})
                     done.append(j["id"])
         return done
+
+    def _expire(self, j: dict) -> None:
+        """Delete a job that is Expiring: a draft that never ran, or a Completed job past its 30 days. The audit
+        entry is written first, once (storage.audit_once), so an interrupted expiry redone by the sweep neither loses
+        nor repeats it."""
+        if not j.get("expiryAudited"):
+            n = len(self.storage.get_rows(j["id"]))
+            name = j.get("name") or "Untitled job"
+            if j.get("expiringFrom") == "Completed":
+                kind, text = "Job expired", f"Removed “{name}” ({n} documents), {self.s.completed_days} days after it completed."
+            else:
+                kind, text = "Draft expired", (f"Deleted “{name}” ({n} documents), {self.s.draft_days_for(j)} days after it "
+                                               "was last saved; it had never run.")
+            self.storage.audit_once(self.tenant.key, j["id"], "Expiring", "expiryAudited", kind, "BMU", text)
+        self.storage.delete_job_and_files(j["id"])
 
     def revert_fix(self, job: dict) -> bool:
         """Discard a fix's edits: put back every row it changed, remove documents it added, and return the
         job to the state it came from. Rows deleted during the fix stay deleted (deleting is permanent)."""
-        fix = job["fixFrom"]
-        if not self.storage.update_job(job["id"], {"status": "Reverting"}, expect_status="Draft"):
+        if not self.storage.update_job(job["id"], {"status": "Reverting", "revertingSince": now()}, expect_status="Draft"):
             return False
+        self._revert(job)
+        return True
+
+    def _revert(self, job: dict) -> None:
+        """The revert itself, for a job in Reverting; repeated from the start by the sweep if it was interrupted
+        (restoring a row again, or removing a row already removed, changes nothing)."""
+        fix = job["fixFrom"]
         current = {r["n"]: r for r in self.storage.get_rows(job["id"])}
         for orig in self.storage.fix_originals(job["id"]):
             cur = current.get(orig["n"])
@@ -245,24 +300,23 @@ class Worker:
             self.storage.delete_row(job["id"], r["n"])
         self.storage.drop_fix_originals(job["id"])
         self.storage.clear_editing(job["id"])
-        self.storage.update_job(job["id"], {"status": fix["status"], "code": fix.get("code", ""), "fixFrom": None,
-                                            "expiresAt": None, "note": ""})
+        if not self.storage.update_job(job["id"], {"status": fix["status"], "code": fix.get("code", ""), "fixFrom": None,
+                                                   "expiresAt": None, "draftExpiresAt": None, "note": ""},
+                                       expect_status="Reverting"):
+            return  # finished meanwhile by another sweep
         self.storage.audit(self.tenant.key, "Fix reverted", "BMU", job["id"],
                            f"Fix and reschedule of “{job.get('name') or 'Untitled job'}” was not finished within "
                            f"{self.s.draft_days_for(job)} days; the edits were discarded and the job returned to "
                            f"{'Needs attention' if fix['status'] == 'NeedsAttention' else fix['status']} with its history.")
-        return True
 
     def sweep_completed(self) -> list[str]:
         """Completed jobs are removed 30 days after they finish (their run audit entries stay for a year)."""
         gone = []
         for j in self.storage.list_jobs(self.tenant.key):
             if j["status"] == "Completed" and j.get("expiresAt") and j["expiresAt"] < now():
-                if self.storage.update_job(j["id"], {"status": "Expiring"}, expect_status="Completed"):
-                    rows = self.storage.delete_job_and_files(j["id"])
-                    self.storage.audit(self.tenant.key, "Job expired", "BMU", j["id"],
-                                       f"Removed “{j.get('name') or 'Untitled job'}” ({len(rows)} documents), "
-                                       f"{self.s.completed_days} days after it completed.")
+                if self.storage.update_job(j["id"], {"status": "Expiring", "expiringSince": now(), "expiringFrom": "Completed"},
+                                           expect_status="Completed"):
+                    self._expire({**j, "expiringFrom": "Completed"})
                     gone.append(j["id"])
         return gone
 
@@ -311,11 +365,15 @@ class Worker:
         limit = now() - self.s.heartbeat_stale_seconds
         for j in self.storage.list_jobs(self.tenant.key):
             if j["status"] == "Running" and (j.get("heartbeatAt") or j.get("startedAt") or 0) < limit:
-                if self.storage.update_job(j["id"], {"status": "Stopping"}, expect_status="Running"):
-                    self.storage.delete_credential(j["id"])
-                    self._finish(j["id"], int(j.get("run", 0)), "worker_stopped", j.get("scheduledBy") or "BMU", [])
+                if self.storage.update_job(j["id"], {"status": "Stopping", "stoppingSince": now()}, expect_status="Running"):
+                    self._stop(j)
                     stopped.append(j["id"])
         return stopped
+
+    def _stop(self, j: dict) -> None:
+        """End the run of a job in Stopping as worker_stopped; repeated by the sweep if it was interrupted."""
+        self.storage.delete_credential(j["id"])
+        self._finish(j["id"], int(j.get("run", 0)), "worker_stopped", j.get("scheduledBy") or "BMU", [])
 
     def maybe_sweep(self) -> None:
         """The periodic checks, at most once a minute. Also called between documents during a run, so a long
@@ -361,7 +419,7 @@ class Worker:
         t = now()
         # Claim it only if it is still Queued and its sign-in is still stored (one conditional write)
         if not self.storage.claim_job(job_id, {"status": "Running", "run": run_no, "startedAt": t, "heartbeatAt": t, "code": "",
-                                               "fixFrom": None, "expiresAt": None, "cancelledBy": ""}):
+                                               "fixFrom": None, "expiresAt": None, "draftExpiresAt": None, "cancelledBy": ""}):
             if not self.storage.get_credential(job_id) and (self.storage.get_job(job_id) or {}).get("status") == "Queued":
                 self._sign_in_expired(job)
             return
@@ -375,6 +433,8 @@ class Worker:
             pw = self.crypto.decrypt("job", cred["token"], {"user": cred["user"], "job": job_id})
             client = self.client_factory(cred["user"], pw)
             del pw
+            # Design: five failed requests in a row stop the job; the client sends nothing after the fifth
+            client.max_failures_in_a_row = MAX_CONSECUTIVE_SERVER_ERRORS
             code = self._run_rows(job_id, client, run_no, created)
         except JobStop as e:
             code = e.code
@@ -400,6 +460,8 @@ class Worker:
         deleted = [d for d in job.get("deletedRows") or [] if d.get("at", 0) >= since]
         self.storage.put_run(job_id, {"run": run_no, "scheduledBy": job.get("scheduledBy", ""), "scheduledAt": job.get("queuedAt"),
                                       "startedAt": started, "outcome": "Running", "disabledBefore": disabled, "deletedBefore": deleted})
+        if job.get("deletedRows"):  # now in the run item; the job item lists only the deletions since this run
+            self.storage.update_job(job_id, {"deletedRows": []})
         self.storage.drop_fix_originals(job_id)
         for r in rows:
             if r.get("supersededKey") or r.get("addedInFix"):
@@ -540,6 +602,10 @@ class Worker:
                     self._record(created, job_id, run_no, {"row": row["n"], "file": row["file"], "step": name, "csid": csid})
                 if name == "upload":
                     self._delete_staged(row)
+            except CSpaceUnavailable as e:
+                # the fifth failure in a row came from an earlier request: this one was never sent, so the step
+                # stays as it was, and the job stops (_finish settles the row)
+                raise JobStop("unavailable", e.detail) from e
             except (CSpaceError, _RowError) as e:
                 code, detail = (e.code, e.detail) if isinstance(e, _RowError) else classify(name, e)
                 st.clear()
@@ -587,10 +653,14 @@ class Worker:
             return None
         try:
             csid = client.create_group(group_xml(job.get("groupTitle") or ""))
+        except CSpaceUnavailable:
+            raise  # nothing was sent: run_row stops the job
         except CSpaceError as e:
             code, detail = classify("group", e)
             if code in JOB_LEVEL:
-                raise JobStop(code, detail) from e
+                # CollectionSpace refused the sign-in, so nothing was created: the row's addToGroup step fails with
+                # this code and run_row settles the row and stops the job, as for any other step (not interrupted)
+                raise _RowError(code, detail) from e
             self.storage.update_job(job_id, {"groupStep": {"s": "failed", "code": "group_failed", "detail": detail, "run": run_no}})
             return None
         self.storage.update_job(job_id, {"groupStep": {"s": "done", "csid": csid, "run": run_no}})
@@ -632,6 +702,8 @@ class Worker:
             return
         try:
             existing = client.find_media(idn)
+        except CSpaceUnavailable:
+            raise  # not sent: the job stops (run_row)
         except CSpaceError:
             return  # only a notice; the create itself reports real failures
         known = set(((row.get("lookups") or {}).get("media") or {}).get("csids") or [])

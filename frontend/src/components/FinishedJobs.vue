@@ -8,15 +8,16 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { api } from "../api";
 import { formatTime } from "../lib/files";
-import { countsText, failureOf, importantRows, loadFailures, needsFix, OUTCOME, RESULT_BADGE, resultState, rowCodes } from "../lib/results";
+import { countsText, failureOf, loadFailures, needsFix, OUTCOME } from "../lib/results";
 import type { Created, Job, Row, Run, TenantInfo } from "../types";
 import DeleteJobConfirm from "./DeleteJobConfirm.vue";
+import JobDocsTable from "./JobDocsTable.vue";
 import JobResults from "./JobResults.vue";
-import ThumbCell from "./ThumbCell.vue";
 import SortTh from "./SortTh.vue";
 import { tableState, tableView } from "../lib/table";
 
-const props = defineProps<{ tenant: TenantInfo }>();
+/** editWhy: why this user can't create or edit jobs (design: Permissions in the UI); "" when they can. */
+const props = defineProps<{ tenant: TenantInfo; editWhy?: string }>();
 const emit = defineEmits<{ open: [id: string] }>();
 
 const FINISHED = ["Completed", "NeedsAttention", "Failed"];
@@ -32,17 +33,6 @@ const busy = ref(false);
 let timer: ReturnType<typeof setInterval> | undefined;
 
 const table = tableState();
-// Each expanded job's 10 most important documents, sortable like every table (design: User interface)
-const innerTables = new Map<string, ReturnType<typeof tableState>>();
-function innerTable(id: string) {
-  if (!innerTables.has(id)) innerTables.set(id, tableState());
-  return innerTables.get(id)!;
-}
-function innerRows(id: string): Row[] {
-  return tableView(importantRows(details.get(id)!.rows), innerTable(id), {
-    n: (r) => r.n, name: (r) => r.file, result: (r) => resultState(r), message: (r) => mainMessage(r),
-  }, undefined, false).shown;
-}
 const OUT_RANK: Record<string, number> = { Failed: 0, NeedsAttention: 1, Completed: 2 };
 const newestFirst = computed(() => [...jobs.value].sort((a, b) => (b.finishedAt ?? b.updated) - (a.finishedAt ?? a.updated)));
 const sorted = computed(() => tableView(newestFirst.value, table, {
@@ -85,6 +75,7 @@ function fixLabel(j: Job): "Fix and reschedule" | "Reschedule" {
   return needsFix(j, details.get(j.id)?.rows ?? [], blocking.get(j.id) ?? 0) ? "Fix and reschedule" : "Reschedule";
 }
 function fixTitle(j: Job) {
+  if (props.editWhy) return props.editWhy;
   return fixLabel(j) === "Reschedule"
     ? "Nothing needs changing: every failure only needs another run. Opens the job in Drafts so you can schedule it again."
     : "Opens the job in Drafts to fix the documents that need it, then schedule it again.";
@@ -136,14 +127,6 @@ async function del(j: Job) {
 function removedOn(j: Job) {
   return j.expiresAt ? new Date(j.expiresAt * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "in 30 days";
 }
-function mainMessage(r: Row): string {
-  const s = resultState(r);
-  if (s === "Excluded") return `Excluded by ${r.disabledBy || "a user"}`;
-  if (s === "Done") return "Created in CollectionSpace";
-  if (s === "Not started") return "Not reached before the job stopped";
-  const code = rowCodes(r)[0];
-  return code ? failureOf(code).title : "";
-}
 </script>
 
 <template>
@@ -161,8 +144,8 @@ function mainMessage(r: Row): string {
           <DeleteJobConfirm v-if="confirmDelete === open.id" :job="open" :created="details.get(open.id)?.created"
                             @confirm="del(open)" @cancel="confirmDelete = null" />
           <template v-else>
-            <button class="primary" :disabled="busy" :title="fixTitle(open)" @click="fix(open)">{{ fixLabel(open) }}</button>
-            <button @click="askDelete(open)">Delete</button>
+            <button class="primary" :disabled="busy || !!editWhy" :title="fixTitle(open)" @click="fix(open)">{{ fixLabel(open) }}</button>
+            <button :disabled="!!editWhy" :title="editWhy" @click="askDelete(open)">Delete</button>
           </template>
         </template>
         <span v-else class="sub">Removed {{ removedOn(open) }}</span>
@@ -199,8 +182,8 @@ function mainMessage(r: Row): string {
                   <div v-else class="actions">
                     <button @click="viewResults(j)">View results</button>
                     <template v-if="j.status !== 'Completed'">
-                      <button :disabled="busy" :title="fixTitle(j)" @click="fix(j)">{{ fixLabel(j) }}</button>
-                      <button @click="askDelete(j)">Delete</button>
+                      <button :disabled="busy || !!editWhy" :title="fixTitle(j)" @click="fix(j)">{{ fixLabel(j) }}</button>
+                      <button :disabled="!!editWhy" :title="editWhy" @click="askDelete(j)">Delete</button>
                     </template>
                     <span v-else class="sub">Removed {{ removedOn(j) }}</span>
                   </div>
@@ -211,18 +194,8 @@ function mainMessage(r: Row): string {
                   <div class="sub">Run {{ j.run }} scheduled by {{ j.runBy || j.scheduledBy || "—" }} · started {{ formatTime(j.startedAt) }} · finished {{ formatTime(j.finishedAt) }}
                     <template v-if="j.cancelledBy"> · cancelled by {{ j.cancelledBy }}</template></div>
                   <p v-if="!details.get(j.id)" class="muted">Loading…</p>
-                  <table v-else class="inner">
-                    <thead><tr><th style="width:64px"></th><SortTh :state="innerTable(j.id)" sort-key="n" label="#" style="width:36px" />
-                      <SortTh :state="innerTable(j.id)" sort-key="name" label="Document" /><SortTh :state="innerTable(j.id)" sort-key="result" label="Result" style="width:110px" />
-                      <SortTh :state="innerTable(j.id)" sort-key="message" label="Problem" /></tr></thead>
-                    <tbody>
-                      <tr v-for="r in innerRows(j.id)" :key="r.n">
-                        <td style="width:64px"><ThumbCell :job-id="j.id" :row="r" /></td><td style="width:36px">{{ r.n }}</td><td>{{ r.file }}</td>
-                        <td style="width:110px"><span class="badge" :class="RESULT_BADGE[resultState(r)]">{{ resultState(r) }}</span></td>
-                        <td class="sub">{{ mainMessage(r) }}</td>
-                      </tr>
-                    </tbody>
-                  </table>
+                  <!-- The 10 most important documents, with what happened and what to do (UI mockup jobDocsTable) -->
+                  <JobDocsTable v-else :job="j" :rows="details.get(j.id)!.rows" :tenant="props.tenant" kind="history" />
                   <button class="link" @click="viewResults(j)">View all {{ j.rowCount }} documents' results</button>
                 </td>
               </tr>

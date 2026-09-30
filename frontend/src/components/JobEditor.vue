@@ -589,11 +589,12 @@ function toggle(n: number) {
         <template v-if="counts.warn"> · {{ counts.warn }} {{ counts.warn === 1 ? "has" : "have" }} warnings</template></span>
       <span class="spacer"></span>
       <button v-if="counts.block || counts.warn" @click="showProblems">Show documents with problems</button>
-      <button v-if="job?.status === 'Draft'" :disabled="!editable || busy"
+      <!-- Nothing to save or schedule in a preview (design: Drafts): that's for the person editing the draft -->
+      <button v-if="job?.status === 'Draft' && mode !== 'preview'" :disabled="!editable || busy"
               :title="`Every change is already saved; this confirms it and restarts the draft's ${job.protectedCount ? '7-day expiry (it has protected files)' : '30-day expiry'}`"
               @click="saveDraft">Save draft</button>
       <!-- A preview of a queued, running or finished job has nothing to schedule: that's done from its own tab -->
-      <button v-if="!readonly" class="primary" :disabled="!job || busy || !!scheduleBlocked || (job.status === 'Draft' && !editable)"
+      <button v-if="!readonly && mode !== 'preview'" class="primary" :disabled="!job || busy || !!scheduleBlocked || (job.status === 'Draft' && !editable)"
               :title="scheduleBlocked || 'Check the whole job again, then add it to the job queue'" @click="schedule">Schedule job</button>
       <div v-if="savedNote" class="result">{{ savedNote }}</div>
     </div>
