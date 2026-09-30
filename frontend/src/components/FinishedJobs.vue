@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ChevronIcon from "./ChevronIcon.vue";
 /**
  * The Finished jobs tab (design: Finished jobs and error messages): jobs that have run, newest first, with
  * their outcome, documents by result, when they finished and who ran them. View results shows every
@@ -162,7 +163,7 @@ function removedOn(j: Job) {
         <button class="link" @click="expandAll(false)">Collapse all</button></div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th style="width:28px"></th><SortTh :state="table" sort-key="name" label="Job" />
+          <thead><tr><th style="width:40px"></th><SortTh :state="table" sort-key="name" label="Job" />
             <SortTh :state="table" sort-key="outcome" label="Outcome" style="width:150px" /><SortTh :state="table" sort-key="docs" label="Documents" />
             <SortTh :state="table" sort-key="finished" label="Finished" style="width:140px" class="hide-narrow" /><th style="width:270px"></th></tr></thead>
           <tbody>
@@ -170,7 +171,7 @@ function removedOn(j: Job) {
             <template v-for="j in sorted" :key="j.id">
               <tr>
                 <td><button class="chevron" :class="{ open: expanded.has(j.id) }" :aria-expanded="expanded.has(j.id)"
-                            :aria-label="`Show details of ${j.name || 'Untitled job'}`" @click="toggle(j)">▸</button></td>
+                            :aria-label="`Show details of ${j.name || 'Untitled job'}`" @click="toggle(j)"><ChevronIcon /></button></td>
                 <td>{{ j.name || "Untitled job" }}<span v-if="j.run > 1" class="sub"> (run {{ j.run }})</span></td>
                 <td :title="j.code ? failureOf(j.code).title : ''"><span class="badge" :class="OUTCOME[j.status]?.cls">{{ OUTCOME[j.status]?.text }}</span>
                   <div v-if="j.code" class="sub">{{ failureOf(j.code).title }}</div></td>

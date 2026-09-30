@@ -15,13 +15,24 @@ export function canPreview(file: File): boolean {
   return /^image\/(jpeg|png|gif|webp)$/i.test(file.type);
 }
 
-/** Upload one file with a presigned POST, reporting progress (0–100). */
+/** An upload stopped on purpose (its document was deleted), not a failure. */
+export class UploadCancelled extends Error {
+  constructor() {
+    super("Upload cancelled");
+    this.name = "UploadCancelled";
+  }
+}
+
+/** Upload one file with a presigned POST, reporting progress (0–100). An abort signal stops it at once: S3 keeps
+ * nothing of a POST that didn't finish, and the promise rejects with UploadCancelled. */
 export function uploadToS3(
   form: { url: string; fields: Record<string, string> },
   file: File,
   onProgress: (pct: number) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new UploadCancelled());
     const data = new FormData();
     Object.entries(form.fields).forEach(([k, v]) => data.append(k, v));
     data.append("file", file);
@@ -30,6 +41,8 @@ export function uploadToS3(
     xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(Math.round((e.loaded / e.total) * 100));
     xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(`Upload failed (${xhr.status})`)));
     xhr.onerror = () => reject(new Error("Upload failed (network)"));
+    xhr.onabort = () => reject(new UploadCancelled());
+    signal?.addEventListener("abort", () => xhr.abort(), { once: true });
     xhr.send(data);
   });
 }

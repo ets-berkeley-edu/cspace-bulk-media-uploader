@@ -58,13 +58,20 @@ const toExclude = computed(() => includeTargets(selectedRows.value, false));
 const toInclude = computed(() => includeTargets(selectedRows.value, true));
 // Delete selected (design: Deleting a row): documents that created something in CollectionSpace stay.
 const toDelete = computed(() => selectedRows.value.filter((r) => !createdSomething(r)));
+/** Selected documents whose files are still uploading: deleting them stops the upload. */
+const uploadingCount = computed(() => toDelete.value.filter((r) => ["pending", "uploading", "verifying"].includes(r.upload.s)).length);
 const keptCount = computed(() => selectedRows.value.length - toDelete.value.length);
 const deletesAll = computed(() => toDelete.value.length > 0 && toDelete.value.length === props.rows.length);
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const deleteQuestion = computed(() => {
   const k = toDelete.value.length;
   return `Delete ${plural(k, "selected document")} from this job permanently? `
-    + `${k === 1 ? "Its uploaded file is removed" : "Their uploaded files are removed"}; nothing in CollectionSpace is touched.`
+    + (uploadingCount.value === k
+      ? `${k === 1 ? "Its upload is" : "Their uploads are"} stopped and anything already sent is removed`
+      : `${k === 1 ? "Its uploaded file is removed" : "Their uploaded files are removed"}`)
+    + "; nothing in CollectionSpace is touched."
+    + (uploadingCount.value && uploadingCount.value < k
+      ? ` ${plural(uploadingCount.value, "upload")} still in progress ${uploadingCount.value === 1 ? "is" : "are"} stopped.` : "")
     + (keptCount.value ? ` ${plural(keptCount.value, "selected document")} already created records in CollectionSpace and will stay (use Exclude for those).` : "")
     + (deletesAll.value ? " That's every document in the job, so the job is deleted too." : "");
 });

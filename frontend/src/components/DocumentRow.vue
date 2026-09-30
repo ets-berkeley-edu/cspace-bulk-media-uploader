@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ChevronIcon from "./ChevronIcon.vue";
 import { computed, nextTick, ref, watch } from "vue";
 import type { Handling, Option, Perms, Row, TenantInfo } from "../types";
 import { formatBytes } from "../lib/files";
@@ -24,6 +25,8 @@ const emit = defineEmits<{ edit: [changes: Partial<Row>]; remove: []; toggle: []
 
 // Design: a failed upload shows "Upload failed" with Retry and Remove. An upload this page isn't sending
 // (the page that added the file was closed, or it's another person's browser) won't finish on its own.
+/** Design (Deleting a row): a document whose file is still on its way; deleting it stops the upload. */
+const stillUploading = computed(() => ["pending", "uploading", "verifying"].includes(props.row.upload.s) && !mediaCreated(props.row));
 const stalled = computed(() => !props.uploadingHere && !mediaCreated(props.row) && ["pending", "uploading", "verifying"].includes(props.row.upload.s));
 const canRetry = computed(() => !props.readonly && props.row.include && !mediaCreated(props.row) && (props.row.upload.s === "failed" || stalled.value));
 const portal = computed(() => portalOf(props.row, props.tenant));
@@ -127,7 +130,7 @@ function text(field: keyof Row, e: Event) {
     <td><ThumbCell :job-id="jobId" :row="row" :preview="preview" /></td>
     <td class="keep"><input type="checkbox" :checked="selected" :aria-label="`Select ${row.file}`"
       @change="emit('select', ($event.target as HTMLInputElement).checked)" /></td>
-    <td class="keep"><button class="chevron" :class="{ open: expanded }" :aria-expanded="expanded" aria-label="Show details" @click="emit('toggle')">▸</button></td>
+    <td class="keep"><button class="chevron" :class="{ open: expanded }" :aria-expanded="expanded" aria-label="Show details" @click="emit('toggle')"><ChevronIcon /></button></td>
     <td>
       <div>{{ row.file }}<span v-if="renamed" class="badge b-accent" style="margin-left:6px" :title="`Original: ${original}`">Renamed</span>
         <span v-if="row.protected" class="badge b-danger" style="margin-left:6px" :title="`Protected file: ${row.protected.reason}`">🔒 Protected</span></div>
@@ -176,7 +179,8 @@ function text(field: keyof Row, e: Event) {
   <tr v-if="confirmDelete && !readonly" class="del-confirm">
     <td :colspan="cols">
       <div class="confirm-line" role="group" :aria-label="`Delete ${row.file}`">
-        <span>Delete “{{ row.file }}”? Its uploaded file is removed; nothing in CollectionSpace is touched.<template v-if="last">
+        <span>Delete “{{ row.file }}”? <template v-if="stillUploading">Its upload is stopped and anything already sent is removed</template><template
+          v-else>Its uploaded file is removed</template>; nothing in CollectionSpace is touched.<template v-if="last">
           This is the job's last document, so the job is deleted too.</template></span>
         <button type="button" class="danger" @click="doDelete">Delete</button>
         <button ref="delCancel" type="button" @click="cancelDelete">Cancel</button>
