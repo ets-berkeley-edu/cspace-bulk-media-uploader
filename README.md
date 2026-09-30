@@ -120,14 +120,34 @@ and Navajo (codes `eng`, `spa`, `fre`, `ger`, `chi`, `jpn`, `haw`, `nav`).
 
 The simulator's state is at http://localhost:8180/_fake/state; reset it with `curl -X POST localhost:8180/_fake/reset`.
 
+### Demo tools (demo builds only)
+
+The local stack shows a **Demo tools** pane under the sign-in bar. It collapses to one line (the triangle at its left),
+and your browser remembers that. From it you can:
+
+- slow the file transfers: the browser's uploads in Create / edit job (e.g. 1 MB/s), and in job runs, the file uploads
+  to CollectionSpace and an added delay per create;
+- make the simulated CollectionSpace fail at a step, with a status, a number of times, for matching documents;
+- delete, "merge away" (404) or rename a sample Person or Organization, and remove or rename a language;
+- reset the simulator, put browser uploads back to full speed, and delete every job in the tenant (except running
+  ones) to start a demo afresh;
+- see the simulator's sample objects, and copy the commands for the check scripts, the simulator and the tests.
+
+It is off everywhere else, twice over. The pane is only in demo builds: `npm run dev` and `npm run build:demo` include
+it, `npm run build` (production) leaves its code out of the bundle. Its server endpoints (`/api/_demo/...`) answer 404
+unless the web app runs with `BMU_DEMO=true`, which `docker-compose.yml` sets for the local stack only. They need a
+signed-in user. Nothing in them is part of the BMU's design: they drive the simulator's `/_fake` controls below, and
+slow a browser upload by sending the presigned form through the web app, which passes it on to S3 at the set speed.
+Use large sample files (50 MB or more) to watch a slowed upload: the first few MB fill network buffers at once.
+
 ### Changing things in the simulated CollectionSpace
 
 To watch the job queue, or to cancel a run partway, slow the simulated CollectionSpace down so each create and
 upload takes a while: `curl -X POST 'localhost:8180/_fake/slow?seconds=2'` (`seconds=0` turns it off). Add
 `upload_mbps` to also receive files slowly, so the running job's upload bar ("Now: …, uploading the file" with
 the share and MB sent) can be watched with large files: `curl -X POST 'localhost:8180/_fake/slow?seconds=1&upload_mbps=10'`.
-To slow the uploads in Create / edit job instead (the browser sends those straight to S3), use your browser's
-network throttling (Chrome DevTools → Network).
+To slow the uploads in Create / edit job instead (the browser sends those straight to S3), use Demo tools, or your
+browser's network throttling (Chrome DevTools → Network).
 
 To see how the BMU handles terms and languages that change after a document was filled in:
 
