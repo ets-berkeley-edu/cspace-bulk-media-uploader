@@ -97,3 +97,52 @@ describe("Submit job (design: Job scheduling)", () => {
     expect(await run({ at: Date.now() / 1000, ahead: 0 }, true)).toContain("Development setting: every moment counts as run time, so it starts now.");
   });
 });
+
+describe("the job's Group title (user decision: never derived from the job name)", () => {
+  it("starts empty and required; the buttons fill it once and renaming the job doesn't change it", async () => {
+    let job: Job = { ...draft, groupOn: true, groupTitle: "" } as Job;
+    const patches: Record<string, unknown>[] = [];
+    vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      let body: unknown = {};
+      if (url.endsWith("/api/jobs/j1") && method === "GET") body = { job, rows: [row], runs: [], created: {} };
+      else if (url.endsWith("/check")) body = { rows: [row], counts: { block: 0, warn: 0 } };
+      else if (url.endsWith("/api/jobs/j1") && method === "PATCH") {
+        const f = JSON.parse(String(init?.body));
+        patches.push(f);
+        job = { ...job, ...f };
+        body = job;
+      } else if (url.includes("/vocabularies/")) body = { terms: [] };
+      else if (url.endsWith("/api/failures")) body = { failures: {} };
+      return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } }));
+    }));
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(Date.UTC(2026, 8, 30, 20, 1, 2))); // 1:01:02 PM Pacific
+    try {
+      const w = mount(JobEditor, { props: { me, jobId: "j1" }, global: { stubs: { ThumbCell: true } } });
+      await flushPromises();
+      const title = w.find('input[aria-label="Object group title"]');
+      const btn = (t: string) => w.findAll("button").find((b) => b.text() === t)!;
+      expect((title.element as HTMLInputElement).value).toBe("");
+      expect(btn("Submit job").attributes("title")).toBe("Enter a group title, or turn off the job's group");
+      const nameInput = w.find('input[placeholder="e.g. 2026 spring accession batch"]');
+      await nameInput.setValue("Spring  batch #2");
+      await btn("Use the job name").trigger("click");
+      await flushPromises();
+      expect(patches.at(-1)).toEqual({ groupTitle: "Spring  batch #2" }); // exactly as typed
+      expect((title.element as HTMLInputElement).value).toBe("Spring  batch #2");
+      await nameInput.setValue("Renamed");
+      await nameInput.trigger("change");
+      await flushPromises();
+      expect(patches.at(-1)).toEqual({ name: "Renamed" });
+      expect((title.element as HTMLInputElement).value).toBe("Spring  batch #2");
+      await btn("Use a timestamp").trigger("click");
+      await flushPromises();
+      expect(patches.at(-1)).toEqual({ groupTitle: "bmu-2026-09-30-13-01-02" });
+      expect((title.element as HTMLInputElement).value).toBe("bmu-2026-09-30-13-01-02");
+      w.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

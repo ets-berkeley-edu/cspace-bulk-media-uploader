@@ -149,18 +149,18 @@ function checksText(c: { block: number; warn: number }) {
           <span><strong>Expires</strong> {{ expires }}</span>
         </template>
         <template v-else>
-          <span><strong>Scheduled</strong> {{ formatTime(job.queuedAt) }} by {{ job.scheduledBy || "—" }}</span>
-          <span v-if="job.checksAtSchedule"><strong>At scheduling</strong> {{ checksText(job.checksAtSchedule) }}</span>
+          <span><strong>Submitted</strong> {{ formatTime(job.queuedAt) }} by {{ job.scheduledBy || "—" }}</span>
+          <span v-if="job.checksAtSchedule"><strong>At submission</strong> {{ checksText(job.checksAtSchedule) }}</span>
         </template>
         <span v-if="!running && checkedAt"><strong>Checks now</strong>
           <span class="badge" :class="counts.block ? 'b-danger' : counts.warn ? 'b-warn' : 'b-ok'">{{ checksText(counts) }}</span></span>
       </div>
       <div v-if="job.note" class="msg msg-warn">{{ job.note }}</div>
       <div v-if="counts.block && job.status === 'Queued'" class="msg msg-block" role="alert">Something changed in CollectionSpace since this job was
-        scheduled: {{ counts.block }} document{{ counts.block === 1 ? " now needs" : "s now need" }} fixing. Edit the job to fix
+        submitted: {{ counts.block }} document{{ counts.block === 1 ? " now needs" : "s now need" }} fixing. Edit the job to fix
         {{ counts.block === 1 ? "it" : "them" }} before it runs.</div>
       <div v-if="counts.block && draft" class="banner">This draft has {{ counts.block }} document{{ counts.block === 1 ? "" : "s" }} that
-        need{{ counts.block === 1 ? "s" : "" }} fixing before it can be scheduled.</div>
+        need{{ counts.block === 1 ? "s" : "" }} fixing before it can be submitted.</div>
 
       <PagerBar :state="table" :total="view.total" :of="view.of" :pages="view.pages" :start="view.start" noun="documents" :filters="filters" />
       <div class="table-wrap">

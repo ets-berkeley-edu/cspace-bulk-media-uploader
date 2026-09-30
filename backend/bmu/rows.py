@@ -6,16 +6,16 @@ import time
 from typing import Any, Callable
 
 from .cspace import CSpaceClient, CSpaceError
+from .cspace.client import display_name
 from .filetypes import SUPPORTED_EXTENSIONS, SUPPORTED_HINT
 from .sensitivity import evaluate as evaluate_sensitivity
-from .tenant import OBJECT_STEPS, Tenant, parse_filename
+from .tenant import AUTHORITY_REF, LANGUAGE_REF, OBJECT_STEPS, PRESETTABLE, Tenant, parse_filename
 
 EDITABLE = {"handling", "obj", "idnum", "date", "restricted", "type", "language", "creator", "contributor",
             "rightsHolder", "description", "copyright", "include", "file", "skipLink", "group"}
 # Repeating fields (design: Media record fields): media type values from the tenant's option list, and
 # language refNames from the languages vocabulary.
 REPEATING = {"type", "language"}
-_LANGUAGE_REF = re.compile(r"^urn:cspace:[^:]+:vocabularies:name\(languages\):item:name\([^)]+\)'[^']*'$")
 AUTHORITY_FIELDS = {"creator", "contributor", "rightsHolder"}
 
 ROW_STATES = ("Not started", "In progress", "Done", "Partial", "Failed")
@@ -86,8 +86,28 @@ def new_row(tenant: Tenant, filename: str, size: int, content_type: str, date: s
         "type": [], "language": [tenant.language_default], "creator": "", "contributor": "", "rightsHolder": "", "description": "", "copyright": "",
         "include": True, "group": True, "upload": {"s": "pending"}, "checks": [], "result": None, "touched": [],
     }
+    apply_presets(tenant, row)
     row["idnum"] = default_idnum(tenant, row)
     return row
+
+
+def apply_presets(tenant: Tenant, row: dict) -> None:
+    """Design (Handling per document): the row's handling's presets fill its presettable fields, except fields the
+    user has edited (touched), which keep the edit. A field the new handling doesn't preset is emptied (Language
+    takes the tenant's default), so no preset of the previous handling is left behind."""
+    touched = set(row.get("touched") or [])
+    for name in PRESETTABLE:
+        if name not in touched:
+            row[name] = tenant.preset_value(row["handling"], name)
+
+
+def from_preset(tenant: Tenant, row: dict, name: str) -> bool:
+    """The field still holds what a preset put there: the user hasn't edited it, and it equals its handling's
+    preset or, for Language without one, the tenant's default language (design: presets are marked as presets)."""
+    if name in (row.get("touched") or []):
+        return False
+    preset = tenant.preset_value(row.get("handling", ""), name)
+    return bool(preset) and row.get(name) == preset
 
 
 def default_idnum(tenant: Tenant, row: dict) -> str:
@@ -221,7 +241,7 @@ def apply_edit(tenant: Tenant, row: dict, changes: dict[str, Any], other_names: 
                 bad = [x for x in v if x not in tenant.media_type_values]
                 if bad:
                     raise ValueError(f"Unknown media type {bad[0]!r}")
-            elif any(not _LANGUAGE_REF.match(x) for x in v):
+            elif any(not LANGUAGE_REF.match(x) for x in v):
                 raise ValueError("language must be refNames chosen from the languages vocabulary")
         elif k in AUTHORITY_FIELDS:
             if v and not v.startswith("urn:cspace:"):
@@ -237,9 +257,13 @@ def apply_edit(tenant: Tenant, row: dict, changes: dict[str, Any], other_names: 
         row.update(objParsed=p["obj"], img=p["img"], parseOk=p["ok"])
         if "obj" not in changes and row.get("obj") == old_obj_parsed:
             row["obj"] = p["obj"]
+    row["touched"] = sorted(touched)
+    # Design (Handling per document): changing handling re-applies presets to the fields the user hasn't edited.
+    # Not on a row whose Media record exists: its fields were sent already, and only its link changes.
+    if "handling" in changes and not media_created(row):
+        apply_presets(tenant, row)
     if "idnum" not in changes and row.get("idnum") == old_id_default and not media_created(row):
         row["idnum"] = default_idnum(tenant, row)  # it still held its derived value, so it follows
-    row["touched"] = sorted(touched)
     return row
 
 
@@ -301,7 +325,8 @@ LOOKUP_TTL_SECONDS = 600
 
 def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: dict[str, bool],
                targets: set[int] | None = None, refresh: bool = False, group_on: bool = False,
-               set_publish: bool = True, group_exists: bool = False) -> set[int]:
+               set_publish: bool = True, group_exists: bool = False,
+               languages: Callable[[], list[dict]] | None = None) -> set[int]:
     """Set each row's checks: [{level: block|warn|info, text}]. "block" rows must be fixed before scheduling.
 
     The editor calls this for the rows that just changed (targets) and re-evaluates every row, because some
@@ -312,6 +337,9 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
     set_publish=False (a job that isn't a draft): a newly protected file is reported, but its publish setting
     is left as the user scheduled it. group_exists: the job's Group was created by an earlier run, so joining it
     needs create on relations only, not on groups.
+    Authority terms (creator, contributor, rights holder) are looked up one by one, kept like the other lookups,
+    and each distinct refName is read at most once per call. languages: returns the languages vocabulary's terms
+    (the list the Language picker offers); None skips the language check.
     Returns the rows whose lookups weren't known, so their checks are partial and must not be saved.
     """
     now = time.time()
@@ -353,6 +381,91 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
         r.setdefault("lookups", {})["objectSensitivity"] = entry
         return entry
 
+    terms: dict[str, list[str] | CSpaceError] = {}  # refName -> [its current refName] or [] (gone), once per call
+    services = {a["service"] for a in tenant.authorities.values()}
+
+    def term_exists(r: dict, name: str, ref: str) -> bool | None:
+        """Design (Authority term fields): whether the term in this field still exists and isn't deleted, kept
+        like a lookup (under "term:<field>"); None if not known yet. A failed read raises CSpaceError (for every
+        row with that refName, without asking again), so a term that couldn't be checked isn't called missing."""
+        kind = f"term:{name}"
+        stored = (r.get("lookups") or {}).get(kind)
+        may_query = targets is None or r["n"] in targets
+        if stored is not None and stored.get("value") == ref and not refresh and (not may_query or now - stored["at"] < LOOKUP_TTL_SECONDS):
+            return bool(stored["csids"])
+        if not may_query:
+            incomplete.add(r["n"])
+            return None
+        if ref not in terms:
+            m = AUTHORITY_REF.match(ref)
+            try:  # a refName that isn't one of the tenant's authorities' can't name an existing term
+                current = client.authority_term(m["service"], m["vocab"], m["short"]) if m and m["service"] in services else None
+                terms[ref] = [current] if current else []
+            except CSpaceError as e:
+                terms[ref] = e
+        found = terms[ref]
+        if isinstance(found, CSpaceError):
+            raise found
+        r.setdefault("lookups", {})[kind] = {"value": ref, "csids": found, "at": int(now)}
+        return bool(found)
+
+    vocab: dict[str, set[str] | CSpaceError] = {}
+
+    def language_ids() -> set[str]:
+        """The languages vocabulary's terms, as refNames without their display names (a renamed term is the same
+        term); read once per call. Raises CSpaceError if it couldn't be read."""
+        if "languages" not in vocab:
+            try:
+                vocab["languages"] = {_term_id(t["refName"]) for t in languages()} if languages else set()
+            except CSpaceError as e:
+                vocab["languages"] = e
+        got = vocab["languages"]
+        if isinstance(got, CSpaceError):
+            raise got
+        return got
+
+    def preset_note(r: dict, name: str) -> str:
+        return (f" It was filled in from {tenant.name}’s preset, so the preset needs updating too: tell the BMU administrator."
+                if from_preset(tenant, r, name) else "")
+
+    def value_checks(r: dict) -> list[dict]:
+        """Design (Media record fields; Authority term fields): values must still exist where they come from. An
+        authority term deleted or merged in CollectionSpace, a language no longer in the vocabulary, or a media type
+        no longer in the tenant's option list blocks the row. A term whose authority the user can't read is left to
+        authority_read_checks."""
+        out: list[dict[str, str]] = []
+        for name, label in AUTHORITY_LABEL.items():
+            ref = r.get(name) or ""
+            if not ref:
+                (r.get("lookups") or {}).pop(f"term:{name}", None)
+                continue
+            if not authority_readable(ref, perms):
+                continue
+            try:
+                exists = term_exists(r, name, ref)
+            except CSpaceError as e:
+                out.append({"level": "warn", "text": f"Couldn't check {label} “{display_name(ref)}” in CollectionSpace ({e.code})."})
+                continue
+            if exists is False:
+                out.append({"level": "block", "text": f"{label} “{display_name(ref)}” no longer exists in CollectionSpace (it was "
+                                                      f"deleted, or merged into another term). Choose another {label.lower()}."
+                                                      + preset_note(r, name)})
+        chosen = [x for x in r.get("language") or [] if x]
+        if chosen and languages is not None:
+            try:
+                known = language_ids()
+            except CSpaceError as e:
+                out.append({"level": "warn", "text": f"Couldn't check the language list in CollectionSpace ({e.code})."})
+            else:
+                out += [{"level": "block", "text": f"Language “{display_name(x)}” is no longer in CollectionSpace’s language list. "
+                                                   f"Choose another language.{preset_note(r, 'language')}"}
+                        for x in chosen if _term_id(x) not in known]
+        for v in r.get("type") or []:
+            if v and v not in tenant.media_type_values:
+                out.append({"level": "block", "text": f"Media type “{v}” isn’t one of {tenant.name}’s media types. "
+                                                      f"Choose another media type.{preset_note(r, 'type')}"})
+        return out
+
     def lookup(r: dict, kind: str, value: str, search: Callable[[str], list[str]]) -> list[str] | None:
         """CSIDs found for value, from the row's stored lookup or a new search; None when not known yet."""
         stored = (r.get("lookups") or {}).get(kind)
@@ -393,9 +506,7 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
         if ext not in SUPPORTED_EXTENSIONS:
             out.append({"level": "block", "text": f"The BMU doesn't accept .{ext or '(no extension)'} files. "
                                                   f"Supported types: {SUPPORTED_HINT}."})
-        if not perms.get("media"):
-            out.append({"level": "block", "text": "Your CollectionSpace account can't create Media records."})
-        elif not perms.get("mediaUpdate", True):
+        if not perms.get("mediaUpdate", True):
             out.append({"level": "block", "text": "Your account can't update Media records, which attaching the file needs "
                                                   "(update on media). Ask a CollectionSpace administrator for the permission."})
         if h.object != "none" and not perms.get("readObjects", True):
@@ -460,6 +571,7 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
         out += authority_read_checks(r, perms)
         if not [x for x in r.get("language") or [] if x]:  # design: Language is required; what's shown is what's sent
             out.append({"level": "block", "text": "Choose at least one language."})
+        out += value_checks(r)
         if r.get("date") and not perms.get("readDates", True):
             out.append({"level": "block", "text": "Your account can't use CollectionSpace's date parser (read on structureddates), "
                                                   "so the date can't be checked. Clear the date, or ask for the permission."})
@@ -470,7 +582,7 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
                 pd = parsed_date(r, r["date"])
             except CSpaceError as e:
                 pd = None
-                out.append({"level": "block", "text": f"Couldn't check the date with CollectionSpace ({e.code}). It is checked again when you schedule."})
+                out.append({"level": "block", "text": f"Couldn't check the date with CollectionSpace ({e.code}). It is checked again when you submit the job."})
             if pd is not None and not pd["ok"]:
                 out.append({"level": "block", "text": f"CollectionSpace can't interpret the date “{r['date']}”. Correct it or clear it."})
         elif (r.get("lookups") or {}).get("date"):
@@ -483,6 +595,17 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
 
 AUTHORITY_LABEL = {"creator": "Creator", "contributor": "Contributor", "rightsHolder": "Rights holder"}
 _AUTHORITY_READ = {"personauthorities": ("readPersons", "Person"), "orgauthorities": ("readOrgs", "Organization")}
+
+
+def _term_id(ref: str) -> str:
+    """A refName without its display name: urn:...:item:name(eng)'English' -> urn:...:item:name(eng)."""
+    return ref[:ref.index("'")] if "'" in ref else ref
+
+
+def authority_readable(ref: str, perms: dict[str, bool]) -> bool:
+    """The user can read the authority this refName is from (unknown authorities count as readable)."""
+    service = next((s for s in _AUTHORITY_READ if f":{s}:" in ref), None)
+    return not service or perms.get(_AUTHORITY_READ[service][0], True)
 
 
 def authority_read_checks(r: dict, perms: dict[str, bool]) -> list[dict]:
@@ -619,10 +742,10 @@ def _rerun_checks(tenant: Tenant, r: dict, perms: dict[str, bool], lookup, clien
         out.append({"level": "block", "text": "Your account can't create groups. Turn off the job's group, or untick this document's Group."})
     if open_steps(r, REL_STEPS) and not perms.get("relations"):
         out.append({"level": "block", "text": "Your account can't create relations, so this Media record can't be linked to its "
-                                              "object. Stop linking it, or have someone who can reschedule the job."})
+                                              "object. Stop linking it, or have someone with that permission submit the job."})
     elif in_group and not perms.get("relations"):  # joining the Group is two relations too
         out.append({"level": "block", "text": "Your account can't create relations, so this document's object can't be added to "
-                                              "the job's group. Untick this document's Group, or have someone who can reschedule the job."})
+                                              "the job's group. Untick this document's Group, or have someone with that permission submit the job."})
     # The handling's object step, if it hasn't found or created the object yet (after the handling changed from
     # "Create new object + link", the new step hasn't run at all)
     if obj_step and (st.get(obj_step) or {}).get("s") not in FINISHED and not object_step_ran(r):
@@ -632,7 +755,7 @@ def _rerun_checks(tenant: Tenant, r: dict, perms: dict[str, bool], lookup, clien
             return out
         if not perms.get("readObjects", True):  # design: a check the row needs but can't run blocks it
             out.append({"level": "block", "text": "Your account can't read Object records, so the BMU can't find this document's "
-                                                  "object. Ask for read on objects, or have someone who can reschedule the job."})
+                                                  "object. Ask for read on objects, or have someone with that permission submit the job."})
             return out
         try:
             found = lookup(r, "object", num, client.find_objects)

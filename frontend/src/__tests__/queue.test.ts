@@ -54,7 +54,7 @@ describe("Job queue (design: The job queue)", () => {
     expect(names[2]).toContain("second queued");
     expect(w.text()).not.toContain("a draft");
     expect(rowOf(w, "second queued").text()).toContain("⚠ sign-in expires in ~2 h");
-    expect(rowOf(w, "second queued").text()).toContain("Changed since scheduled");
+    expect(rowOf(w, "second queued").text()).toContain("Changed since submitted");
     w.unmount();
   });
 

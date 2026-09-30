@@ -49,6 +49,11 @@ const handlingLabel = (r: Row) => props.tenant.handling.find((h) => h.id === r.h
 const newestFirst = computed(() => [...props.runs].sort((a, b) => b.run - a.run));
 const outcome = (o: string) => OUTCOME[o] ?? { text: o, cls: "b-muted" };
 const earlierProblem = (r: Row) => r.result?.error?.code;
+/** The technical detail of the job-level failure (design: "technical detail shown on request"); jobs that ended
+ *  before the worker stored codeDetail fall back to what the job itself says. */
+const jobDetail = computed(() => props.job.codeDetail
+  || (props.job.cancelledBy ? `Cancel requested by ${props.job.cancelledBy}` : props.job.code === "group_failed" ? props.job.groupStep?.detail : undefined)
+  || undefined);
 </script>
 
 <template>
@@ -60,7 +65,7 @@ const earlierProblem = (r: Row) => r.result?.error?.code;
       <div v-for="rn in newestFirst" :key="rn.run" class="msg" :class="rn.outcome === 'Completed' ? 'msg-info' : 'msg-warn'">
         <strong>Run {{ rn.run }}: {{ outcome(rn.outcome).text }}<template v-if="rn.code"> — {{ failureOf(rn.code).title }}</template></strong>
         <template v-if="rn.counts"> · {{ countsText(rn.counts) }}</template>
-        <div class="sub">Scheduled by {{ rn.scheduledBy || "—" }}<template v-if="rn.scheduledAt"> ({{ formatTime(rn.scheduledAt) }})</template>
+        <div class="sub">Submitted by {{ rn.scheduledBy || "—" }}<template v-if="rn.scheduledAt"> ({{ formatTime(rn.scheduledAt) }})</template>
           · started {{ formatTime(rn.startedAt) }} · ended {{ rn.endedAt ? formatTime(rn.endedAt) : "—" }}</div>
         <div v-if="rn.cancelledBy" class="sub">Cancelled by {{ rn.cancelledBy }}<template v-if="rn.cancelledAt"> ({{ formatTime(rn.cancelledAt) }})</template></div>
         <div v-if="rn.disabledBefore?.length || rn.deletedBefore?.length" class="sub">Before this run:
@@ -74,7 +79,7 @@ const earlierProblem = (r: Row) => r.result?.error?.code;
       <template v-if="job.groupStep?.s === 'done'">created in run {{ job.groupStep.run }} (<code>{{ job.groupStep.csid }}</code>)</template>
       <template v-else-if="job.groupStep?.s === 'failed'">couldn't be created in run {{ job.groupStep.run }}</template>
       <template v-else>not created (no document reached the point of joining it)</template></div>
-    <div v-if="job.code" style="margin:8px 0"><ErrorBox :code="job.code" :detail="job.cancelledBy ? `Cancel requested by ${job.cancelledBy}` : job.code === 'group_failed' ? job.groupStep?.detail : undefined" /></div>
+    <div v-if="job.code" style="margin:8px 0"><ErrorBox :code="job.code" :detail="jobDetail" /></div>
 
     <PagerBar :state="table" :total="view.total" :of="view.of" :pages="view.pages" :start="view.start" noun="documents" :filters="FILTERS" />
     <div class="table-wrap">

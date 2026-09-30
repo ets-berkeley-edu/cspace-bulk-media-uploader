@@ -98,6 +98,17 @@ export function ptInputValue(sec: number): string {
   return `${p.y}-${pad2(p.mo + 1)}-${pad2(p.d)}T${pad2(p.h)}:${pad2(p.mi)}`;
 }
 
+/**
+ * The Group title "Use a timestamp" fills (user decision; the legacy `=job` convention): bmu-YYYY-MM-DD-HH-MM-SS
+ * in Pacific time, at the moment of clicking.
+ */
+export function groupTimestampTitle(ms = Date.now()): string {
+  const o: Record<string, string> = {};
+  new Intl.DateTimeFormat("en-US", { timeZone: PT_TZ, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit" }).formatToParts(new Date(ms)).forEach((p) => { o[p.type] = p.value; });
+  return `bmu-${o.year}-${o.month}-${o.day}-${o.hour}-${o.minute}-${o.second}`;
+}
+
 /** A datetime-local value read as Pacific time → epoch seconds, or null if it isn't a date and time. */
 export function parsePtInput(v: string): number | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(v || "");

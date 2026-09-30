@@ -80,7 +80,7 @@ function countsOf(id: string): { block: number; warn: number } | null {
 
 <template>
   <div>
-    <p class="subtitle">Jobs saved but not scheduled, including incomplete jobs and jobs with problems. Everyone signed in can see and
+    <p class="subtitle">Jobs saved but not submitted, including incomplete jobs and jobs with problems. Everyone signed in can see and
       edit them, one person at a time; you can take over a draft someone else is editing. A draft that has never run is deleted
       30 days after it was last changed or saved (7 days if it has protected files); a fix of a job that has run is reverted instead, and the job returns to Finished jobs. Checks are re-run against CollectionSpace each time this list is shown.</p>
     <div v-if="error" class="msg msg-block">{{ error }}</div>
@@ -93,7 +93,7 @@ function countsOf(id: string): { block: number; warn: number } | null {
           <SortTh :state="table" sort-key="editing" label="Editing" style="width:110px" /><SortTh :state="table" sort-key="expires" label="Expires" style="width:140px" />
           <th style="width:250px"></th></tr></thead>
         <tbody>
-          <tr v-if="!drafts.length"><td colspan="8" class="muted" style="text-align:center;padding:18px">No drafts. A job you start in Create / edit job is a draft until you schedule it.</td></tr>
+          <tr v-if="!drafts.length"><td colspan="8" class="muted" style="text-align:center;padding:18px">No drafts. A job you start in Create / edit job is a draft until you submit it.</td></tr>
           <template v-for="j in sorted" :key="j.id">
           <tr>
             <td><button class="chevron" :class="{ open: expanded.has(j.id) }" :aria-expanded="expanded.has(j.id)"

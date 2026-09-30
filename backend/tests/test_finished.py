@@ -82,7 +82,7 @@ def test_upload_too_large_then_replace_file_and_rerun(api, login, add_uploaded, 
     # Only drafts can be scheduled: the job goes to Drafts first
     assert api.post(f"/api/jobs/{job}/schedule").status_code == 409
     fixed = api.post(f"/api/jobs/{job}/fix").json()
-    assert fixed["status"] == "Draft" and fixed["editingByYou"] and fixed["fixFrom"] == {"status": "NeedsAttention", "code": "", "run": 1}
+    assert fixed["status"] == "Draft" and fixed["editingByYou"] and fixed["fixFrom"] == {"status": "NeedsAttention", "code": "", "codeDetail": "", "run": 1}
     # the Media record exists: its fields can't change, and it can't be deleted
     n = row["n"]
     r = api.patch(f"/api/jobs/{job}/rows/{n}", json={"description": "new"})
@@ -258,11 +258,16 @@ def test_sign_in_failure_fails_the_job_and_reschedule_continues(api, login, add_
     j = run_once(api, job, worker)
     assert j["job"]["status"] == "Failed" and j["job"]["code"] == "auth"
     assert j["runs"][0]["code"] == "auth" and j["job"]["counts"]["notStarted"] == 1
+    # the technical detail shown on request: where it happened and the HTTP status (design: Finished jobs)
+    assert j["job"]["codeDetail"] == "Document 1, step media: POST media returned 401"
+    assert j["runs"][0]["codeDetail"] == j["job"]["codeDetail"]
     fixed = api.post(f"/api/jobs/{job}/fix").json()
-    assert fixed["fixFrom"]["code"] == "auth"
+    assert fixed["fixFrom"]["code"] == "auth" and fixed["fixFrom"]["codeDetail"] == j["job"]["codeDetail"]
     assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
     worker.tick()
-    assert api.get(f"/api/jobs/{job}").json()["job"]["status"] == "Completed"
+    j = api.get(f"/api/jobs/{job}").json()
+    assert j["job"]["status"] == "Completed" and j["job"]["code"] == "" and j["job"]["codeDetail"] == ""
+    assert j["runs"][1]["codeDetail"] == ""
 
 
 def test_five_failed_requests_in_a_row_stop_the_job(api, login, add_uploaded, worker, fail_on):
@@ -276,6 +281,8 @@ def test_five_failed_requests_in_a_row_stop_the_job(api, login, add_uploaded, wo
     j = run_once(api, job, worker)
     assert j["job"]["status"] == "Failed" and j["job"]["code"] == "unavailable"
     assert j["job"]["counts"]["failed"] == 2 and j["job"]["counts"]["notStarted"] == 2
+    assert j["job"]["codeDetail"] == ("5 requests in a row to CollectionSpace failed, the last: POST media returned 503 "
+                                      "Service Unavailable; stopped at document 2, step findObject")
     assert [(r["result"] or {}).get("state", "Not started") for r in j["rows"]][:2] == ["Failed", "Failed"]
 
 
@@ -305,6 +312,7 @@ def test_a_running_job_whose_worker_stopped_fails_as_worker_stopped(api, login, 
     assert j["job"]["status"] == "Failed" and j["job"]["code"] == "worker_stopped"
     assert j["rows"][0]["result"]["state"] == "Partial"
     assert j["runs"][0]["outcome"] == "Failed" and j["runs"][0]["code"] == "worker_stopped"
+    assert j["job"]["codeDetail"] == "No heartbeat for 10 minutes" == j["runs"][0]["codeDetail"]
     assert services.storage.get_credential(job) is None
     # the row the worker was on can't be deleted: a create may have reached CollectionSpace
     api.post(f"/api/jobs/{job}/fix")
@@ -348,6 +356,7 @@ def test_cancelled_run_is_recorded_in_the_run_history(api, login, add_uploaded, 
     worker.tick()
     j = api.get(f"/api/jobs/{job}").json()
     assert j["job"]["code"] == "cancelled" and j["runs"][0]["cancelledBy"] == "admin"
+    assert j["job"]["codeDetail"].startswith("Cancel requested by admin, ") and j["job"]["codeDetail"].endswith(" Pacific time")
     assert j["job"]["counts"] == {"done": 1, "partial": 0, "failed": 0, "notStarted": 1, "disabled": 0}
 
 
@@ -619,6 +628,7 @@ def test_a_job_left_stopping_is_finished_as_worker_stopped(api, login, add_uploa
     j = api.get(f"/api/jobs/{job}").json()
     assert j["job"]["status"] == "Failed" and j["job"]["code"] == "worker_stopped"
     assert j["rows"][0]["result"]["state"] == "Partial" and j["runs"][0]["outcome"] == "Failed"
+    assert j["job"]["codeDetail"] == "No heartbeat"  # the interrupted sweep's own detail wasn't stored
     assert services.storage.get_credential(job) is None
     assert worker.sweep_interrupted_transitions() == []  # done once
 
@@ -753,7 +763,7 @@ def test_the_group_step_stops_the_job_when_the_client_refuses_to_send(api, login
     login()
     job = new_job(api)
     add_uploaded(job, ["15-1234_1.jpg"])
-    api.patch(f"/api/jobs/{job}", json={"groupOn": True})
+    api.patch(f"/api/jobs/{job}", json={"groupOn": True, "groupTitle": "Survey batch 4"})
     from bmu.cspace import CSpaceClient
 
     def unavailable(self, xml):
@@ -771,7 +781,7 @@ def test_a_sign_in_failure_creating_the_group_fails_the_step_not_the_row(api, lo
     login()
     job = new_job(api)
     add_uploaded(job, ["15-1234_1.jpg", "12-5678_1.jpg"])
-    api.patch(f"/api/jobs/{job}", json={"groupOn": True})
+    api.patch(f"/api/jobs/{job}", json={"groupOn": True, "groupTitle": "Survey batch 4"})
     fail_on("group", status=401)
     j = run_once(api, job, worker)
     assert j["job"]["status"] == "Failed" and j["job"]["code"] == "auth"
@@ -829,3 +839,159 @@ def test_a_fixs_expiry_is_kept_in_draft_expires_at_not_the_ttl_attribute(api, lo
     worker.tick()
     item = services.storage.get_job(job)
     assert item["status"] == "Completed" and item.get("draftExpiresAt") is None and item["expiresAt"] > now() + 29 * 86400
+
+
+# ---- an unexpected error ends the run the normal way (code "unknown") ------------------------------------------
+def test_an_unexpected_error_during_a_row_finishes_the_job_as_unknown(api, login, add_uploaded, worker, services, caplog):
+    """Anything the worker doesn't expect (here DynamoDB refusing a write) ends the run at once: the job fails with
+    code unknown and a technical detail naming the exception type and where, never its message; the saved sign-in
+    is deleted, the run lock released, and the run item and audit entry written as for any other ending."""
+    from botocore.exceptions import ClientError
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_1.jpg", "12-5678_1.jpg"])
+    real = worker._delete_staged
+
+    def broken(row):
+        if row["n"] == 2:
+            raise ClientError({"Error": {"Code": "ProvisionedThroughputExceededException", "Message": "secret-ish text"}}, "UpdateItem")
+        return real(row)
+    worker._delete_staged = broken
+    j = run_once(api, job, worker)
+    assert j["job"]["status"] == "Failed" and j["job"]["code"] == "unknown"
+    assert j["job"]["codeDetail"] == ("Unexpected ClientError ProvisionedThroughputExceededException in UpdateItem "
+                                      "at document 2, step upload")
+    assert "secret-ish" not in j["job"]["codeDetail"]
+    assert j["runs"][0]["outcome"] == "Failed" and j["runs"][0]["code"] == "unknown"
+    assert j["runs"][0]["codeDetail"] == j["job"]["codeDetail"]
+    assert [r["result"]["state"] for r in j["rows"]] == ["Done", "Partial"]  # the row it was on is settled
+    assert j["rows"][1]["result"]["interrupted"] == 1
+    assert services.storage.get_credential(job) is None
+    assert services.storage.acquire_lock("pahma", "someone-else", 60)  # released
+    run_entry = next(a for a in services.storage.list_audit("pahma") if a["type"] == "Run")
+    assert "Run 1: Failed (unknown)" in run_entry["detail"] and run_entry["codeDetail"] == j["job"]["codeDetail"]
+    assert "unexpected error at document 2, step upload" in caplog.text  # logged with its traceback
+    # Reschedule continues: only what isn't done runs again
+    api.post(f"/api/jobs/{job}/fix")
+    worker._delete_staged = real
+    services.storage.release_lock("pahma", "someone-else")
+    j = run_once(api, job, worker)
+    assert j["job"]["status"] == "Completed" and j["job"]["codeDetail"] == ""
+
+
+def test_an_unexpected_error_before_any_row_names_the_start_and_never_the_password(api, login, add_uploaded, worker, services):
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_1.jpg"])
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+
+    def cannot_decrypt(*a, **k):
+        raise ValueError("the password was admin")
+    worker.crypto = type("Broken", (), {"decrypt": staticmethod(cannot_decrypt)})()
+    assert worker.tick() is True
+    j = api.get(f"/api/jobs/{job}").json()
+    assert j["job"]["status"] == "Failed" and j["job"]["code"] == "unknown"
+    assert j["job"]["codeDetail"] == "Unexpected ValueError while starting the run"
+    assert j["rows"][0]["result"] is None and j["job"]["counts"]["notStarted"] == 1
+    assert services.storage.get_credential(job) is None
+
+
+def test_no_job_starts_while_another_of_the_tenants_jobs_is_running(api, login, add_uploaded, worker, services):
+    """The run lock can be lost (it expired, or the run's worker stopped): a job still Running keeps the next one
+    waiting until it ends; the heartbeat check ends it if its worker is gone."""
+    login()
+    running, queued = new_job(api, "running"), new_job(api, "queued")
+    add_uploaded(running, ["15-1234_1.jpg"])
+    add_uploaded(queued, ["12-5678_1.jpg"])
+    for j in (running, queued):
+        assert api.post(f"/api/jobs/{j}/schedule").status_code == 200
+    services.storage.update_job(running, {"status": "Running", "run": 1, "startedAt": now(), "heartbeatAt": now()})
+    assert worker.tick() is False
+    assert services.storage.get_job(queued)["status"] == "Queued"
+    # its worker stopped: the heartbeat check ends it, and then the queued job runs
+    services.storage.update_job(running, {"heartbeatAt": now() - 600, "startedAt": now() - 900})
+    worker._last_sweep = 0
+    assert worker.tick() is True
+    assert services.storage.get_job(running)["code"] == "worker_stopped"
+    assert services.storage.get_job(queued)["status"] == "Completed"
+
+
+def test_audit_entries_expire_through_the_tables_ttl(services):
+    """Design (Retention and audit): audit entries are kept 365 days, by DynamoDB TTL on "expires"."""
+    client = services.storage.dynamodb.meta.client
+    for table in ("t-audit", "t-sessions", "t-credentials"):
+        ttl = client.describe_time_to_live(TableName=table)["TimeToLiveDescription"]
+        assert ttl["TimeToLiveStatus"] == "ENABLED" and ttl["AttributeName"] == "expires"
+    ttl = client.describe_time_to_live(TableName="t-jobs")["TimeToLiveDescription"]
+    assert ttl["TimeToLiveStatus"] == "DISABLED"  # the sweeper expires jobs, auditing them first
+
+
+# ---- the run item points to its audit entry, written in one transaction (design: Job data model, Run items) ----------
+def _entry(services, key):
+    return services.storage.audit_table.get_item(Key={"PK": "TENANT#pahma", "SK": key}).get("Item")
+
+
+def test_a_finished_run_points_to_its_audit_entry(api, login, add_uploaded, worker, services):
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_1.jpg"])
+    j = run_once(api, job, worker)
+    run = j["runs"][0]
+    assert run["outcome"] == "Completed" and run["auditKey"]
+    entry = _entry(services, run["auditKey"])
+    assert entry["type"] == "Run" and entry["job"] == job and int(entry["run"]) == 1
+    assert entry["detail"].startswith("Run 1: Completed")
+
+
+def test_a_failed_transaction_leaves_no_finished_run_without_its_entry(api, login, add_uploaded, worker, services, monkeypatch):
+    """The run item and the Run entry are written together or not at all: here DynamoDB cancels the transaction (a
+    condition that fails is added to it), so neither is written and the job stays Running; the heartbeat check
+    then finishes the run as worker_stopped, with its entry."""
+    import pytest
+    from botocore.exceptions import ClientError
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_1.jpg"])
+    client = services.storage.dynamodb.meta.client
+    real = client.transact_write_items
+    failed = []
+
+    def cancelled(TransactItems, **kw):
+        if not failed and any(i.get("Put", {}).get("Item", {}).get("type") == "Run" for i in TransactItems):
+            failed.append(1)
+            TransactItems = [*TransactItems, {"ConditionCheck": {"TableName": services.storage.jobs.name,
+                                                                 "Key": {"PK": "NO#SUCH", "SK": "ITEM"},
+                                                                 "ConditionExpression": "attribute_exists(PK)"}}]
+        return real(TransactItems=TransactItems, **kw)
+    monkeypatch.setattr(client, "transact_write_items", cancelled)
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    with pytest.raises(ClientError):
+        worker.tick()
+    assert failed
+    j = api.get(f"/api/jobs/{job}").json()
+    assert j["job"]["status"] == "Running"
+    assert j["runs"][0]["outcome"] == "Running" and "auditKey" not in j["runs"][0]
+    assert not [a for a in services.storage.list_audit("pahma") if a["type"] == "Run"]
+    assert services.storage.get_credential(job) is None  # the password is gone anyway
+    # the heartbeat check finishes it, with its entry
+    services.storage.update_job(job, {"heartbeatAt": now() - 600})
+    assert worker.sweep_stopped_jobs() == [job]
+    j = api.get(f"/api/jobs/{job}").json()
+    run = j["runs"][0]
+    assert j["job"]["status"] == "Failed" and j["job"]["code"] == "worker_stopped" and run["outcome"] == "Failed"
+    assert _entry(services, run["auditKey"])["detail"].startswith("Run 1: Failed (worker_stopped)")
+    assert len([a for a in services.storage.list_audit("pahma") if a["type"] == "Run"]) == 1
+
+
+def test_a_run_already_finished_with_its_entry_is_not_finished_again(api, login, add_uploaded, worker, services):
+    """If the worker stopped after the transaction but before updating the job, the heartbeat check sets the job
+    from the recorded run and writes no second entry."""
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_1.jpg"])
+    run_once(api, job, worker)
+    services.storage.update_job(job, {"status": "Running", "code": "", "heartbeatAt": now() - 600})
+    assert worker.sweep_stopped_jobs() == [job]
+    j = api.get(f"/api/jobs/{job}").json()
+    assert j["job"]["status"] == "Completed" and j["job"]["code"] == "" and j["job"]["codeDetail"] == ""
+    assert len([a for a in services.storage.list_audit("pahma") if a["type"] == "Run"]) == 1

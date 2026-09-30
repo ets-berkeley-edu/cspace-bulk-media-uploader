@@ -13,6 +13,7 @@ import PagerBar from "./PagerBar.vue";
 import SortTh from "./SortTh.vue";
 import { tableState, tableView } from "../lib/table";
 import { portalOf } from "../lib/portal";
+import { groupTimestampTitle } from "../lib/schedule";
 
 const props = defineProps<{ me: Me; jobId: string | null; mode?: "edit" | "preview"; takeOverSince?: number | null }>();
 const emit = defineEmits<{ scheduled: [job: Job]; opened: [id: string]; close: [] }>();
@@ -91,6 +92,11 @@ const counts = computed(() => jobCounts(rows.value));
 const groupMade = computed(() => job.value?.groupStep?.s === "done");
 const groupTitle = ref("");
 watch(() => job.value?.groupTitle, (t) => { groupTitle.value = t ?? ""; }, { immediate: true });
+/** "Use the job name" / "Use a timestamp" (user decision): fill the title once; it never follows the job name after. */
+function fillGroupTitle(title: string) {
+  groupTitle.value = title;
+  return setGroup({ groupTitle: title });
+}
 async function setGroup(fields: { groupOn?: boolean; groupTitle?: string }) {
   try {
     const j = await ensureJob();
@@ -190,7 +196,7 @@ async function saveDraft() {
     job.value = await api.saveDraft(job.value.id);
     if (completedNote()) return;
     const exp = job.value.expiresAt ? new Date(job.value.expiresAt * 1000).toLocaleDateString(undefined, { dateStyle: "medium" }) : "";
-    savedNote.value = `Draft saved at ${formatTime(job.value.lastSavedAt)}` + (counts.value.block ? `; ${counts.value.block} document(s) still need fixing before it can be scheduled` : "")
+    savedNote.value = `Draft saved at ${formatTime(job.value.lastSavedAt)}` + (counts.value.block ? `; ${counts.value.block} document(s) still need fixing before it can be submitted` : "")
       + (exp ? `. Unless it's changed or saved again, it expires on ${exp}.` : ".");
   } catch (e) {
     await failed(e);
@@ -480,8 +486,8 @@ function toggle(n: number) {
     <div v-if="job?.fixFrom && job.status === 'Draft'" class="msg msg-warn">
       <strong>Fixing after run {{ job.fixFrom.run }}</strong> (it {{ job.fixFrom.status === "Failed" ? "failed" : "needed attention" }}<template
         v-if="job.fixFrom.code">: {{ failureOf(job.fixFrom.code).title }}</template>). Documents already created in CollectionSpace are read-only;
-      one whose Media record exists takes only what the rerun still needs. Scheduling queues run {{ job.fixFrom.run + 1 }}, which skips everything
-      already done. If the job isn't scheduled within {{ job.protectedCount ? 7 : 30 }} days of the last change{{ job.protectedCount ? " (it has protected files)" : "" }},
+      one whose Media record exists takes only what the rerun still needs. Submitting it queues run {{ job.fixFrom.run + 1 }}, which skips everything
+      already done. If the job isn't submitted within {{ job.protectedCount ? 7 : 30 }} days of the last change{{ job.protectedCount ? " (it has protected files)" : "" }},
       these edits are discarded and it returns to Finished jobs as it was.
     </div>
     <div v-if="job && job.status !== 'Draft'" class="msg msg-info">
@@ -493,7 +499,7 @@ function toggle(n: number) {
       <template v-if="job.status === 'NeedsAttention' || job.status === 'Failed'">Use Fix and reschedule under Finished jobs.</template>
     </div>
     <div v-if="job?.status === 'Queued' && counts.block" class="msg msg-block" role="alert">
-      Something changed in CollectionSpace since this job was scheduled: {{ counts.block }} document{{ counts.block === 1 ? " now needs" : "s now need" }}
+      Something changed in CollectionSpace since this job was submitted: {{ counts.block }} document{{ counts.block === 1 ? " now needs" : "s now need" }}
       fixing. Edit the job to fix {{ counts.block === 1 ? "it" : "them" }} before it runs; otherwise {{ counts.block === 1 ? "it" : "they" }} will most likely fail.
     </div>
     <div v-if="job?.note" class="msg msg-warn">{{ job.note }}</div>
@@ -506,11 +512,18 @@ function toggle(n: number) {
           :title="!me.perms.groups ? 'You don\'t have permission to create groups' : groupMade ? 'The group already exists in CollectionSpace' : ''"
           @change="setGroup({ groupOn: ($event.target as HTMLInputElement).checked })" />
         <span><strong>Create a group for this job</strong></span></label>
-      <label class="group-title">Object group title
+      <div class="group-title"><span>Object group title</span>
         <input v-model="groupTitle" type="text" :disabled="!editable || !job?.groupOn || groupMade" aria-label="Object group title"
-               :placeholder="job?.groupOn ? '' : 'Turn on “Create a group” first'" @change="setGroup({ groupTitle })" /></label>
+               :placeholder="job?.groupOn ? 'Required' : 'Turn on “Create a group” first'" @change="setGroup({ groupTitle })" />
+        <template v-if="editable && job?.groupOn && !groupMade">
+          <button type="button" :disabled="!name.trim()" :title="name.trim() ? 'Fill the title with the job name, as typed' : 'Enter a job name first'"
+                  @click="fillGroupTitle(name)">Use the job name</button>
+          <button type="button" title="Fill the title with bmu- and the date and time now (Pacific time)"
+                  @click="fillGroupTitle(groupTimestampTitle())">Use a timestamp</button>
+        </template></div>
       <div class="field-note">When on, the job creates one new group in CollectionSpace, and every document linked to an object joins it
         once its Media record is linked; untick a document's Group box to leave it out. Documents that aren't linked to an object can't join.
+        The group needs a title: type one, or use the job name or a timestamp. Renaming the job doesn't change it.
         <template v-if="groupMade"> The group was created in run {{ job?.groupStep?.run }} (<code>{{ job?.groupStep?.csid }}</code>), so it can't be
           turned off or renamed here.</template>
         <template v-else-if="!me.perms.groups"> Your account can't create groups.</template></div>

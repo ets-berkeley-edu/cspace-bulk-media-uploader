@@ -163,7 +163,7 @@ describe("JobPreview (design: Drafts; UI mockup renderPreview)", () => {
     expect(w.text()).toContain("← Back to Drafts");
     expect(w.text()).toContain("Read-only preview.");
     expect(w.text()).toContain("Must fix: No object 15-1234");
-    expect(w.text()).toContain("This draft has 1 document that needs fixing before it can be scheduled.");
+    expect(w.text()).toContain("This draft has 1 document that needs fixing before it can be submitted.");
     const buttons = w.find(".schedule-bar").findAll("button").map((b) => b.text());
     expect(buttons).toEqual(["Edit", "Delete"]);
     expect(w.text()).not.toContain("Save draft");

@@ -8,7 +8,8 @@ Tables (prefix configurable):
                    SK=SCHEDULE: the tenant's job schedule and pause (design: Job scheduling; see bmu.schedule).
   <p>-sessions     PK=<hash of session id>; TTL attribute "expires".
   <p>-credentials  PK=JOB#<id>; the job's encrypted password; TTL attribute "expires".
-  <p>-audit        PK=TENANT#<tenant>, SK=<time>#<id>.
+  <p>-audit        PK=TENANT#<tenant>, SK=<time>#<id>, and PK=CSID#<csid>, SK=CSID (the CSID index); TTL
+                   attribute "expires" (365 days).
 Rows are separate items so a 1,000-row job never approaches the 400 KB item limit.
 """
 from __future__ import annotations
@@ -50,9 +51,12 @@ def _dyn(v: Any) -> Any:
 
 def draft_expiry(job: dict | None, at: float) -> dict:
     """The job-item fields that set a draft's expiry to `at`. A fix of a job that has run keeps it in
-    draftExpiresAt, which only the sweeper reads (it reverts the fix); every other draft in expiresAt, the job
-    item's TTL attribute in a deployment (design: State rules, Abandoned fixes; Retention). A fix never has an
-    expiresAt, so the TTL can't delete the job it must return to Needs attention or Failed."""
+    draftExpiresAt, which only the sweeper reads (it reverts the fix); every other draft in expiresAt (design:
+    State rules, Abandoned fixes; Retention). The sweeper expires drafts and Completed jobs at expiresAt, writing
+    the audit entry before it deletes anything (Worker.sweep_expired_drafts, sweep_completed). expiresAt is not a
+    DynamoDB TTL attribute: a TTL on the jobs table, if enabled later, is only a backstop, on its own attribute
+    set well after expiresAt, so it never deletes a job before the sweeper has audited it. A fix never has an
+    expiresAt, so nothing expires the job it must return to Needs attention or Failed."""
     if (job or {}).get("fixFrom"):
         return {"draftExpiresAt": at, "expiresAt": None}
     return {"expiresAt": at, "draftExpiresAt": None}
@@ -135,8 +139,9 @@ class Storage:
                 if e.response["Error"]["Code"] != "ResourceInUseException":
                     raise
             self.dynamodb.Table(name).wait_until_exists()
-        # Sessions and saved sign-ins also expire through DynamoDB's TTL, a backstop to the worker's sweep
-        for name in (f"{p}-sessions", f"{p}-credentials"):
+        # Sessions and saved sign-ins also expire through DynamoDB's TTL, a backstop to the worker's sweep. Audit
+        # entries and the CSID index are kept 365 days by TTL alone (design: Retention and audit; _audit_item).
+        for name in (f"{p}-sessions", f"{p}-credentials", f"{p}-audit"):
             try:
                 self.dynamodb.meta.client.update_time_to_live(
                     TableName=name, TimeToLiveSpecification={"Enabled": True, "AttributeName": "expires"})
@@ -319,6 +324,21 @@ class Storage:
     # ---- run history (design: Job data model, Run items) --------------------------------------
     def put_run(self, job_id: str, run: dict) -> None:
         self.jobs.put_item(Item=_dyn({"PK": f"JOB#{job_id}", "SK": f"RUN#{int(run['run']):05d}", **run}))
+
+    def finish_run(self, tenant: str, job_id: str, run_item: dict, user: str, detail: str, csids: list[dict] | None,
+                   **extra: Any) -> str:
+        """Design (Job data model, Run items: "a pointer to the run's audit entry"): the finished run item and its
+        "Run" audit entry are written in one DynamoDB transaction, the entry's key (SK) stored on the run item as
+        auditKey. So a run is never finished without its entry, whatever stops the worker. A large run's per-row
+        detail is written to S3 first (put_audit_detail) and the entry points to it. Raises if the transaction
+        fails: the run then stays unfinished and the job Running, and the heartbeat check finishes it later.
+        Returns the entry's key."""
+        entry = self._audit_item(tenant, "Run", user, job_id, detail, csids, **extra)
+        item = _dyn({**run_item, "PK": f"JOB#{job_id}", "SK": f"RUN#{int(run_item['run']):05d}", "auditKey": entry["SK"]})
+        self.dynamodb.meta.client.transact_write_items(TransactItems=[
+            {"Put": {"TableName": self.jobs.name, "Item": item}},
+            {"Put": {"TableName": self.audit_table.name, "Item": entry}}])
+        return entry["SK"]
 
     def get_runs(self, job_id: str) -> list[dict]:
         """The job's runs, oldest first."""

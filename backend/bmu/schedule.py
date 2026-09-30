@@ -180,7 +180,11 @@ def queue_key(job: dict) -> tuple:
 
 
 def pick_next(jobs: list[dict], schedule: dict, now: float, always_run_time: bool = False) -> dict | None:
-    """The job the worker claims next: the first due Run now job in queue order, else the first due job."""
+    """The job the worker claims next: the first due Run now job in queue order, else the first due job. None
+    while one of the tenant's jobs is Running (design: one job per tenant at a time): also when the run lock was
+    lost, e.g. a run whose worker stopped, which the heartbeat check ends; the next job waits for that."""
+    if any(j.get("status") == "Running" for j in jobs):
+        return None
     due = [j for j in sorted((j for j in jobs if j.get("status") == "Queued"), key=queue_key)
            if is_due(j, schedule, now, always_run_time)]
     return next((j for j in due if j.get("runNow")), None) or (due[0] if due else None)

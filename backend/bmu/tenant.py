@@ -20,6 +20,8 @@ class Handling:
     object: str  # existing | create | either | none (see OBJECT_STEP)
     id_rule: str  # object | image
     legacy: str = ""
+    # Design (Handling per document): field presets, {field: value} for fields in PRESETTABLE, checked at load
+    presets: dict[str, Any] = field(default_factory=dict, hash=False, compare=False)
 
     @property
     def object_step(self) -> str | None:
@@ -33,6 +35,15 @@ class Handling:
 #   either    link to the object if it exists, create it if it doesn't: "Find or create object"
 OBJECT_STEP = {"existing": "findObject", "create": "createObject", "either": "findOrCreateObject"}
 OBJECT_STEPS = tuple(OBJECT_STEP.values())
+
+# Design (Handling per document): the fields a handling option can preset, as in the UI mockup. Media type and
+# language repeat (lists of option values / language refNames); contributor is an authority refName.
+PRESETTABLE = ("type", "contributor", "copyright", "language")
+PRESET_REPEATING = ("type", "language")
+
+# refNames (design: Authority term fields; Media record fields)
+AUTHORITY_REF = re.compile(r"^urn:cspace:(?P<domain>[^:]+):(?P<service>\w+):name\((?P<vocab>[^)]+)\):item:name\((?P<short>[^)]+)\)'(?P<display>.*)'$")
+LANGUAGE_REF = re.compile(r"^urn:cspace:[^:]+:vocabularies:name\(languages\):item:name\([^)]+\)'[^']*'$")
 
 
 def role_name(tenant_id: str, display_name: str) -> str:
@@ -80,6 +91,17 @@ class Tenant:
     def handling_by_id(self, hid: str) -> Handling | None:
         return next((h for h in self.handling if h.id == hid), None)
 
+    def preset_value(self, hid: str, name: str) -> Any:
+        """What a handling's presets put in a field (design: Handling per document): its preset, else, for
+        Language, the tenant's default language, else empty."""
+        h = self.handling_by_id(hid)
+        v = (h.presets if h else {}).get(name)
+        if name == "language" and not v:
+            v = [self.language_default]
+        if name in PRESET_REPEATING:
+            return list(v or [])
+        return v or ""
+
     def scheduler_role_names(self, tenant_id: str) -> list[str]:
         """The roleNames CollectionSpace gives the tenant's scheduler_roles (see role_name)."""
         return [role_name(tenant_id, name) for name in self.scheduler_roles] if tenant_id else []
@@ -112,16 +134,20 @@ class Tenant:
 @lru_cache
 def load_tenant(key: str) -> Tenant:
     text = resources.files("bmu.tenants").joinpath(f"{key}.yaml").read_text(encoding="utf-8")
-    raw = yaml.safe_load(text)
+    return parse_tenant(yaml.safe_load(text), key)
+
+
+def parse_tenant(raw: dict[str, Any], key: str) -> Tenant:
+    """A tenant from its configuration (the parsed yaml), checked; raises ValueError naming what's wrong."""
     bad = [h["id"] for h in raw["handling"] if h["object"] not in (*OBJECT_STEP, "none")]
     if bad:
         raise ValueError(f"{key}.yaml: unknown object behavior in handling {', '.join(bad)}")
-    return Tenant(
+    tenant = Tenant(
         key=raw["key"],
         name=raw["name"],
         domain=raw["domain"],
         media_extension=raw["media_extension"],
-        handling=tuple(Handling(**h) for h in raw["handling"]),
+        handling=tuple(Handling(**{**h, "presets": dict(h.get("presets") or {})}) for h in raw["handling"]),
         publish=raw["publish"],
         filename_hint=raw["filename"]["hint"],
         filename_pattern=re.compile(raw["filename"]["pattern"]),
@@ -134,6 +160,40 @@ def load_tenant(key: str) -> Tenant:
         sensitivity=raw.get("sensitivity") or {},
         scheduler_roles=tuple(raw.get("scheduler_roles") or ()),
     )
+    for h in tenant.handling:
+        problems = preset_problems(tenant, h)
+        if problems:
+            raise ValueError(f"{key}.yaml: presets of handling {h.id}: {'; '.join(problems)}")
+    return tenant
+
+
+def preset_problems(tenant: Tenant, h: Handling) -> list[str]:
+    """Design (Handling per document): presets must resolve to values in the tenant's option lists, vocabularies
+    and authorities. Checked at load for their form: media types from the tenant's option list, languages as
+    refNames of the languages vocabulary, the contributor as a refName of one of the field's authority sources.
+    Whether the terms still exist in CollectionSpace is checked with the rows (validation while editing)."""
+    out = []
+    unknown = sorted(set(h.presets) - set(PRESETTABLE))
+    if unknown:
+        out.append(f"{', '.join(unknown)} can't be preset (only {', '.join(PRESETTABLE)})")
+    for name, v in h.presets.items():
+        if name in PRESET_REPEATING and not (isinstance(v, list) and all(isinstance(x, str) and x for x in v)):
+            out.append(f"{name} must be a list")
+        elif name == "type":
+            out += [f"media type {x!r} isn't in media_types" for x in v if x not in tenant.media_type_values]
+        elif name == "language":
+            out += [f"language {x!r} isn't a refName of {tenant.domain}'s languages vocabulary" for x in v
+                    if not LANGUAGE_REF.match(x) or not x.startswith(f"urn:cspace:{tenant.domain}:")]
+        elif name == "contributor":
+            sources = [tenant.authorities[s] for s in tenant.authority_fields.get(name, tenant.authorities) if s in tenant.authorities]
+            m = AUTHORITY_REF.match(v) if isinstance(v, str) else None
+            if not m or m["domain"] != tenant.domain or not any(
+                    m["service"] == s["service"] and m["vocab"] == s["vocabulary"] for s in sources):
+                out.append(f"contributor must be the full refName of a term in one of its authorities "
+                           f"({', '.join(s['service'] + '/' + s['vocabulary'] for s in sources)})")
+        elif name == "copyright" and not isinstance(v, str):
+            out.append("copyright must be text")
+    return out
 
 
 def parse_filename(tenant: Tenant, filename: str) -> dict[str, Any]:

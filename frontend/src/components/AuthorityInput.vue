@@ -9,7 +9,9 @@ import { displayName } from "../lib/refname";
 import type { Term } from "../types";
 
 const props = defineProps<{ modelValue: string; field: string; label: string; disabled?: boolean;
-  timing?: { findDelayMs: number; minLength: number } }>();
+  timing?: { findDelayMs: number; minLength: number };
+  /** The value came from the row's handling preset (design: Handling per document, marked as presets). */
+  preset?: boolean }>();
 const emit = defineEmits<{ "update:modelValue": [value: string] }>();
 
 const text = ref(displayName(props.modelValue));
@@ -94,8 +96,8 @@ const sourceLabel = (s: string) => (s === "person" ? "Persons" : s === "organiza
 </script>
 
 <template>
-  <label class="field">
-    <span>{{ label }}</span>
+  <label class="field" :class="{ 'field-preset': preset }">
+    <span>{{ label }}<em v-if="preset" class="preset-tag" title="Filled in automatically; it stays until you change it">PRESET</em></span>
     <div class="ac">
       <input
         v-model="text"

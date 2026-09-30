@@ -5,26 +5,34 @@ name: PAHMA
 domain: pahma.cspace.berkeley.edu
 media_extension: media_pahma
 
+# Each handling option's presets (design: Handling per document) fill a new row's fields, and fields the user hasn't
+# edited when the row's handling changes: type and language (lists of media type values / language refNames; without
+# a language preset, rows get the default language below), contributor (a full refName) and copyright (text). Checked
+# when the tenant loads. PAHMA has none configured.
 handling:
   - id: link
     label: Link to existing object
     legacy: media+accession
     object: existing          # the object must already exist (legacy alwayscreatemedia = False)
     id_rule: object           # Media identificationNumber = object number
+    presets: {}
   - id: linkorcreate
     label: Link to object (create if missing)
     object: either            # link to the object if it exists; otherwise create a skeletal Object record
     id_rule: object
+    presets: {}
   - id: create
     label: Create new object + link
     legacy: media+create+accession
     object: create            # always a new skeletal Object record; an object that already exists must be fixed
     id_rule: object
+    presets: {}
   - id: mediaonly
     label: Media only (no object)
     legacy: mediaonly
     object: none
     id_rule: image            # legacy PAHMA rule: identificationNumber = image number (the filename)
+    presets: {}
 
 # Restricted is shown in the UI; it is the inverse of approvedForWeb.
 publish:

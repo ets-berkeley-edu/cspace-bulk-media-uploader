@@ -929,7 +929,7 @@ def test_checking_a_queued_job_changes_nothing_and_reports_a_newly_protected_fil
     stored = services.storage.get_row(job, 1)
     r = api.post(f"/api/jobs/{job}/check").json()["rows"][0]
     assert r["protected"] and not r["restricted"]  # shown as protected, but its publish setting isn't changed
-    assert any("became protected after this job was scheduled" in t for t in _checks(r, "warn"))
+    assert any("became protected after this job was submitted" in t for t in _checks(r, "warn"))
     after = services.storage.get_row(job, 1)
     assert after == stored and services.storage.get_job(job)["status"] == "Queued"  # nothing written
     # editing the job makes it a draft again, and then the automatic default applies as usual
