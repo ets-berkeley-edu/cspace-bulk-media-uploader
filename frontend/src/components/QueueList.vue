@@ -311,7 +311,7 @@ const pct = (j: Job, k: "done" | "failed") => (j.progress?.total ? (100 * (j.pro
               <span v-if="checks.get(j.id)" class="badge" :class="checks.get(j.id)!.block ? 'b-danger' : checks.get(j.id)!.warn ? 'b-warn' : 'b-ok'">
                 {{ checksText(checks.get(j.id)!) }}</span>
               <span v-else class="badge b-muted">Checking…</span>
-              <div v-if="changed(j)" class="sub lock" title="The checks found something different from when the job was scheduled">Changed since scheduled</div>
+              <div v-if="changed(j)" class="sub lock" title="The checks found something different from when the job was submitted">Changed since submitted</div>
             </td>
             <td>{{ formatTime(j.queuedAt) }}<div class="sub">by {{ j.scheduledBy }}</div>
               <div v-if="signIn(j)" class="sub" :class="{ lock: signIn(j)!.soon }"

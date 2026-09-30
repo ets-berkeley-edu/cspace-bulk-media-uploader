@@ -14,7 +14,7 @@ const jobs = [
     lastSavedBy: "jlee", lastSavedAt: now - 28 * 86400, expiresAt: now + 2 * 86400 },
   { id: "c", name: "queued", status: "Queued", createdBy: "admin", rowCount: 1 },
   { id: "d", name: "fixing", status: "Draft", createdBy: "admin", rowCount: 2, run: 1, lastSavedBy: "BMU", lastSavedAt: now,
-    expiresAt: now + 30 * 86400, note: "Sign-in expired while waiting in the queue; schedule it again to run it with your sign-in." },
+    expiresAt: now + 30 * 86400, note: "Sign-in expired while waiting in the queue; submit it again to run it with your sign-in." },
 ];
 
 function mockApi() {

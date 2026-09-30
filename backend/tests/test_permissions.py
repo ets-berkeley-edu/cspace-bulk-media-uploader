@@ -83,7 +83,9 @@ def test_an_account_without_create_and_update_on_media_can_view_jobs_but_not_cre
     assert reader.get(f"/api/jobs/{draft}").status_code == 200
     assert reader.post(f"/api/jobs/{failed}/check").status_code == 200
     checked = reader.post(f"/api/jobs/{draft}/check")
-    assert checked.status_code == 200 and any("can't create Media records" in t for t in _texts(checked.json()["rows"][0]))
+    # computed with the viewer's permissions; "can't create Media records" isn't a row check (the editor refuses such
+    # an account outright, above)
+    assert checked.status_code == 200 and not any("can't create Media records" in t for t in _texts(checked.json()["rows"][0]))
     assert services.storage.get_row(draft, n) == before
     assert reader.get(f"/api/jobs/{failed}/rows/1/thumbnail").status_code in (200, 404)
     assert reader.get("/api/failures").status_code == 200
@@ -167,7 +169,7 @@ def test_joining_a_group_that_already_exists_needs_no_create_on_groups(api, logi
     login()
     job = new_job(api)
     add_uploaded(job, ["15-1234_1.jpg", "12-5678_1.jpg"])
-    api.patch(f"/api/jobs/{job}", json={"groupOn": True})
+    api.patch(f"/api/jobs/{job}", json={"groupOn": True, "groupTitle": "Survey batch 4"})
     fail_on("objectSearch", effect="none", match="12-5678")  # document 2 doesn't reach the group this time
     api.post(f"/api/jobs/{job}/schedule")
     worker.tick()

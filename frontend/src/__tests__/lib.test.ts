@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { displayName, isRefName } from "../lib/refname";
 import { formatBytes, mapLimit } from "../lib/files";
 import { jobCounts, rowStatus } from "../lib/status";
-import type { TenantInfo } from "../types";
+import { isPreset } from "../lib/presets";
+import type { Row, TenantInfo } from "../types";
 
 describe("refName", () => {
   it("shows only the display name", () => {
@@ -77,5 +78,26 @@ describe("supported file types (design: Supported file types)", () => {
     expect(skippedText([".DS_Store", "a.docx"], "JPEG or PDF")).toBe("2 files skipped: .DS_Store, a.docx. The BMU accepts JPEG or PDF.");
     expect(splitSupported([{ name: "a.docx" }], undefined).ok).toHaveLength(1);
     expect(fileKind("notes.pdf").label).toBe("PDF document");
+  });
+});
+
+describe("presets (design: Handling per document)", () => {
+  const eng = "urn:cspace:pahma.cspace.berkeley.edu:vocabularies:name(languages):item:name(eng)'English'";
+  const spa = "urn:cspace:pahma.cspace.berkeley.edu:vocabularies:name(languages):item:name(spa)'Spanish'";
+  const t = { languageDefault: eng, handling: [{ id: "link", label: "", object: "existing", id_rule: "object", presets: {} },
+    { id: "slide", label: "", object: "none", id_rule: "image", presets: { type: ["slide"], language: [spa], copyright: "© R" } }] } as unknown as TenantInfo;
+  const r = (p: Record<string, unknown>) => ({ handling: "link", type: [], language: [eng], copyright: "", touched: [], ...p }) as unknown as Row;
+  it("a field is PRESET while it holds its handling's preset and the user hasn't edited it", () => {
+    expect(isPreset(r({ handling: "slide", type: ["slide"] }), t, "type")).toBe(true);
+    expect(isPreset(r({ handling: "slide", type: ["slide"], touched: ["type"] }), t, "type")).toBe(false);
+    expect(isPreset(r({ handling: "slide", type: ["slide", "image"] }), t, "type")).toBe(false);
+    expect(isPreset(r({ handling: "slide", copyright: "© R" }), t, "copyright")).toBe(true);
+    expect(isPreset(r({}), t, "type")).toBe(false); // empty is never a preset
+    expect(isPreset(r({}), t, "copyright")).toBe(false);
+  });
+  it("Language is PRESET with the tenant's default only when the handling presets no language", () => {
+    expect(isPreset(r({}), t, "language")).toBe(true);
+    expect(isPreset(r({ handling: "slide" }), t, "language")).toBe(false);
+    expect(isPreset(r({ handling: "slide", language: [spa] }), t, "language")).toBe(true);
   });
 });

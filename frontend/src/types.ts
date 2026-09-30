@@ -3,6 +3,8 @@ export interface Handling {
   label: string;
   object: "existing" | "create" | "either" | "none"; // either: link to the object, or create it if missing
   id_rule: "object" | "image";
+  /** Field presets (design: Handling per document): type and language are lists, contributor a refName. */
+  presets?: Partial<Record<"type" | "contributor" | "copyright" | "language", string | string[]>>;
 }
 
 export interface Option {
@@ -128,6 +130,7 @@ export interface Run {
   endedAt?: number;
   outcome: "Running" | "Completed" | "NeedsAttention" | "Failed";
   code?: string;
+  codeDetail?: string; // the technical detail of a job-level code
   counts?: ResultCounts;
   cancelledBy?: string;
   cancelledAt?: number;
@@ -215,7 +218,8 @@ export interface Job {
   updated: number;
   rowCount: number;
   run: number;
-  code?: string;
+  code?: string; // a job-level failure code (see Failure)
+  codeDetail?: string; // its technical detail, e.g. "Document 1, step media: POST media returned 401"
   note?: string;
   scheduledBy?: string;
   queuedAt?: number;
@@ -245,7 +249,7 @@ export interface Job {
   counts?: ResultCounts;
   runBy?: string;
   startedAt?: number;
-  fixFrom?: { status: "NeedsAttention" | "Failed"; code: string; run: number } | null;
+  fixFrom?: { status: "NeedsAttention" | "Failed"; code: string; codeDetail?: string; run: number } | null;
   // the job's group (design: Groups)
   groupOn?: boolean;
   groupTitle?: string;

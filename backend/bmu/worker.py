@@ -13,6 +13,7 @@ import socket
 import threading
 import time
 import uuid
+from datetime import datetime
 
 from botocore.exceptions import ClientError
 
@@ -37,7 +38,7 @@ INLINE_AUDIT_ROWS = 100  # a run's per-row audit detail goes in the entry up to 
 RECORD_TYPE = {"media": "Media", "upload": "Blob", "createObject": "CollectionObject", "findOrCreateObject": "CollectionObject",
                "relMediaObject": "Relation",
                "relObjectMedia": "Relation", "addToGroup": "Relation", "group": "Group"}
-STOPPED_JOB = {"unavailable", "worker_stopped"} | JOB_LEVEL  # these end the job as Failed
+STOPPED_JOB = {"unavailable", "worker_stopped", "unknown"} | JOB_LEVEL  # these end the job as Failed
 LINK_STEPS = OBJECT_STEPS + ("relMediaObject", "relObjectMedia", "addToGroup")  # what "Stop linking" skips
 FINISHED = ("done", "not needed")
 
@@ -142,6 +143,7 @@ class Worker:
         self._last_abandoned_sweep = 0.0
         self._job_media: set[str] = set()  # Media records the running job has created
         self._job_name = ""
+        self._where = ""  # where the running job is, for the detail of an unexpected error
 
     # ---- scheduling ------------------------------------------------------------------------
     def run_forever(self) -> None:
@@ -214,7 +216,7 @@ class Worker:
 
     def sweep_expired_sign_ins(self) -> list[str]:
         """A queued job whose saved sign-in reached its time limit leaves the queue for Drafts (design: State
-        rules, Sign-in expired while waiting); anyone can schedule it again with their own sign-in."""
+        rules, Sign-in expired while waiting); anyone can submit it again with their own sign-in."""
         moved = []
         for j in self.storage.list_jobs(self.tenant.key):
             if j["status"] == "Queued" and j.get("credentialExpires") and j["credentialExpires"] < now():
@@ -227,7 +229,7 @@ class Worker:
                     self.storage.delete_credential(j["id"])
                     self.storage.audit(self.tenant.key, "Sign-in expired", "BMU", j["id"],
                                        f"Deleted the saved sign-in of “{j.get('name') or 'Untitled job'}”: it was still running "
-                                       f"{self.s.credential_hours:g} hours after it was scheduled.")
+                                       f"{self.s.credential_hours:g} hours after it was submitted.")
         return moved
 
     def _sign_in_expired(self, j: dict) -> bool:
@@ -235,7 +237,7 @@ class Worker:
         protected files, 30 otherwise)."""
         if not self.storage.update_job(j["id"], {"status": "Draft", "queuePos": None, "lastSavedAt": now(),
                                                  **draft_expiry(j, now() + self.s.draft_days_for(j) * 86400),
-                                                 "note": "Sign-in expired while waiting in the queue; schedule it again to run it with your sign-in."},
+                                                 "note": "Sign-in expired while waiting in the queue; submit it again to run it with your sign-in."},
                                        expect_status="Queued"):
             return False
         self.storage.delete_credential(j["id"])
@@ -305,7 +307,8 @@ class Worker:
             self.storage.delete_row(job["id"], r["n"])
         self.storage.drop_fix_originals(job["id"])
         self.storage.clear_editing(job["id"])
-        if not self.storage.update_job(job["id"], {"status": fix["status"], "code": fix.get("code", ""), "fixFrom": None,
+        if not self.storage.update_job(job["id"], {"status": fix["status"], "code": fix.get("code", ""),
+                                                   "codeDetail": fix.get("codeDetail", ""), "fixFrom": None,
                                                    "expiresAt": None, "draftExpiresAt": None, "note": ""},
                                        expect_status="Reverting"):
             return  # finished meanwhile by another sweep
@@ -369,16 +372,22 @@ class Worker:
         stopped = []
         limit = now() - self.s.heartbeat_stale_seconds
         for j in self.storage.list_jobs(self.tenant.key):
-            if j["status"] == "Running" and (j.get("heartbeatAt") or j.get("startedAt") or 0) < limit:
-                if self.storage.update_job(j["id"], {"status": "Stopping", "stoppingSince": now()}, expect_status="Running"):
-                    self._stop(j)
+            beat = j.get("heartbeatAt") or j.get("startedAt") or 0
+            if j["status"] == "Running" and beat < limit:
+                # the technical detail, kept with the state so an interrupted stop (sweep_interrupted_transitions) has it
+                detail = (f"No heartbeat for {int((now() - float(beat)) // 60)} minutes" if beat else "No heartbeat") + \
+                    (f"; the run was on document {j['currentRow']}" if j.get("currentRow") else "")
+                if self.storage.update_job(j["id"], {"status": "Stopping", "stoppingSince": now(), "codeDetail": detail},
+                                           expect_status="Running"):
+                    self._stop({**j, "codeDetail": detail})
                     stopped.append(j["id"])
         return stopped
 
     def _stop(self, j: dict) -> None:
         """End the run of a job in Stopping as worker_stopped; repeated by the sweep if it was interrupted."""
         self.storage.delete_credential(j["id"])
-        self._finish(j["id"], int(j.get("run", 0)), "worker_stopped", j.get("scheduledBy") or "BMU", [])
+        self._finish(j["id"], int(j.get("run", 0)), "worker_stopped", j.get("scheduledBy") or "BMU", [],
+                     j.get("codeDetail") or "No heartbeat")
 
     def maybe_sweep(self) -> None:
         """The periodic checks, at most once a minute. Also called between documents during a run, so a long
@@ -409,7 +418,8 @@ class Worker:
         the queue is paused, never a held job, and a job without its own run time only in its run window (every
         moment with Settings.always_run_time). Not-due jobs wait. See bmu.schedule.pick_next."""
         # A job left Running by a worker that stopped is not resumed: the heartbeat check stops it as
-        # "worker_stopped", and a user reschedules it (its finished steps are skipped).
+        # "worker_stopped", and a user reschedules it (its finished steps are skipped). No job starts while one of
+        # the tenant's jobs is Running, even if the run lock was lost: the next job waits for the heartbeat check.
         schedule = sched.load(self.storage, self.tenant.key)
         return sched.pick_next(self.storage.list_jobs(self.tenant.key), schedule, self.clock(), self.s.always_run_time)
 
@@ -426,18 +436,20 @@ class Worker:
         t = now()
         # Claim it only if it is still Queued and its sign-in is still stored (one conditional write)
         if not self.storage.claim_job(job_id, {"status": "Running", "run": run_no, "startedAt": t, "heartbeatAt": t, "code": "",
+                                               "codeDetail": "",
                                                "fixFrom": None, "expiresAt": None, "draftExpiresAt": None, "cancelledBy": "",
                                                "runNow": False, "runAt": None}):  # used: they were for this start
             if not self.storage.get_credential(job_id) and (self.storage.get_job(job_id) or {}).get("status") == "Queued":
                 self._sign_in_expired(job)
             return
-        self._start_run(job, run_no, t)
         beat = _Heartbeat(self, job_id)
         beat.start()
         client: CSpaceClient | None = None
-        code = ""
+        code, code_detail = "", ""
         created: list[dict] = []
+        self._where = "while starting the run"
         try:
+            self._start_run(job, run_no, t)
             pw = self.crypto.decrypt("job", cred["token"], {"user": cred["user"], "job": job_id})
             client = self.client_factory(cred["user"], pw)
             del pw
@@ -445,15 +457,22 @@ class Worker:
             client.max_failures_in_a_row = MAX_CONSECUTIVE_SERVER_ERRORS
             code = self._run_rows(job_id, client, run_no, created)
         except JobStop as e:
-            code = e.code
+            code, code_detail = e.code, e.detail
             log.warning("job %s stopped: %s", job_id, e.detail)
+        except Exception as e:
+            # Design (Finished jobs and error messages): a failure the BMU has no code for is "unknown", with the
+            # technical detail. Anything unexpected (DynamoDB, S3, decryption, a bug) ends the run here the normal
+            # way, so the job doesn't stay Running until the heartbeat check. The detail names the exception's type
+            # and where it happened, never its message, which could hold anything.
+            log.exception("job %s: unexpected error %s", job_id, self._where)
+            code, code_detail = "unknown", _unexpected(e, self._where)
         finally:
             beat.halt.set()
             # Never keep the password after the run.
             self.storage.delete_credential(job_id)
             if client:
                 client.close()
-        self._finish(job_id, run_no, code, cred["user"], created)
+        self._finish(job_id, run_no, code, cred["user"], created, code_detail)
 
     def _start_run(self, job: dict, run_no: int, started: float) -> None:
         """The run item: who scheduled it and when, and the documents excluded or deleted since the last run.
@@ -479,14 +498,17 @@ class Worker:
                 r.pop("addedInFix", None)
                 self.storage.put_row(job_id, r, guard=False)
 
-    def _finish(self, job_id: str, run_no: int, code: str, user: str, created: list[dict]) -> None:
-        """End a run however it ended: settle the rows, set the job's status and counts, complete the run
-        item and write the audit entry. A Completed job gets its 30-day expiry."""
+    def _finish(self, job_id: str, run_no: int, code: str, user: str, created: list[dict], code_detail: str = "") -> None:
+        """End a run however it ended: settle the rows, complete the run item and write its audit entry (one
+        transaction), then set the job's status and counts. A Completed job gets its 30-day expiry. code_detail:
+        the technical detail of a job-level code (design: "technical detail shown on request"), kept on the job and
+        the run item."""
         rows = self.storage.get_rows(job_id)
         job_before = self.storage.get_job(job_id) or {}
         group = job_before.get("groupStep") or {}
         if not code and group.get("s") == "failed" and group.get("run") == run_no:
             code = "group_failed"  # the job needs attention; the rows' other steps still ran
+            code_detail = f"Creating the group: {group.get('detail') or 'failed'}"
         for r in rows:
             res = r.get("result")
             if res and res.get("state") == "In progress":  # the worker stopped while on this row
@@ -505,32 +527,47 @@ class Worker:
             status = "NeedsAttention"
         job = self.storage.get_job(job_id) or {}
         cancel = job.get("cancelRequested") if code == "cancelled" else None
+        if cancel:
+            code_detail = f"Cancel requested by {cancel.get('by') or 'a user'}" + (
+                f", {datetime.fromtimestamp(float(cancel['at']), sched.TZ):%Y-%m-%d %H:%M} Pacific time" if cancel.get("at") else "")
+        code_detail = code_detail if code else ""
         t = now()
         counts = row_counts(rows)
+        run = next((x for x in self.storage.get_runs(job_id) if int(x["run"]) == run_no), {"run": run_no})
+        cancelled_by, cancelled_at = (cancel or {}).get("by", ""), (cancel or {}).get("at")
+        if run.get("auditKey"):
+            # An earlier _finish of this run wrote the run item and its audit entry, then stopped before the job
+            # item (the heartbeat check is finishing it now): the run as recorded stands, only the job follows it.
+            status, code, code_detail = run["outcome"], run.get("code", ""), run.get("codeDetail", "")
+            counts, t = run.get("counts") or counts, float(run.get("endedAt") or t)
+            cancelled_by, cancelled_at = run.get("cancelledBy", ""), run.get("cancelledAt")
+        else:
+            run.update(outcome=status, code=code, codeDetail=code_detail, endedAt=t, counts=counts,
+                       cancelledBy=cancelled_by, cancelledAt=cancelled_at)
+            # Design (Retention and audit): each run's entry holds, for every row, its filename, object number, CSIDs
+            # and error codes; for large runs that detail is a JSON object in S3 and the entry points to it.
+            detail = [{"n": r["n"], "file": r["file"], "obj": r.get("obj", ""), "idnum": r.get("idnum", ""),
+                       "state": (r.get("result") or {}).get("state") or ("Excluded" if not r.get("include") else "Not started"),
+                       "csids": {k: v["csid"] for k, v in ((r.get("result") or {}).get("steps") or {}).items() if v.get("csid") and v.get("s") == "done"},
+                       "errors": sorted({v["code"] for v in ((r.get("result") or {}).get("steps") or {}).values() if v.get("s") == "failed" and v.get("code")})}
+                      for r in rows]
+            where: dict = {"rows": detail} if len(detail) <= INLINE_AUDIT_ROWS else \
+                {"detailKey": self.storage.put_audit_detail(self.tenant.key, job_id, run_no, detail)}
+            # Design (Job data model, Run items): the finished run item and its "Run" audit entry in one transaction,
+            # the entry's key on the run item (auditKey). If it fails, neither is written and the job stays Running
+            # until the heartbeat check finishes it (worker_stopped), with its entry.
+            self.storage.finish_run(self.tenant.key, job_id, run, user,
+                                    f"Run {run_no}: {status}" + (f" ({code})" if code else "") +
+                                    f" · {counts['done']} done, {counts['partial']} partial, {counts['failed']} failed, "
+                                    f"{counts['notStarted']} not started, {counts['disabled']} excluded"
+                                    + (f" · cancelled by {cancelled_by}" if cancel else ""),
+                                    created if "rows" in where else [], run=run_no, jobName=job.get("name", ""), counts=counts,
+                                    codeDetail=code_detail, **where)
         self.storage.update_job(job_id, {
-            "status": status, "code": code, "finishedAt": t, "progress": _progress(rows), "counts": counts,
-            "currentRow": None, "currentFile": "", "cancelRequested": None, "cancelledBy": (cancel or {}).get("by", ""),
+            "status": status, "code": code, "codeDetail": code_detail, "finishedAt": t, "progress": _progress(rows), "counts": counts,
+            "currentRow": None, "currentFile": "", "cancelRequested": None, "cancelledBy": cancelled_by,
             "runBy": job.get("scheduledBy") or user,
             "expiresAt": t + self.s.completed_days * 86400 if status == "Completed" else None})
-        run = next((x for x in self.storage.get_runs(job_id) if int(x["run"]) == run_no), {"run": run_no})
-        run.update(outcome=status, code=code, endedAt=t, counts=counts,
-                   cancelledBy=(cancel or {}).get("by", ""), cancelledAt=(cancel or {}).get("at"))
-        self.storage.put_run(job_id, run)
-        # Design (Retention and audit): each run's entry holds, for every row, its filename, object number, CSIDs and
-        # error codes; for large runs that detail is a JSON object in S3 and the entry points to it.
-        detail = [{"n": r["n"], "file": r["file"], "obj": r.get("obj", ""), "idnum": r.get("idnum", ""),
-                   "state": (r.get("result") or {}).get("state") or ("Excluded" if not r.get("include") else "Not started"),
-                   "csids": {k: v["csid"] for k, v in ((r.get("result") or {}).get("steps") or {}).items() if v.get("csid") and v.get("s") == "done"},
-                   "errors": sorted({v["code"] for v in ((r.get("result") or {}).get("steps") or {}).values() if v.get("s") == "failed" and v.get("code")})}
-                  for r in rows]
-        where: dict = {"rows": detail} if len(detail) <= INLINE_AUDIT_ROWS else \
-            {"detailKey": self.storage.put_audit_detail(self.tenant.key, job_id, run_no, detail)}
-        self.storage.audit(self.tenant.key, "Run", user, job_id,
-                           f"Run {run_no}: {status}" + (f" ({code})" if code else "") +
-                           f" · {counts['done']} done, {counts['partial']} partial, {counts['failed']} failed, "
-                           f"{counts['notStarted']} not started, {counts['disabled']} excluded"
-                           + (f" · cancelled by {cancel.get('by')}" if cancel else ""),
-                           created if "rows" in where else [], run=run_no, jobName=job.get("name", ""), counts=counts, **where)
 
     def _run_rows(self, job_id: str, client: CSpaceClient, run_no: int, created: list[dict]) -> str:
         self._job_media = {((r.get("result") or {}).get("steps") or {}).get("media", {}).get("csid")
@@ -542,12 +579,16 @@ class Worker:
             job = self.storage.get_job(job_id)
             if job.get("cancelRequested"):
                 return "cancelled"
+            self._where = f"at document {row['n']}"
             self.storage.acquire_lock(self.tenant.key, self.owner, self.s.worker_lock_seconds)
             self.storage.update_job(job_id, {"currentRow": row["n"], "currentFile": row["file"], "heartbeatAt": now()})
             err = self.run_row(client, job_id, row, run_no, created)
             if err in JOB_LEVEL:
-                raise JobStop(err, f"row {row['n']}: {err}")
+                e = (row.get("result") or {}).get("error") or {}
+                raise JobStop(err, f"Document {row['n']}, step {e.get('step', '?')}: {e.get('detail') or err}")
+            self._where = f"at document {row['n']}, after its steps"
             self.storage.update_job(job_id, {"progress": _progress(self.storage.get_rows(job_id))})
+        self._where = "while finishing the run"
         return ""
 
     # ---- one row ------------------------------------------------------------------------------
@@ -579,7 +620,8 @@ class Worker:
             # by _finish, and the documents not reached stay not started. Checked before every step, so no step
             # (the group steps included) is skipped by the count.
             if getattr(client, "failures_in_a_row", 0) >= MAX_CONSECUTIVE_SERVER_ERRORS:
-                raise JobStop("unavailable", f"{client.failures_in_a_row} requests in a row to CollectionSpace failed")
+                raise JobStop("unavailable", _unavailable(client, row, name))
+            self._where = f"at document {row['n']}, step {name}"
             st = _step(row, name)
             if st.get("s") in FINISHED:
                 continue  # a rerun never repeats a done step
@@ -613,7 +655,7 @@ class Worker:
             except CSpaceUnavailable as e:
                 # the fifth failure in a row came from an earlier request: this one was never sent, so the step
                 # stays as it was, and the job stops (_finish settles the row)
-                raise JobStop("unavailable", e.detail) from e
+                raise JobStop("unavailable", _unavailable(client, row, name)) from e
             except (CSpaceError, _RowError) as e:
                 code, detail = (e.code, e.detail) if isinstance(e, _RowError) else classify(name, e)
                 st.clear()
@@ -629,7 +671,7 @@ class Worker:
             finally:
                 self.storage.put_row(job_id, row, guard=False)
         if getattr(client, "failures_in_a_row", 0) >= MAX_CONSECUTIVE_SERVER_ERRORS:
-            raise JobStop("unavailable", f"{client.failures_in_a_row} requests in a row to CollectionSpace failed")
+            raise JobStop("unavailable", _unavailable(client, row, plan[-1][0]))
         res["state"] = row_state(res)
         if res["state"] == "Done":
             res["error"] = None
@@ -801,6 +843,22 @@ class _RowError(Exception):
         super().__init__(detail)
         self.code = code
         self.detail = detail
+
+
+def _unavailable(client: CSpaceClient, row: dict, step: str) -> str:
+    """The technical detail of a job stopped as "unavailable": the failures in a row and the last one, and where."""
+    last = getattr(client, "last_failure", "")
+    return (f"{client.failures_in_a_row} requests in a row to CollectionSpace failed" + (f", the last: {last}" if last else "") +
+            f"; stopped at document {row['n']}, step {step}")
+
+
+def _unexpected(e: Exception, where: str) -> str:
+    """The technical detail of an unexpected error (code "unknown"): the exception's type, for an AWS call its
+    operation and error code, and where the run was. Never the message, which could quote a request or a secret."""
+    what = type(e).__name__
+    if isinstance(e, ClientError):
+        what += f" {e.response.get('Error', {}).get('Code', '')} in {e.operation_name}".replace("  ", " ")
+    return f"Unexpected {what} {where or 'while running the job'}"
 
 
 def _progress(rows: list[dict]) -> dict:

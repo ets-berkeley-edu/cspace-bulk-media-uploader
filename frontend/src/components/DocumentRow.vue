@@ -6,6 +6,7 @@ import { filenameProblems, idLabel, objectLabel } from "../lib/filenames";
 import { handlingBlocked, rowStatus, worstLevel } from "../lib/status";
 import { canReplaceFile, createdSomething, fixFields, mediaCreated, objectStepRan, RELINK_OBJECT, stepList, STEP_MARK, stepNote } from "../lib/results";
 import { portalOf } from "../lib/portal";
+import { isPreset, PRESETTABLE, type Presettable } from "../lib/presets";
 import AuthorityInput from "./AuthorityInput.vue";
 import DateInput from "./DateInput.vue";
 import ErrorBox from "./ErrorBox.vue";
@@ -85,9 +86,8 @@ function applyName() {
 }
 const objLabel = computed(() => objectLabel(props.row));
 const idnLabel = computed(() => idLabel(props.row, props.tenant));
-/** Language still holds the tenant's default, which the user hasn't chosen (design: PRESET marks). */
-const languagePreset = computed(() => !(props.row.touched ?? []).includes("language") && !!props.tenant.languageDefault
-  && JSON.stringify(props.row.language ?? []) === JSON.stringify([props.tenant.languageDefault]));
+/** Fields that still hold their handling's preset or the tenant's default language (design: PRESET marks). */
+const preset = computed(() => Object.fromEntries(PRESETTABLE.map((f) => [f, isPreset(props.row, props.tenant, f)])) as Record<Presettable, boolean>);
 
 function text(field: keyof Row, e: Event) {
   const v = (e.target as HTMLInputElement).value;
@@ -196,16 +196,17 @@ function text(field: keyof Row, e: Event) {
           <button v-if="objLabel.reset !== undefined && !ro && !objFixed" class="link field-note" type="button" @click="emit('edit', { obj: objLabel.reset })">Use parsed value</button>
         </div>
         <DateInput :model-value="row.date" :parsed="row.lookups?.date" :exif="row.dateExif" :disabled="ro" @update:model-value="emit('edit', { date: $event })" />
-        <RepeatingSelect label="Media type" word="type" :model-value="row.type" :options="tenant.mediaTypes" :disabled="ro"
+        <RepeatingSelect label="Media type" word="type" :model-value="row.type" :options="tenant.mediaTypes" :disabled="ro" :preset="preset.type"
                          @update:model-value="emit('edit', { type: $event })" />
         <AuthorityInput :timing="tenant.autocomplete" field="creator" label="Creator" :model-value="row.creator" :disabled="ro" @update:model-value="emit('edit', { creator: $event })" />
-        <AuthorityInput :timing="tenant.autocomplete" field="contributor" label="Contributor" :model-value="row.contributor" :disabled="ro" @update:model-value="emit('edit', { contributor: $event })" />
+        <AuthorityInput :timing="tenant.autocomplete" field="contributor" label="Contributor" :model-value="row.contributor" :disabled="ro" :preset="preset.contributor" @update:model-value="emit('edit', { contributor: $event })" />
         <AuthorityInput :timing="tenant.autocomplete" field="rightsHolder" label="Rights holder" :model-value="row.rightsHolder" :disabled="ro" @update:model-value="emit('edit', { rightsHolder: $event })" />
         <label class="field wide"><span>Description</span>
           <textarea rows="2" :value="row.description" :disabled="ro" @change="text('description', $event)"></textarea></label>
-        <label class="field"><span>Copyright statement</span>
+        <label class="field" :class="{ 'field-preset': preset.copyright }"><span>Copyright statement<em v-if="preset.copyright" class="preset-tag"
+          title="Filled in automatically; it stays until you change it">PRESET</em></span>
           <input type="text" :value="row.copyright" :disabled="ro" @change="text('copyright', $event)" /></label>
-        <RepeatingSelect label="Language" word="language" :model-value="row.language ?? []" :options="languages ?? []" :disabled="ro" :preset="languagePreset"
+        <RepeatingSelect label="Language" word="language" :model-value="row.language ?? []" :options="languages ?? []" :disabled="ro" :preset="preset.language"
                          @update:model-value="emit('edit', { language: $event })" />
       </div>
       </template>
@@ -218,7 +219,7 @@ function text(field: keyof Row, e: Event) {
           This is the job's last document, so the job is deleted too.</template>
           <button @click="confirmRemove = false; emit('remove')">Delete document</button> <button @click="confirmRemove = false">Cancel</button></div></div>
       <div v-else-if="!readonly && createdSomething(row) && !done" class="field-note" style="margin-top:6px">{{ row.result?.interrupted
-        ? "The last run stopped while working on this document, so it may have created a record in CollectionSpace that the BMU couldn't record. It can't be deleted from the job; check Exclude to have the BMU ignore it, or reschedule to finish it."
+        ? "The last run stopped while working on this document, so it may have created a record in CollectionSpace that the BMU couldn't record. It can't be deleted from the job; check Exclude to have the BMU ignore it, or submit the job to finish it."
         : "This document already created records in CollectionSpace, so it can't be deleted from the job; check Exclude to have the BMU ignore it." }}</div>
     </td>
   </tr>

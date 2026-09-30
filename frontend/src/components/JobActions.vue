@@ -63,7 +63,7 @@ const del = () => act(() => api.deleteJob(props.job.id), props.kind === "queue" 
   </div>
   <div v-else-if="confirm === 'edit'" class="msg msg-warn">
     Editing takes this job out of the queue and deletes its saved sign-in. It goes to the end of the queue when it’s
-    scheduled again, even if nothing changes. <button @click="editQueued">Edit anyway</button> <button @click="confirm = null">Cancel</button>
+    submitted again, even if nothing changes. <button @click="editQueued">Edit anyway</button> <button @click="confirm = null">Cancel</button>
   </div>
   <div v-else-if="confirm === 'cancel'" class="msg msg-warn">
     Stop this run? The worker finishes the document it’s on, then stops; documents it hasn’t reached stay not started,

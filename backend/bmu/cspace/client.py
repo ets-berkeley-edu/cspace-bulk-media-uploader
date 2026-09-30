@@ -150,6 +150,7 @@ class CSpaceClient:
         # several requests. None (the web app's per-request clients): no limit.
         self.failures_in_a_row = 0
         self.max_failures_in_a_row: int | None = None
+        self.last_failure = ""  # the last 5xx or unanswered request, e.g. "PUT media/…/blob returned 503", for the job's detail
 
     def close(self) -> None:
         self._http.close()
@@ -163,11 +164,13 @@ class CSpaceClient:
             r = self._http.request(method, self.base + path, auth=self._auth, headers=headers, **kw)
         except httpx.TransportError as e:  # network problem, DNS, timeout
             self.failures_in_a_row += 1
-            raise CSpaceError("unavailable", f"{method} {path}: {e.__class__.__name__}") from e
+            self.last_failure = f"{method} {path}: {e.__class__.__name__}"
+            raise CSpaceError("unavailable", self.last_failure) from e
         # Only a success resets the count (design: five failed requests in a row); a 4xx is an answer about one
         # record, neither an outage nor a success, so it leaves the count as it was.
         if r.status_code >= 500:
             self.failures_in_a_row += 1
+            self.last_failure = f"{method} {path} returned {r.status_code} {r.reason_phrase}".rstrip()
         elif r.status_code < 400:
             self.failures_in_a_row = 0
         if r.status_code >= 400:
@@ -225,6 +228,22 @@ class CSpaceClient:
                 out.append({"refName": ref, "displayName": name})
         total = next((int(e.text) for e in root if _local(e.tag) == "totalItems" and (e.text or "").isdigit()), len(out))
         return out, max(total, len(out))
+
+    def authority_term(self, service: str, vocabulary: str, short_id: str) -> str | None:
+        """The current refName of an authority term, by its vocabulary's and its own short identifiers
+        (GET <authority>/urn:cspace:name(<vocabulary>)/items/urn:cspace:name(<shortId>)), or None when the term is
+        gone: 404, or soft-deleted (its workflow state is deleted). Other failures raise CSpaceError, so a term
+        that couldn't be checked is never reported as missing. VERIFY on QA: a merged term's state."""
+        try:
+            r = self._request("GET", f"{service}/urn:cspace:name({vocabulary})/items/urn:cspace:name({short_id})")
+        except CSpaceError as e:
+            if e.status == 404:
+                return None
+            raise
+        root = SafeET.fromstring(r.content)
+        if "deleted" in _text(root, "workflowState").lower():  # deleted, or locked_deleted / replicated_deleted
+            return None
+        return _text(root, "refName") or short_id
 
     def parse_date(self, text: str) -> dict[str, str] | None:
         """Parse a display date with CollectionSpace's own parser (GET structureddates?displayDate=), as the

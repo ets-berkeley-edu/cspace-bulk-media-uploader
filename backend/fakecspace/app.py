@@ -8,7 +8,8 @@ Run: uvicorn fakecspace.app:app --port 8180
 Users: admin/admin (all permissions; a BMU scheduler), limited/limited (can't create objects or groups), reader/reader
 (read only). Roles (accounts/0/accountroles): admin has ROLE_15_TENANT_ADMINISTRATOR and ROLE_15_BMU_SCHEDULER, the
 others ROLE_15_TENANT_READER.
-Development hooks: /_fake/state, /_fake/reset, /_fake/slow, /_fake/fail (failures on demand).
+Development hooks: /_fake/state, /_fake/reset, /_fake/slow, /_fake/fail (failures on demand), /_fake/delete-term and
+/_fake/delete-language (terms deleted in CollectionSpace meanwhile).
 """
 from __future__ import annotations
 
@@ -58,9 +59,20 @@ PEOPLE = ["Madeleine W. Fang", "Leslie Freund", "Natasha Johnson", "Michael T. B
 ORGS = ["Phoebe A. Hearst Museum of Anthropology", "University of California at Berkeley Regents"]
 
 
+# Short identifiers the tests and examples have always used; other terms get one made from the name.
+SHORT_IDS = {"Leslie Freund": "7475"}
+
+
+def _short(name: str) -> str:
+    return SHORT_IDS.get(name) or re.sub(r"[^A-Za-z0-9]", "", name) + "1400000000000"
+
+
 def _ref(service: str, vocab: str, name: str) -> str:
-    short = re.sub(r"[^A-Za-z0-9]", "", name) + "1400000000000"
-    return f"urn:cspace:{DOMAIN}:{service}:name({vocab}):item:name({short})'{name}'"
+    return f"urn:cspace:{DOMAIN}:{service}:name({vocab}):item:name({_short(name)})'{name}'"
+
+
+def _term_names(service: str) -> list[str]:
+    return PEOPLE if service == "personauthorities" else ORGS
 
 
 # Sample Object records. Most are ordinary; 9-9999 is on two objects, to exercise "matches several objects".
@@ -106,6 +118,11 @@ class Store:
         self.perm_overrides: dict[str, dict[str, str]] = {}  # e.g. {"admin": {"collectionobjects": "RL"}}: roles changed
         self.role_overrides: dict[str, list[str]] = {}  # e.g. {"admin": ["ROLE_15_TENANT_READER"]}: the user's role names
         self.searches: list[tuple[str, str | None]] = []  # (service, searched value), to test lookup caching
+        # Authority terms deleted meanwhile, by short identifier: "deleted" (soft-deleted: read with workflow state
+        # deleted, left out of searches) or "gone" (404, e.g. purged). Languages likewise, by code.
+        self.term_states: dict[str, str] = {}
+        self.deleted_languages: set[str] = set()
+        self.term_reads: list[str] = []  # short identifiers read one by one, to test the per-check cache
         self.delay = 0.0  # seconds added to every create or upload, to watch the queue in a browser (/_fake/slow)
         self.rules: list[dict] = []  # failures on demand (/_fake/fail)
         for num, note in SAMPLE_OBJECTS:
@@ -287,15 +304,14 @@ def search_terms(service: str, vocab: str, request: Request):
             return d
         items = "".join(f"<list-item><csid>{uuid.uuid5(uuid.NAMESPACE_URL, c)}</csid><shortIdentifier>{c}</shortIdentifier>"
                         f"<displayName>{escape(n)}</displayName><refName>{escape(_language_ref(c))}</refName></list-item>"
-                        for c, n in _page(list(LANGUAGES.items()), request))
+                        for c, n in _page([x for x in LANGUAGES.items() if x[0] not in store.deleted_languages], request))
         return _xml(f'<ns2:abstract-common-list xmlns:ns2="http://collectionspace.org/services/jaxb">{items}</ns2:abstract-common-list>')
     if service not in ("personauthorities", "orgauthorities"):
         return Response(status_code=404)
     if (d := _check(request, service, "R")):
         return d
     q = request.query_params.get("pt", "").lower()
-    names = PEOPLE if service == "personauthorities" else ORGS
-    matches = [n for n in names if q in n.lower()]
+    matches = [n for n in _term_names(service) if q in n.lower() and _short(n) not in store.term_states]  # wf_deleted=false
     page = _page(matches, request)
     items = "".join(
         f"<list-item><csid>{uuid.uuid5(uuid.NAMESPACE_URL, n)}</csid><termDisplayName>{escape(n)}</termDisplayName>"
@@ -304,6 +320,31 @@ def search_terms(service: str, vocab: str, request: Request):
     )
     return _xml(f'<ns2:abstract-common-list xmlns:ns2="http://collectionspace.org/services/jaxb"><totalItems>{len(matches)}</totalItems>'
                 f'{items}</ns2:abstract-common-list>')
+
+
+@app.get("/cspace-services/{service}/urn:cspace:name({vocab})/items/urn:cspace:name({short})")
+def get_term(service: str, vocab: str, short: str, request: Request):
+    """One authority term by short identifier. A soft-deleted term is still read, with workflow state deleted, as
+    CollectionSpace does; fail_next {"personauthorities": 500} fails the next read."""
+    if service not in ("personauthorities", "orgauthorities"):
+        return Response(status_code=404)
+    store.term_reads.append(short)
+    if (d := _check(request, service, "R")):
+        return d
+    name = next((n for n in _term_names(service) if _short(n) == short), None)
+    state = store.term_states.get(short, "")
+    if not name or state == "gone":
+        return Response(status_code=404)
+    doc, ns, group = (("persons", "person", "personTermGroup") if service == "personauthorities"
+                      else ("organizations", "organization", "orgTermGroup"))
+    common = f"{doc}_common"
+    return _xml(f'<document name="{doc}">'
+                f'<ns2:{common} xmlns:ns2="http://collectionspace.org/services/{ns}">'
+                f"<shortIdentifier>{escape(short)}</shortIdentifier><refName>{escape(_ref(service, vocab, name))}</refName>"
+                f"<{group}List><{group}><termDisplayName>{escape(name)}</termDisplayName></{group}></{group}List></ns2:{common}>"
+                '<ns2:collectionspace_core xmlns:ns2="http://collectionspace.org/collectionspace_core/">'
+                f"<workflowState>{'deleted' if state == 'deleted' else 'project'}</workflowState></ns2:collectionspace_core>"
+                "</document>")
 
 
 _MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october",
@@ -554,6 +595,25 @@ def authority_vocabularies(service: str, request: Request):
     item = (f"<list-item><csid>{uuid.uuid5(uuid.NAMESPACE_URL, service)}</csid><shortIdentifier>{short}</shortIdentifier>"
             f"<displayName>{name}</displayName></list-item>")
     return _xml(f'<ns2:abstract-common-list xmlns:ns2="http://collectionspace.org/services/jaxb">{item}</ns2:abstract-common-list>')
+
+
+@app.post("/_fake/delete-term")
+def delete_term(name: str, how: str = "deleted"):
+    """Development only: a Person or Organization term (by display name) is deleted in CollectionSpace meanwhile:
+    how=deleted soft-deletes it, how=gone makes reading it return 404 (purged, or merged away)."""
+    if name not in PEOPLE + ORGS or how not in ("deleted", "gone"):
+        return Response(status_code=400, content="name is a sample term's display name; how is deleted or gone")
+    store.term_states[_short(name)] = how
+    return {"deleted": store.term_states}
+
+
+@app.post("/_fake/delete-language")
+def delete_language(code: str):
+    """Development only: a language (by code, e.g. spa) leaves the languages vocabulary."""
+    if code not in LANGUAGES:
+        return Response(status_code=400, content=f"code is one of {', '.join(LANGUAGES)}")
+    store.deleted_languages.add(code)
+    return {"deleted": sorted(store.deleted_languages)}
 
 
 @app.get("/_fake/fail")

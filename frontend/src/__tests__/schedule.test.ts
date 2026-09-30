@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { absLabel, canCancelRun, daysText, fmtClock, parsePtInput, pausedBanner, ptInputValue, runsAt, scheduleBanner, scheduleSummary,
-  submitMessage, whenLabel } from "../lib/schedule";
+  groupTimestampTitle, submitMessage, whenLabel } from "../lib/schedule";
 import type { Job, JobPlan, Schedule } from "../types";
 
 // Wed Sep 30 2026, 1:00 PM Pacific (PDT, UTC-7)
@@ -106,5 +106,12 @@ describe("Submit job message (design: Job scheduling; UI mockup submitJob)", () 
     expect(submitMessage(sub({ plan: plan({ at: NOW, ahead: 1 }) }), { alwaysRunTime: true }, NOW)).toContain("so it starts after 1 other job.");
     expect(submitMessage(sub({ status: "Running", plan: plan({ kind: "running" }) }), {}, NOW)).toBe("“Spring batch” was submitted and started right away." + tail);
     expect(submitMessage(sub({ plan: plan({ signInExpiresFirst: true }) }), {}, NOW)).toContain("expires before then");
+  });
+});
+
+describe("Group title timestamp (user decision; legacy =job convention)", () => {
+  it("is bmu-YYYY-MM-DD-HH-MM-SS in Pacific time", () => {
+    expect(groupTimestampTitle(NOW * 1000 + 5_000)).toBe("bmu-2026-09-30-13-00-05");
+    expect(groupTimestampTitle(Date.UTC(2026, 0, 2, 7, 4, 9))).toBe("bmu-2026-01-01-23-04-09"); // PST, the day before in UTC
   });
 });

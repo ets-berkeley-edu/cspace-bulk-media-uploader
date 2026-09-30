@@ -153,6 +153,16 @@ describe("DocumentRow checks", () => {
     const chosen = mountRow({ tenant: t, row: row({ language: [eng], touched: ["language"] }) });
     expect(chosen.text()).not.toContain("PRESET");
   });
+  it("marks fields filled from the row's handling presets PRESET, until the user edits them", () => {
+    const org = "urn:cspace:pahma.cspace.berkeley.edu:orgauthorities:name(organization):item:name(Hearst)'Hearst Museum'";
+    const t: TenantInfo = { ...tenant, handling: [{ ...tenant.handling[0], presets: { type: ["slide"], contributor: org, copyright: "© Regents" } },
+      tenant.handling[1]] };
+    const presetOf = (w: ReturnType<typeof mountRow>) => w.findAll(".field-preset > span").map((x) => x.text().replace("PRESET", ""));
+    const filled = row({ type: ["slide"], contributor: org, copyright: "© Regents" });
+    expect(presetOf(mountRow({ tenant: t, row: filled }))).toEqual(["Media type", "Contributor", "Copyright statement"]);
+    expect(presetOf(mountRow({ tenant: t, row: { ...filled, touched: ["contributor"] } }))).toEqual(["Media type", "Copyright statement"]);
+    expect(presetOf(mountRow({ tenant: t, row: { ...filled, handling: "create" } }))).toEqual([]); // not this handling's presets
+  });
   it("warns that deleting the job's last document deletes the job", async () => {
     const w = mountRow({ last: true });
     await w.findAll("button").find((b) => b.text() === "Delete document")!.trigger("click");

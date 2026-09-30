@@ -119,6 +119,24 @@ describe("JobResults", () => {
     await w.find("select").setValue("excluded");
     expect(w.text()).toContain("Excluded by jdoe");
   });
+
+  it("every job-level failure offers its technical detail (design: technical detail shown on request)", async () => {
+    const cases: [string, string][] = [
+      ["auth", "Document 1, step media: POST media returned 401 Unauthorized"],
+      ["unknown", "Unexpected ClientError ProvisionedThroughputExceededException in UpdateItem at document 3, step upload"],
+      ["cancelled", "Cancel requested by agarcia, 2026-09-30 08:02 Pacific time"],
+    ];
+    for (const [code, codeDetail] of cases) {
+      const w = mount(JobResults, { props: { job: { ...job, status: "Failed", code, codeDetail }, rows: [notRun], runs: [], tenant } });
+      const box = w.findComponent(ErrorBox);
+      expect(box.props("detail")).toBe(codeDetail);
+      await box.find("button.link").trigger("click");
+      expect(box.text()).toContain(`${code} · ${codeDetail}`);
+    }
+    // a job that ended before codeDetail was stored still shows who cancelled it
+    const old = mount(JobResults, { props: { job: { ...job, code: "cancelled", cancelledBy: "jdoe" }, rows: [notRun], runs: [], tenant } });
+    expect(old.findComponent(ErrorBox).props("detail")).toBe("Cancel requested by jdoe");
+  });
 });
 
 describe("DocumentRow after a run", () => {

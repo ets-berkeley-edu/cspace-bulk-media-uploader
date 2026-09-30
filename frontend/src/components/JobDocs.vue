@@ -34,8 +34,8 @@ const handlingMix = computed(() => {
         <span v-if="job.expiresAt"><strong>Expires</strong> {{ formatDate(job.expiresAt) }}</span>
       </template>
       <template v-else>
-        <span><strong>Scheduled</strong> {{ formatTime(job.queuedAt) }} by {{ job.scheduledBy || "—" }}</span>
-        <span v-if="job.checksAtSchedule"><strong>At scheduling</strong> {{ job.checksAtSchedule.block ? `${job.checksAtSchedule.block} need fixing` : "nothing to fix" }}<template
+        <span><strong>Submitted</strong> {{ formatTime(job.queuedAt) }} by {{ job.scheduledBy || "—" }}</span>
+        <span v-if="job.checksAtSchedule"><strong>At submission</strong> {{ job.checksAtSchedule.block ? `${job.checksAtSchedule.block} need fixing` : "nothing to fix" }}<template
           v-if="job.checksAtSchedule.warn"> · {{ job.checksAtSchedule.warn }} warning(s)</template></span>
         <span v-if="(job.run ?? 0) > 0"><strong>Run</strong> rerun (run {{ (job.run ?? 0) + (job.status === "Running" ? 0 : 1) }})</span>
       </template>

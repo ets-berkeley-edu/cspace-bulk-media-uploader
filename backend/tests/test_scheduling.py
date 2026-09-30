@@ -162,6 +162,9 @@ def test_the_worker_picks_run_now_first_then_queue_order_skipping_held_and_waiti
     assert sched.pick_next([c, d], s, t) is None
     assert sched.pick_next([c, d], s, t + 3600)["id"] == "d"
     assert sched.pick_next([{**a, "status": "Running"}, c], s, t) is None
+    # one job per tenant at a time: nothing starts while another job is Running, even a due Run now job
+    assert sched.pick_next([J("r", status="Running"), a, b], s, t) is None
+    assert sched.pick_next([J("r", status="Failed"), a, b], s, t)["id"] == "b"
 
 
 def test_plans_say_when_each_job_starts_and_how_many_go_first():

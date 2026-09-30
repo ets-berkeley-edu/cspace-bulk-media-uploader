@@ -33,7 +33,7 @@ media_rejected:
   title: CollectionSpace rejected the Media record
   level: row
   needs_fix: true
-  explain: CollectionSpace couldn't save the Media record with the values sent, so no Media record or file was created. The object step doesn't depend on the Media record, so it still ran.
+  explain: CollectionSpace couldn't save the Media record with the values sent, so no Media record or file was created. The object step doesn't depend on the Media record, so it still ran. If the job creates a group, the document wasn't added to it, because that happens only after the Media record is linked to the object.
   fix: Check the document's fields (the date is the usual cause), then choose Fix and reschedule.
 
 object_gone:
@@ -47,7 +47,7 @@ object_ambiguous:
   title: Object number matches several objects
   level: row
   needs_fix: true
-  explain: When the job ran, more than one object had this object number, so the BMU couldn't tell which one to link. Another object with the same number was probably added after the job was scheduled.
+  explain: When the job ran, more than one object had this object number, so the BMU couldn't tell which one to link. Another object with the same number was probably added after the job was submitted.
   fix: Correct the object number, or have the duplicate object resolved in CollectionSpace, then choose Fix and reschedule. The Media record and its file already exist.
 
 object_exists:
@@ -82,7 +82,7 @@ duplicate_at_run:
   title: Identification number already in use
   level: notice
   needs_fix: false
-  explain: When the job ran, a Media record with the same identification number already existed; it was created after the job was scheduled. As with the editor's warning, the document was still processed.
+  explain: When the job ran, a Media record with the same identification number already existed; it was created after the job was submitted. As with the editor's warning, the document was still processed.
   fix: Review both Media records in CollectionSpace. No rerun is needed.
 
 group_failed:
@@ -96,14 +96,14 @@ auth:
   title: Sign-in failed
   level: job
   needs_fix: false
-  explain: CollectionSpace rejected the password of the person who scheduled the job; it may have been changed after the job was scheduled. The job stopped at once so the account wouldn't be locked out.
-  fix: Reschedule the job. Scheduling it again uses your own current sign-in.
+  explain: CollectionSpace rejected the password of the person who submitted the job; it may have been changed after the job was submitted. The job stopped at once so the account wouldn't be locked out.
+  fix: Reschedule the job. Submitting it again uses your own current sign-in.
 
 account_inactive:
   title: CollectionSpace account inactive
   level: job
   needs_fix: false
-  explain: The CollectionSpace account of the person who scheduled the job is inactive. The job stopped at once.
+  explain: The CollectionSpace account of the person who submitted the job is inactive. The job stopped at once.
   fix: Ask a CollectionSpace administrator to reactivate the account, or have another user reschedule the job with their own sign-in.
 
 unavailable:

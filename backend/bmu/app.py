@@ -4,7 +4,6 @@ from __future__ import annotations
 import copy
 import hashlib
 import logging
-import re
 import secrets
 import uuid
 from datetime import datetime
@@ -46,6 +45,19 @@ AUTOCOMPLETE_PAGE = 20  # the first page of each source, as the CollectionSpace 
 VOCABULARIES = ("languages",)
 VOCAB_CACHE_SECONDS = 3600
 _VOCAB_CACHE: dict[tuple[str, str], tuple[float, list[dict]]] = {}
+
+
+def vocabulary_terms(tenant: str, client: CSpaceClient, name: str, fresh: bool = False) -> list[dict]:
+    """A vocabulary's terms, sorted by display name, from the cache (an hour) or CollectionSpace. The Language
+    picker offers them and the row checks compare rows' languages with them; fresh=True (scheduling) reads the
+    vocabulary again."""
+    key = (tenant, name)
+    hit = _VOCAB_CACHE.get(key)
+    if hit and not fresh and now() - hit[0] < VOCAB_CACHE_SECONDS:
+        return hit[1]
+    terms = sorted(client.vocabulary_items(name), key=lambda t: t["displayName"].lower())
+    _VOCAB_CACHE[key] = (now(), terms)
+    return terms
 
 
 class Services:
@@ -259,7 +271,8 @@ def _complete_if_clean(s: "Services", sess: "Session", job_id: str) -> bool:
         return True
     if any(r.get("include") and (r.get("result") or {}).get("state") != "Done" for r in rows):
         return False
-    if not s.storage.update_job(job_id, {"status": "Completed", "code": "", "note": "", "fixFrom": None, "draftExpiresAt": None,
+    if not s.storage.update_job(job_id, {"status": "Completed", "code": "", "codeDetail": "", "note": "", "fixFrom": None,
+                                         "draftExpiresAt": None,
                                          "expiresAt": now() + s.settings.completed_days * 86400}, expect_status="Draft"):
         return False
     s.storage.clear_editing(job_id)
@@ -344,12 +357,6 @@ class JobPatch(BaseModel):
     name: str | None = Field(default=None, max_length=200)
     groupOn: bool | None = None  # "Create a group for this job"
     groupTitle: str | None = Field(default=None, max_length=200)
-
-
-def default_group_title(name: str) -> str:
-    """Design: prefilled with bmu-<job name> (the legacy =job convention)."""
-    slug = re.sub(r"[^a-z0-9]+", "-", (name or "untitled job").lower()).strip("-")
-    return f"bmu-{slug or 'untitled-job'}"
 
 
 class FileSpec(BaseModel):
@@ -508,19 +515,13 @@ def _routes(app: FastAPI) -> None:
     def vocabulary(name: str, sess: Session = Depends(current_session), s: Services = Depends(svc)):
         if name not in VOCABULARIES:
             raise HTTPException(404, "No such vocabulary")
-        key = (sess.tenant, name)
-        hit = _VOCAB_CACHE.get(key)
-        if hit and now() - hit[0] < VOCAB_CACHE_SECONDS:
-            return {"terms": hit[1]}
         client = sess.client(s)
         try:
-            terms = sorted(client.vocabulary_items(name), key=lambda t: t["displayName"].lower())
+            return {"terms": vocabulary_terms(sess.tenant, client, name)}
         except CSpaceError as e:
             raise _cspace_http(e)
         finally:
             client.close()
-        _VOCAB_CACHE[key] = (now(), terms)
-        return {"terms": terms}
 
     # ---- jobs --------------------------------------------------------------------------------
     @app.get("/api/jobs")
@@ -548,6 +549,7 @@ def _routes(app: FastAPI) -> None:
         job = _job_or_404(s, sess, job_id)
         t = now()
         if not s.storage.update_job(job_id, {"status": "Draft", "fixFrom": {"status": job["status"], "code": job.get("code", ""),
+                                                                            "codeDetail": job.get("codeDetail", ""),
                                                                             "run": job.get("run", 0)},
                                              "note": "", "lastSavedBy": sess.user, "lastSavedAt": t,
                                              **draft_expiry({"fixFrom": True}, t + _draft_days(s, job) * 86400)},
@@ -644,8 +646,10 @@ def _routes(app: FastAPI) -> None:
 
     @app.patch("/api/jobs/{job_id}")
     def patch_job(job_id: str, body: JobPatch, sess: Session = Depends(editor_session), s: Services = Depends(svc)):
-        """The job header: its name, and the job's group (design: Groups). The Group title follows the job name
-        until the user edits it. Once the Group exists in CollectionSpace, it can't be turned off or renamed."""
+        """The job header: its name, and the job's group (design: Groups). Turning the group on leaves the Group
+        title as it was, empty for a new job: the user types it or fills it with one click (the job name or a
+        timestamp, in the editor); it never follows the job name. Once the Group exists in CollectionSpace, it
+        can't be turned off or renamed."""
         job = _job_or_404(s, sess, job_id)
         _editable(job, sess)
         fields: dict[str, Any] = {}
@@ -660,13 +664,8 @@ def _routes(app: FastAPI) -> None:
         on = bool(job.get("groupOn")) if body.groupOn is None else body.groupOn
         if body.groupOn is not None:
             fields["groupOn"] = on
-            if on and not job.get("groupTitle"):
-                fields.update(groupTitle=default_group_title(name), groupTitleAuto=True)
         if body.groupTitle is not None:
-            title = body.groupTitle.strip()
-            fields.update(groupTitle=title, groupTitleAuto=title == default_group_title(name))
-        elif body.name is not None and job.get("groupTitleAuto") and not group_made:
-            fields["groupTitle"] = default_group_title(name)  # still the prefilled title: it follows the name
+            fields["groupTitle"] = body.groupTitle.strip()
         if fields:
             s.storage.update_job(job_id, fields, expect_status="Draft")
         _saved(s, sess, job_id)
@@ -944,7 +943,7 @@ def _routes(app: FastAPI) -> None:
     def schedule(job_id: str, sess: Session = Depends(editor_session), s: Services = Depends(svc)):
         job = _job_or_404(s, sess, job_id)
         if job["status"] not in RESCHEDULABLE:
-            raise HTTPException(409, f"The job is {job['status']} and can't be scheduled.")
+            raise HTTPException(409, f"The job is {job['status']} and can't be submitted.")
         if job["status"] == "Draft":
             _editable(job, sess)  # only the draft's editor schedules it
         if job.get("groupOn") and not (job.get("groupTitle") or "").strip():
@@ -972,9 +971,9 @@ def _routes(app: FastAPI) -> None:
                  "credentialExpires": int(expires), "checksAtSchedule": result["counts"],
                  "progress": {"total": len(work), "done": 0, "failed": 0}},
                 list(RESCHEDULABLE), sess.key):
-            raise HTTPException(409, "The job changed while scheduling; reload and try again.")
+            raise HTTPException(409, "The job changed while submitting it; reload and try again.")
         s.storage.close_draft(job_id, sess.key)  # it leaves Drafts
-        s.storage.audit(sess.tenant, "Scheduled", sess.user, job_id, f"Scheduled “{job['name']}” with {len(work)} documents.")
+        s.storage.audit(sess.tenant, "Scheduled", sess.user, job_id, f"Submitted “{job['name']}” with {len(work)} documents.")
         return _public(s.storage.get_job(job_id), sess, s)  # with its plan: when it runs (design: Job scheduling)
 
     # ---- the schedule and the scheduler's queue actions (design: Job scheduling) ----------------------------
@@ -1092,7 +1091,8 @@ def _recheck(s: Services, sess: Session, job_id: str, targets: set[int] | None, 
     client = sess.client(s)
     try:
         partial = check_rows(s.tenant, rows, client, sess.perms, targets=targets, refresh=refresh, group_on=group_on,
-                             set_publish=editable, group_exists=group_exists)
+                             set_publish=editable, group_exists=group_exists,
+                             languages=lambda: vocabulary_terms(sess.tenant, client, "languages", fresh=refresh))
     except CSpaceError as e:
         raise _cspace_http(e)
     finally:
@@ -1116,7 +1116,7 @@ def _recheck(s: Services, sess: Session, job_id: str, targets: set[int] | None, 
             was_protected = before[r["n"]][auto.index("protected")]
             if r.get("protected") and not was_protected and r.get("include"):
                 r["checks"].append({"level": "warn", "text": f"Object {r.get('obj')} became protected after this job was "
-                                    "scheduled, and this document's publish setting wasn't changed. To change it, "
+                                    "submitted, and this document's publish setting wasn't changed. To change it, "
                                     "edit the job."})
             continue
         if before[r["n"]] != tuple(r.get(k) for k in auto) and s.storage.save_checks(job_id, r):

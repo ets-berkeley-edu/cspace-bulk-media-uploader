@@ -77,8 +77,8 @@ function fixLabel(j: Job): "Fix and reschedule" | "Reschedule" {
 function fixTitle(j: Job) {
   if (props.editWhy) return props.editWhy;
   return fixLabel(j) === "Reschedule"
-    ? "Nothing needs changing: every failure only needs another run. Opens the job in Drafts so you can schedule it again."
-    : "Opens the job in Drafts to fix the documents that need it, then schedule it again.";
+    ? "Nothing needs changing: every failure only needs another run. Opens the job in Drafts so you can submit it again."
+    : "Opens the job in Drafts to fix the documents that need it, then submit it again.";
 }
 
 async function toggle(j: Job) {
@@ -191,7 +191,7 @@ function removedOn(j: Job) {
               </tr>
               <tr v-if="expanded.has(j.id)" class="detail">
                 <td colspan="6">
-                  <div class="sub">Run {{ j.run }} scheduled by {{ j.runBy || j.scheduledBy || "—" }} · started {{ formatTime(j.startedAt) }} · finished {{ formatTime(j.finishedAt) }}
+                  <div class="sub">Run {{ j.run }} submitted by {{ j.runBy || j.scheduledBy || "—" }} · started {{ formatTime(j.startedAt) }} · finished {{ formatTime(j.finishedAt) }}
                     <template v-if="j.cancelledBy"> · cancelled by {{ j.cancelledBy }}</template></div>
                   <p v-if="!details.get(j.id)" class="muted">Loading…</p>
                   <!-- The 10 most important documents, with what happened and what to do (UI mockup jobDocsTable) -->
