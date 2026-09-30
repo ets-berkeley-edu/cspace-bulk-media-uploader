@@ -8,8 +8,8 @@ Run: uvicorn fakecspace.app:app --port 8180
 Users: admin/admin (all permissions; a BMU scheduler), limited/limited (can't create objects or groups), reader/reader
 (read only). Roles (accounts/0/accountroles): admin has ROLE_15_TENANT_ADMINISTRATOR and ROLE_15_BMU_SCHEDULER, the
 others ROLE_15_TENANT_READER.
-Development hooks: /_fake/state, /_fake/reset, /_fake/slow, /_fake/fail (failures on demand), /_fake/delete-term and
-/_fake/delete-language (terms deleted in CollectionSpace meanwhile).
+Development hooks: /_fake/state, /_fake/reset, /_fake/slow, /_fake/fail (failures on demand), /_fake/delete-term,
+/_fake/rename-term and /_fake/delete-language (terms deleted or renamed in CollectionSpace meanwhile).
 """
 from __future__ import annotations
 
@@ -68,7 +68,12 @@ def _short(name: str) -> str:
 
 
 def _ref(service: str, vocab: str, name: str) -> str:
-    return f"urn:cspace:{DOMAIN}:{service}:name({vocab}):item:name({_short(name)})'{name}'"
+    """A term's refName, with its current display name (a renamed term keeps its short identifier)."""
+    return f"urn:cspace:{DOMAIN}:{service}:name({vocab}):item:name({_short(name)})'{_shown(name)}'"
+
+
+def _shown(name: str) -> str:
+    return store.term_renames.get(_short(name), name)
 
 
 def _term_names(service: str) -> list[str]:
@@ -121,6 +126,7 @@ class Store:
         # Authority terms deleted meanwhile, by short identifier: "deleted" (soft-deleted: read with workflow state
         # deleted, left out of searches) or "gone" (404, e.g. purged). Languages likewise, by code.
         self.term_states: dict[str, str] = {}
+        self.term_renames: dict[str, str] = {}  # short identifier -> its new display name (the term was renamed)
         self.deleted_languages: set[str] = set()
         self.term_reads: list[str] = []  # short identifiers read one by one, to test the per-check cache
         self.delay = 0.0  # seconds added to every create or upload, to watch the queue in a browser (/_fake/slow)
@@ -311,10 +317,10 @@ def search_terms(service: str, vocab: str, request: Request):
     if (d := _check(request, service, "R")):
         return d
     q = request.query_params.get("pt", "").lower()
-    matches = [n for n in _term_names(service) if q in n.lower() and _short(n) not in store.term_states]  # wf_deleted=false
+    matches = [n for n in _term_names(service) if q in _shown(n).lower() and _short(n) not in store.term_states]  # wf_deleted=false
     page = _page(matches, request)
     items = "".join(
-        f"<list-item><csid>{uuid.uuid5(uuid.NAMESPACE_URL, n)}</csid><termDisplayName>{escape(n)}</termDisplayName>"
+        f"<list-item><csid>{uuid.uuid5(uuid.NAMESPACE_URL, n)}</csid><termDisplayName>{escape(_shown(n))}</termDisplayName>"
         f"<refName>{escape(_ref(service, vocab, n))}</refName></list-item>"
         for n in page
     )
@@ -341,7 +347,7 @@ def get_term(service: str, vocab: str, short: str, request: Request):
     return _xml(f'<document name="{doc}">'
                 f'<ns2:{common} xmlns:ns2="http://collectionspace.org/services/{ns}">'
                 f"<shortIdentifier>{escape(short)}</shortIdentifier><refName>{escape(_ref(service, vocab, name))}</refName>"
-                f"<{group}List><{group}><termDisplayName>{escape(name)}</termDisplayName></{group}></{group}List></ns2:{common}>"
+                f"<{group}List><{group}><termDisplayName>{escape(_shown(name))}</termDisplayName></{group}></{group}List></ns2:{common}>"
                 '<ns2:collectionspace_core xmlns:ns2="http://collectionspace.org/collectionspace_core/">'
                 f"<workflowState>{'deleted' if state == 'deleted' else 'project'}</workflowState></ns2:collectionspace_core>"
                 "</document>")
@@ -605,6 +611,16 @@ def delete_term(name: str, how: str = "deleted"):
         return Response(status_code=400, content="name is a sample term's display name; how is deleted or gone")
     store.term_states[_short(name)] = how
     return {"deleted": store.term_states}
+
+
+@app.post("/_fake/rename-term")
+def rename_term(name: str, to: str):
+    """Development only: a Person or Organization term (by its original display name) is renamed in CollectionSpace
+    meanwhile. It keeps its short identifier, so its refName changes only in the display name part."""
+    if name not in PEOPLE + ORGS or not to.strip():
+        return Response(status_code=400, content="name is a sample term's original display name; to is its new name")
+    store.term_renames[_short(name)] = to.strip()
+    return {"renamed": store.term_renames}
 
 
 @app.post("/_fake/delete-language")

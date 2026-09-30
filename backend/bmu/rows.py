@@ -424,6 +424,24 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
             raise got
         return got
 
+    def renamed_term(r: dict, name: str, label: str, ref: str) -> list[dict]:
+        """Design (Authority term fields): a term renamed in CollectionSpace keeps its short identifier, so it still
+        exists, but the refName the row holds carries its old display name, and that refName is what the Media
+        record would store. In a draft the row takes the term's current refName (not a user edit, so it isn't
+        marked touched); a job that isn't a draft is never changed here, so its checks only say so."""
+        current = ((r.get("lookups") or {}).get(f"term:{name}") or {}).get("csids") or []
+        new = current[0] if current else ref
+        if new == ref or _term_id(new) != _term_id(ref):
+            return []
+        old_name, new_name = display_name(ref), display_name(new)
+        if not set_publish:
+            return [{"level": "info", "text": f"{label} “{old_name}” is now called “{new_name}” in CollectionSpace. This job "
+                                              f"will send the old name; edit the job to send the new one."}]
+        r[name] = new
+        r["lookups"][f"term:{name}"] = {**r["lookups"][f"term:{name}"], "value": new}
+        return [{"level": "info", "text": f"{label} “{old_name}” was renamed in CollectionSpace; this document now uses "
+                                          f"its current name, “{new_name}”."}]
+
     def preset_note(r: dict, name: str) -> str:
         return (f" It was filled in from {tenant.name}’s preset, so the preset needs updating too: tell the BMU administrator."
                 if from_preset(tenant, r, name) else "")
@@ -450,6 +468,8 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
                 out.append({"level": "block", "text": f"{label} “{display_name(ref)}” no longer exists in CollectionSpace (it was "
                                                       f"deleted, or merged into another term). Choose another {label.lower()}."
                                                       + preset_note(r, name)})
+            elif exists:
+                out += renamed_term(r, name, label, ref)
         chosen = [x for x in r.get("language") or [] if x]
         if chosen and languages is not None:
             try:
