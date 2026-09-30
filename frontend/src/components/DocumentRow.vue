@@ -24,6 +24,8 @@ const emit = defineEmits<{ edit: [changes: Partial<Row>]; remove: []; toggle: []
 
 // Design: a failed upload shows "Upload failed" with Retry and Remove. An upload this page isn't sending
 // (the page that added the file was closed, or it's another person's browser) won't finish on its own.
+/** Design (Deleting a row): a document whose file is still on its way; deleting it stops the upload. */
+const stillUploading = computed(() => ["pending", "uploading", "verifying"].includes(props.row.upload.s) && !mediaCreated(props.row));
 const stalled = computed(() => !props.uploadingHere && !mediaCreated(props.row) && ["pending", "uploading", "verifying"].includes(props.row.upload.s));
 const canRetry = computed(() => !props.readonly && props.row.include && !mediaCreated(props.row) && (props.row.upload.s === "failed" || stalled.value));
 const portal = computed(() => portalOf(props.row, props.tenant));
@@ -176,7 +178,8 @@ function text(field: keyof Row, e: Event) {
   <tr v-if="confirmDelete && !readonly" class="del-confirm">
     <td :colspan="cols">
       <div class="confirm-line" role="group" :aria-label="`Delete ${row.file}`">
-        <span>Delete “{{ row.file }}”? Its uploaded file is removed; nothing in CollectionSpace is touched.<template v-if="last">
+        <span>Delete “{{ row.file }}”? <template v-if="stillUploading">Its upload is stopped and anything already sent is removed</template><template
+          v-else>Its uploaded file is removed</template>; nothing in CollectionSpace is touched.<template v-if="last">
           This is the job's last document, so the job is deleted too.</template></span>
         <button type="button" class="danger" @click="doDelete">Delete</button>
         <button ref="delCancel" type="button" @click="cancelDelete">Cancel</button>

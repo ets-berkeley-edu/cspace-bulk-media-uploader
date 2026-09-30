@@ -77,6 +77,12 @@ const drag = ref(false);
 // The files this page added, kept for Retry, and the uploads this page is sending right now.
 const localFiles = new Map<number, File>();
 const uploadingHere = reactive(new Set<number>());
+/** The uploads this page is sending, so deleting a document can stop its upload at once (design: Deleting a row). */
+const inFlight = new Map<number, AbortController>();
+/** Stop the uploads of deleted documents; ones still waiting their turn are skipped because their rows are gone. */
+function stopUploads(ns: number[] | "all") {
+  for (const [n, c] of inFlight) if (ns === "all" || ns.includes(n)) c.abort();
+}
 const retryInput = ref<HTMLInputElement | null>(null);
 let retryRow: Row | null = null;
 const fileInput = ref<HTMLInputElement | null>(null);
@@ -318,11 +324,16 @@ async function replaceFile(row: Row, file: File) {
 }
 
 async function uploadOne(jobId: string, row: Row, file: File) {
+  // A document deleted while its upload waited for its turn: nothing is sent
+  if (job.value?.id !== jobId || !rows.value.some((r) => r.n === row.n)) return;
+  const stop = new AbortController();
+  inFlight.set(row.n, stop);
   uploadingHere.add(row.n);
   try {
-    await sendFile(jobId, row, file);
+    await sendFile(jobId, row, file, stop.signal);
   } finally {
     uploadingHere.delete(row.n);
+    if (inFlight.get(row.n) === stop) inFlight.delete(row.n);
   }
 }
 
@@ -353,12 +364,13 @@ function retryPicked(e: Event) {
   retryRow = null;
 }
 
-async function sendFile(jobId: string, row: Row, file: File) {
+async function sendFile(jobId: string, row: Row, file: File, signal?: AbortSignal) {
   const live = () => rows.value.find((r) => r.n === row.n);
   const set = (u: Row["upload"]) => { const r = live(); if (r) r.upload = u; };
   set({ s: "uploading", pct: 0 });
   try {
-    await uploadToS3(row.uploadForm!, file, (pct) => set({ s: "uploading", pct }));
+    await uploadToS3(row.uploadForm!, file, (pct) => set({ s: "uploading", pct }), signal);
+    if (signal?.aborted) return; // deleted just as the upload finished: the server removed the file with the row
     set({ s: "verifying" });
     const confirmed = await api.uploaded(jobId, row.n);
     set(confirmed.row.upload);
@@ -369,6 +381,7 @@ async function sendFile(jobId: string, row: Row, file: File) {
       if (thumb) await api.putThumbnail(jobId, row.n, thumb).catch(() => undefined);
     }
   } catch {
+    if (signal?.aborted) return; // stopped because the document was deleted: not a failure
     set({ s: "failed" });
     try {
       apply(await api.uploadFailed(jobId, row.n));
@@ -419,6 +432,7 @@ async function removeMany(targets: number[]) {
 /** Documents were deleted: drop them from the table and the selection. True if the job was deleted or completed
  * (the page shows that instead). */
 async function removed(ns: number[], r: { others: Row[]; jobStatus?: string }): Promise<boolean> {
+  stopUploads(r.jobStatus === "Deleted" ? "all" : ns);
   if (r.jobStatus === "Deleted") {
     message.value = { cls: "msg-info", text: "That was the job's last document, so the job was deleted." };
     job.value = null;
