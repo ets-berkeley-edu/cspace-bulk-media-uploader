@@ -68,6 +68,10 @@ tr.disabled td:not(.keep) { opacity: .5; }
 th.del-col, td.del-col { width: 36px; padding-left: 2px; padding-right: 6px; text-align: center; }
 .row-del { width: 28px; height: 28px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border: 1px solid transparent; background: transparent; color: var(--text-secondary); border-radius: 6px; }
 .row-del svg { width: 16px; height: 16px; }
+/* A job's Delete (Drafts, Job queue, Finished jobs): the same trash icon, as a square button among the job's actions */
+button.job-del { width: 32px; padding: 5px 0; align-self: stretch; display: inline-flex; align-items: center; justify-content: center; color: var(--text-secondary); }
+button.job-del .trash-icon { width: 16px; height: 16px; }
+button.job-del:hover:not(:disabled) { color: var(--text-danger); background: var(--bg-danger); }
 .row-del:hover:not(:disabled), .row-del.armed { color: var(--text-danger); background: var(--bg-danger); border-color: var(--border); }
 tr.del-confirm td { background: var(--bg-warning); color: var(--text-warning); }
 tr.del-confirm .confirm-line { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }

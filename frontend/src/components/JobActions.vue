@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import TrashIcon from "./TrashIcon.vue";
 /**
  * A job's actions in Drafts and Job queue, in the list and in the job's preview (design: Drafts, scheduling and
  * the job queue; UI mockup actionsFor). Drafts: Preview, Edit (Continue editing), or Take over… after a warning
@@ -76,16 +77,16 @@ const del = () => act(() => api.deleteJob(props.job.id), props.kind === "queue" 
       <button v-if="lockedByOther" :disabled="!!noEdit" :title="noEdit || `${job.editingBy} is editing this draft`"
               @click="confirm = 'takeover'">Take over…</button>
       <button v-else :disabled="!!noEdit" :title="noEdit" @click="emit('open', job.id, 'edit')">{{ job.editingByYou ? "Continue editing" : "Edit" }}</button>
-      <button :disabled="lockedByOther || !!noEdit" :title="noEdit || (lockedByOther ? `${job.editingBy} is editing this draft` : '')"
-              @click="askDelete">Delete</button>
+      <button class="job-del" :disabled="lockedByOther || !!noEdit" :title="noEdit || (lockedByOther ? `${job.editingBy} is editing this draft` : 'Delete job')"
+              @click="askDelete"><TrashIcon /><span class="sr-only">Delete</span></button>
     </template>
     <template v-else-if="running">
       <button :disabled="!!job.cancelRequested || !!noCancel" :title="noCancel || 'Stop after the document in progress'" @click="confirm = 'cancel'">Cancel run</button>
-      <button disabled title="A running job can't be deleted">Delete</button>
+      <button class="job-del" disabled title="A running job can't be deleted"><TrashIcon /><span class="sr-only">Delete</span></button>
     </template>
     <template v-else>
       <button :disabled="!!noEdit" :title="noEdit" @click="confirm = 'edit'">Edit</button>
-      <button :disabled="!!noEdit" :title="noEdit" @click="askDelete">Delete</button>
+      <button class="job-del" :disabled="!!noEdit" :title="noEdit || 'Delete job'" @click="askDelete"><TrashIcon /><span class="sr-only">Delete</span></button>
     </template>
   </div>
 </template>
