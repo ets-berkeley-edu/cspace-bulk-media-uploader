@@ -282,6 +282,52 @@ def _complete_if_clean(s: "Services", sess: "Session", job_id: str) -> bool:
     return True
 
 
+DELETE_SKIPPED = {
+    "created": "It already created records in CollectionSpace, so it can't be deleted; use Exclude instead.",
+    "changed": "It changed while deleting it, so it wasn't deleted. Reload and try again.",
+    "missing": "It's no longer in the job.",
+}
+
+
+def _delete_one_row(s: "Services", sess: "Session", job: dict, row: dict) -> str:
+    """Delete one document of a draft (design: Deleting a row): its staged file, replacement and thumbnail, and
+    a "Row deleted" audit entry. Excluded documents can be deleted too; documents that created something in
+    CollectionSpace can't. Returns "" when deleted, else why not ("created", "changed"). The caller records the
+    deletions on the job and rechecks it (_after_rows_deleted)."""
+    job_id, n = job["id"], row["n"]
+    if is_locked(row):
+        return "created"
+    # One conditional write: only if the row is as checked and the job is still this session's draft
+    if not s.storage.delete_row_if_unchanged(job_id, row, sess.key):
+        return "changed"
+    for key in {row.get("s3Key"), row.get("supersededKey"), row.get("thumbKey")} - {None, ""}:
+        s.storage.delete_object(key)  # its staged file, a replacement, and its thumbnail
+    s.storage.drop_fix_original(job_id, n)  # deleting is permanent, even if the fix is abandoned
+    s.storage.audit(sess.tenant, "Row deleted", sess.user, job_id,
+                    f"Deleted document {n} ({row['file']}) from “{job['name'] or 'Untitled job'}”; it had created nothing in CollectionSpace.")
+    return ""
+
+
+def _after_rows_deleted(s: "Services", sess: "Session", job: dict, rows: list[dict]) -> dict:
+    """After documents were deleted: a job that has run lists them for its next run; with no documents left the
+    job is deleted (run or not); a job that has run may now be Completed; otherwise the other rows are rechecked
+    once. Returns {"others": rows whose checks changed, "jobStatus"?: the job's status if it's no longer a Draft}."""
+    job_id = job["id"]
+    if job.get("run"):  # the next run lists the documents deleted since the last one
+        current = s.storage.get_job(job_id) or job
+        at = now()
+        s.storage.update_job(job_id, {"deletedRows": (current.get("deletedRows") or []) +
+                                      [{"n": r["n"], "file": r["file"], "by": sess.user, "at": at} for r in rows]})
+    if not s.storage.get_rows(job_id):  # design: deleting the last document deletes the job, run or not
+        fresh = s.storage.get_job(job_id)
+        if fresh:
+            _delete_job(s, sess, fresh, [])
+        return {"others": [], "jobStatus": "Deleted"}
+    if _complete_if_clean(s, sess, job_id):
+        return {"others": [], "jobStatus": (s.storage.get_job(job_id) or {}).get("status", "Deleted")}
+    return {"others": _recheck(s, sess, job_id, targets=set())["changed"]}
+
+
 def _delete_job(s: "Services", sess: "Session", job: dict, rows: list[dict]) -> None:
     """Delete a job and its staged files. Records its runs created stay in CollectionSpace; the audit entry
     lists every one, by row and record type, so they can still be found and finished there.
@@ -375,6 +421,10 @@ class AddFiles(BaseModel):
 class BulkEdit(BaseModel):
     rows: list[int] = Field(min_length=1, max_length=1000)
     changes: dict[str, Any] = Field(min_length=1)
+
+
+class RowList(BaseModel):
+    rows: list[int] = Field(min_length=1, max_length=1000)
 
 
 class MoveJob(BaseModel):
@@ -905,28 +955,34 @@ def _routes(app: FastAPI) -> None:
         _editable(job, sess)
         _saved(s, sess, job_id)
         row = s.storage.get_row(job_id, n) or _404()
-        if is_locked(row):
+        problem = _delete_one_row(s, sess, job, row)
+        if problem == "created":
             raise HTTPException(409, "This document already created records in CollectionSpace, so it can't be deleted. "
                                      "Check Exclude to have the BMU ignore it.")
-        # One conditional write: only if the row is as checked and the job is still this session's draft
-        if not s.storage.delete_row_if_unchanged(job_id, row, sess.key):
+        if problem == "changed":
             raise HTTPException(409, "This document or job changed while deleting it; nothing was deleted. Reload and try again.")
-        for key in {row.get("s3Key"), row.get("supersededKey"), row.get("thumbKey")} - {None, ""}:
-            s.storage.delete_object(key)  # its staged file, a replacement, and its thumbnail
-        s.storage.drop_fix_original(job_id, n)  # deleting is permanent, even if the fix is abandoned
-        if job.get("run"):  # the next run lists the documents deleted since the last one
-            s.storage.update_job(job_id, {"deletedRows": (job.get("deletedRows") or []) +
-                                          [{"n": n, "file": row["file"], "by": sess.user, "at": now()}]})
-        s.storage.audit(sess.tenant, "Row deleted", sess.user, job_id,
-                        f"Deleted document {n} ({row['file']}) from “{job['name'] or 'Untitled job'}”; it had created nothing in CollectionSpace.")
-        if not s.storage.get_rows(job_id):  # design: deleting the last document deletes the job, run or not
-            fresh = s.storage.get_job(job_id)
-            if fresh:
-                _delete_job(s, sess, fresh, [])
-            return {"ok": True, "others": [], "jobStatus": "Deleted"}
-        if _complete_if_clean(s, sess, job_id):
-            return {"ok": True, "others": [], "jobStatus": (s.storage.get_job(job_id) or {}).get("status", "Deleted")}
-        return {"ok": True, "others": _recheck(s, sess, job_id, targets=set())["changed"]}
+        return {"ok": True, **_after_rows_deleted(s, sess, job, [row])}
+
+    @app.post("/api/jobs/{job_id}/rows/delete")
+    def delete_rows(job_id: str, body: RowList, sess: Session = Depends(editor_session), s: Services = Depends(svc)):
+        """Delete selected documents: every listed document that may be deleted, with the same rules as deleting
+        one (design: Deleting a row). Documents that created something in CollectionSpace, that changed meanwhile
+        or that are gone already are skipped, each with its reason; the others are deleted."""
+        job = _job_or_404(s, sess, job_id)
+        _editable(job, sess)
+        _saved(s, sess, job_id)
+        by_n = {r["n"]: r for r in s.storage.get_rows(job_id)}
+        deleted: list[dict] = []
+        skipped: list[dict] = []
+        for n in dict.fromkeys(body.rows):
+            row = by_n.get(n)
+            problem = _delete_one_row(s, sess, job, row) if row else "missing"
+            if problem:
+                skipped.append({"n": n, "file": row["file"] if row else "", "code": problem, "reason": DELETE_SKIPPED[problem]})
+            else:
+                deleted.append(row)
+        out = _after_rows_deleted(s, sess, job, deleted) if deleted else {"others": []}
+        return {"deleted": [r["n"] for r in deleted], "skipped": skipped, **out}
 
     # ---- checks and scheduling --------------------------------------------------------------------
     @app.post("/api/jobs/{job_id}/check")

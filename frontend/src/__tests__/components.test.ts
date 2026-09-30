@@ -168,10 +168,10 @@ describe("DocumentRow checks", () => {
   });
   it("warns that deleting the job's last document deletes the job", async () => {
     const w = mountRow({ last: true });
-    await w.findAll("button").find((b) => b.text() === "Delete document")!.trigger("click");
+    await w.find('button[aria-label="Delete document"]').trigger("click");
     expect(w.text()).toContain("This is the job's last document, so the job is deleted too.");
     const other = mountRow({});
-    await other.findAll("button").find((b) => b.text() === "Delete document")!.trigger("click");
+    await other.find('button[aria-label="Delete document"]').trigger("click");
     expect(other.text()).not.toContain("last document");
   });
   it("offers Retry and Remove for a failed upload, or one this page isn't sending", async () => {
