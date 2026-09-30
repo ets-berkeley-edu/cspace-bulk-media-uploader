@@ -4,7 +4,8 @@ Tables (prefix configurable):
   <p>-jobs         PK=JOB#<id>, SK=META | ROW#<00001> | RUN#<00001> (one per run: the run history) |
                    FIX#<00001> (a row as it was before a Fix and reschedule changed it, kept so an abandoned fix
                    can be reverted); GSI "tenant" on (tenant, created) for job lists.
-                   Also PK=LOCK#<tenant>, SK=LOCK: the one-job-per-tenant run lock.
+                   Also PK=LOCK#<tenant>, SK=LOCK: the one-job-per-tenant run lock, and PK=TENANT#<tenant>,
+                   SK=SCHEDULE: the tenant's job schedule and pause (design: Job scheduling; see bmu.schedule).
   <p>-sessions     PK=<hash of session id>; TTL attribute "expires".
   <p>-credentials  PK=JOB#<id>; the job's encrypted password; TTL attribute "expires".
   <p>-audit        PK=TENANT#<tenant>, SK=<time>#<id>.
@@ -191,6 +192,15 @@ class Storage:
     def update_session_perms(self, key: str, perms: dict) -> None:
         self.sessions.update_item(Key={"PK": key}, UpdateExpression="SET perms = :p",
                                   ExpressionAttributeValues={":p": perms}, ConditionExpression="attribute_exists(PK)")
+
+    def update_session_scheduler(self, key: str, scheduler: bool) -> None:
+        """The session's scheduler flag, after the roles were read again (design: Job scheduling)."""
+        try:
+            self.sessions.update_item(Key={"PK": key}, UpdateExpression="SET scheduler = :s",
+                                      ExpressionAttributeValues={":s": scheduler}, ConditionExpression="attribute_exists(PK)")
+        except ClientError as e:
+            if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
+                raise
 
     def touch_session(self, key: str, t: float) -> None:
         try:
@@ -556,11 +566,13 @@ class Storage:
         return self._transact([update, delete])
 
     def claim_job(self, job_id: str, fields: dict) -> bool:
-        """The worker claims a queued job, only if it is still Queued and its sign-in is still stored and valid."""
+        """The worker claims a queued job, only if it is still Queued and not held (a scheduler may have held it
+        since the worker chose it; design: Job scheduling), and its sign-in is still stored and valid."""
         check = {"ConditionCheck": {"TableName": self.credentials.name, "Key": _dyn({"PK": f"JOB#{job_id}"}),
                                     "ConditionExpression": "attribute_exists(PK) AND #e > :now",
                                     "ExpressionAttributeNames": {"#e": "expires"}, "ExpressionAttributeValues": _dyn({":now": int(now())})}}
-        update = self._job_update(job_id, fields, "#c_status = :c_q", {":c_q": "Queued"}, {"#c_status": "status"})
+        update = self._job_update(job_id, fields, "#c_status = :c_q AND (attribute_not_exists(#c_h) OR attribute_type(#c_h, :c_null))",
+                                  {":c_q": "Queued", ":c_null": "NULL"}, {"#c_status": "status", "#c_h": "held"})
         return self._transact([check, update])
 
     def delete_row_if_unchanged(self, job_id: str, row: dict, session: str) -> bool:
@@ -589,6 +601,46 @@ class Storage:
 
     def delete_credential(self, job_id: str) -> None:
         self.credentials.delete_item(Key={"PK": f"JOB#{job_id}"})
+
+    # ---- the tenant's job schedule (design: Job scheduling) -----------------------------------------
+    def get_schedule(self, tenant: str) -> dict | None:
+        """The stored schedule item, or None if it was never saved (bmu.schedule.normalize adds the defaults)."""
+        item = self.jobs.get_item(Key={"PK": f"TENANT#{tenant}", "SK": "SCHEDULE"}).get("Item")
+        return _strip(_clean(item)) if item else None
+
+    def save_schedule(self, tenant: str, fields: dict, user: str) -> None:
+        """Save the run days and times (validated by bmu.schedule.validate); the pause is kept as it is."""
+        fields = {**fields, "updatedBy": user, "updatedAt": now()}
+        self.jobs.update_item(Key={"PK": f"TENANT#{tenant}", "SK": "SCHEDULE"},
+                              UpdateExpression="SET " + ", ".join(f"#{k} = :{k}" for k in fields),
+                              ExpressionAttributeNames={f"#{k}": k for k in fields},
+                              ExpressionAttributeValues={f":{k}": _dyn(v) for k, v in fields.items()})
+
+    def pause_queue(self, tenant: str, user: str, reason: str) -> bool:
+        """Pause the tenant's queue, only if it isn't paused already (False then)."""
+        try:
+            self.jobs.update_item(Key={"PK": f"TENANT#{tenant}", "SK": "SCHEDULE"},
+                                  UpdateExpression="SET #p = :p",
+                                  ConditionExpression="attribute_not_exists(#p) OR attribute_type(#p, :null)",
+                                  ExpressionAttributeNames={"#p": "paused"},
+                                  ExpressionAttributeValues=_dyn({":p": {"by": user, "at": now(), "reason": reason}, ":null": "NULL"}))
+            return True
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                return False
+            raise
+
+    def resume_queue(self, tenant: str) -> dict | None:
+        """Resume the tenant's queue; returns the pause it ended, or None if it wasn't paused."""
+        try:
+            r = self.jobs.update_item(Key={"PK": f"TENANT#{tenant}", "SK": "SCHEDULE"}, UpdateExpression="REMOVE #p",
+                                      ConditionExpression="attribute_type(#p, :m)", ExpressionAttributeNames={"#p": "paused"},
+                                      ExpressionAttributeValues={":m": "M"}, ReturnValues="UPDATED_OLD")
+            return _clean(r["Attributes"]["paused"])
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                return None
+            raise
 
     # ---- audit ------------------------------------------------------------------------------
     def _audit_item(self, tenant: str, type_: str, user: str, job_id: str, detail: str, csids: list[dict] | None,

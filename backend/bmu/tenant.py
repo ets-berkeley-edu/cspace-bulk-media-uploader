@@ -35,6 +35,17 @@ OBJECT_STEP = {"existing": "findObject", "create": "createObject", "either": "fi
 OBJECT_STEPS = tuple(OBJECT_STEP.values())
 
 
+def role_name(tenant_id: str, display_name: str) -> str:
+    """The roleName CollectionSpace stores for a role created with this display name (design: Job scheduling).
+    The UI (cspace-ui.js) sanitizes the display name: upper-case it, turn spaces into underscores, drop every
+    character other than A-Z, 0-9 and _, and collapse repeated underscores. The services layer then upper-cases
+    it and adds ROLE_<tenantId>_ unless it is already there. "+ cow" in tenant 15 -> "_COW" -> "ROLE_15__COW"
+    (the prefix is added after the collapse, so that double underscore stays)."""
+    s = re.sub(r"_+", "_", re.sub(r"[^A-Z0-9_]", "", display_name.upper().replace(" ", "_"))).upper()
+    prefix = f"ROLE_{tenant_id}_"
+    return s if s.startswith(prefix) else prefix + s
+
+
 @dataclass(frozen=True)
 class Option:
     """An option-list value and its display label, as in the tenant's UI configuration."""
@@ -59,6 +70,8 @@ class Tenant:
     # From the tenant's UI profile; cspace-ui's defaults are 500 ms and 3 characters
     autocomplete: dict[str, int] = field(default_factory=lambda: {"find_delay_ms": 500, "min_length": 3})
     sensitivity: dict[str, Any] = field(default_factory=dict)  # Object-level rules (design: Protected files)
+    # Display names of the CollectionSpace roles whose members are BMU schedulers (design: Job scheduling)
+    scheduler_roles: tuple[str, ...] = ()
 
     @property
     def media_type_values(self) -> set[str]:
@@ -66,6 +79,17 @@ class Tenant:
 
     def handling_by_id(self, hid: str) -> Handling | None:
         return next((h for h in self.handling if h.id == hid), None)
+
+    def scheduler_role_names(self, tenant_id: str) -> list[str]:
+        """The roleNames CollectionSpace gives the tenant's scheduler_roles (see role_name)."""
+        return [role_name(tenant_id, name) for name in self.scheduler_roles] if tenant_id else []
+
+    def is_scheduler(self, tenant_id: str, role_names: list[str]) -> bool:
+        """Design (Job scheduling): a user is a BMU scheduler if any of their roleNames (from
+        accounts/0/accountroles) is the roleName of one of the tenant's scheduler_roles (compared
+        case-insensitively)."""
+        wanted = {r.upper() for r in self.scheduler_role_names(tenant_id)}
+        return any((r or "").strip().upper() in wanted for r in role_names)
 
     def public_summary(self) -> dict[str, Any]:
         return {
@@ -108,6 +132,7 @@ def load_tenant(key: str) -> Tenant:
         authority_fields=raw.get("authority_fields", {}),
         autocomplete={"find_delay_ms": 500, "min_length": 3, **(raw.get("autocomplete") or {})},
         sensitivity=raw.get("sensitivity") or {},
+        scheduler_roles=tuple(raw.get("scheduler_roles") or ()),
     )
 
 

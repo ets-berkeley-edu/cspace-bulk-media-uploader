@@ -95,7 +95,7 @@ describe("expanded job documents (design: Job lists; UI mockup jobDocsTable)", (
 
 describe("job actions (design: Drafts; The job queue; UI mockup actionsFor)", () => {
   const texts = (w: ReturnType<typeof mount>) => w.findAll("button").map((b) => b.text());
-  it("in a draft's preview: Edit and Delete, or Take over when someone else is editing; never Save draft or Schedule job", () => {
+  it("in a draft's preview: Edit and Delete, or Take over when someone else is editing; never Save draft or Submit job", () => {
     expect(texts(mount(JobActions, { props: { job: job(), kind: "drafts", inPreview: true } }))).toEqual(["Edit", "Delete"]);
     expect(texts(mount(JobActions, { props: { job: job({ editingBy: "jlee", editingSince: 5 }), kind: "drafts", inPreview: true } })))
       .toEqual(["Take over…", "Delete"]);
@@ -104,9 +104,22 @@ describe("job actions (design: Drafts; The job queue; UI mockup actionsFor)", ()
 
   it("in the queue: Edit and Delete for a queued job, Cancel run for a running one", () => {
     expect(texts(mount(JobActions, { props: { job: job({ status: "Queued" }), kind: "queue", inPreview: true } }))).toEqual(["Edit", "Delete"]);
-    const run = mount(JobActions, { props: { job: job({ status: "Running" }), kind: "queue", inPreview: true } });
+    const run = mount(JobActions, { props: { job: job({ status: "Running" }), kind: "queue", inPreview: true, scheduler: true } });
     expect(texts(run)).toEqual(["Cancel run", "Delete"]);
     expect(run.findAll("button")[1].attributes("disabled")).toBeDefined();
+  });
+
+  it("Cancel run: for BMU schedulers and whoever submitted the job; others see why not (design: Job scheduling)", () => {
+    const cancel = (w: ReturnType<typeof mount>) => w.findAll("button").find((b) => b.text() === "Cancel run")!;
+    const running = job({ status: "Running", scheduledBy: "jlee" });
+    const other = mount(JobActions, { props: { job: running, kind: "queue", user: "admin", scheduler: false } });
+    expect(cancel(other).attributes("disabled")).toBeDefined();
+    expect(cancel(other).attributes("title")).toBe("Only a BMU scheduler or the person who submitted the job can cancel its run.");
+    const submitter = mount(JobActions, { props: { job: running, kind: "queue", user: "jlee", scheduler: false } });
+    expect(cancel(submitter).attributes("disabled")).toBeUndefined();
+    const sched = mount(JobActions, { props: { job: running, kind: "queue", user: "admin", scheduler: true } });
+    expect(cancel(sched).attributes("disabled")).toBeUndefined();
+    expect(cancel(sched).attributes("title")).toBe("Stop after the document in progress");
   });
 
   it("without Media create and update: Edit, Take over and Delete are off, with the reason", () => {
@@ -154,7 +167,7 @@ describe("JobPreview (design: Drafts; UI mockup renderPreview)", () => {
     const buttons = w.find(".schedule-bar").findAll("button").map((b) => b.text());
     expect(buttons).toEqual(["Edit", "Delete"]);
     expect(w.text()).not.toContain("Save draft");
-    expect(w.text()).not.toContain("Schedule job");
+    expect(w.text()).not.toContain("Submit job");
     expect(calls.some((c) => c.url.endsWith("/j1/check"))).toBe(true);
     await w.find(".schedule-bar").findAll("button")[0].trigger("click");
     expect(w.emitted("open")?.[0].slice(0, 2)).toEqual(["j1", "edit"]);
@@ -166,7 +179,7 @@ describe("JobPreview (design: Drafts; UI mockup renderPreview)", () => {
   it("a running job's preview offers Cancel run, and shows each document's run state", async () => {
     const rows = [row({ n: 1, file: "a.jpg", result: { state: "In progress" } })];
     stubFetch(() => ({ job: job({ status: "Running", progress: { total: 1, done: 0, failed: 0 } }), rows, runs: [], created: {} }));
-    const w = mount(JobPreview, { props: { jobId: "j1", from: "queue", tenant }, global: { stubs: { ThumbCell: true } } });
+    const w = mount(JobPreview, { props: { jobId: "j1", from: "queue", tenant, user: "admin", scheduler: true }, global: { stubs: { ThumbCell: true } } });
     await flushPromises();
     expect(w.text()).toContain("← Back to Job queue");
     expect(w.find(".schedule-bar").findAll("button").map((b) => b.text())).toEqual(["Cancel run", "Delete"]);

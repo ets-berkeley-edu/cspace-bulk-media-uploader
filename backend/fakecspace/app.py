@@ -5,7 +5,9 @@ search, creating Media, Objects and Relations, and attaching a file with PUT med
 behavior against the real server must be confirmed on the Lyrasis QA tenant.
 
 Run: uvicorn fakecspace.app:app --port 8180
-Users: admin/admin (all permissions), limited/limited (can't create objects or groups), reader/reader (read only).
+Users: admin/admin (all permissions; a BMU scheduler), limited/limited (can't create objects or groups), reader/reader
+(read only). Roles (accounts/0/accountroles): admin has ROLE_15_TENANT_ADMINISTRATOR and ROLE_15_BMU_SCHEDULER, the
+others ROLE_15_TENANT_READER.
 Development hooks: /_fake/state, /_fake/reset, /_fake/slow, /_fake/fail (failures on demand).
 """
 from __future__ import annotations
@@ -38,6 +40,18 @@ def _perms_for(user: str) -> dict[str, str]:
         p["groups"] = "RL"
     p.update(store.perm_overrides.get(user, {}))
     return p
+
+
+TENANT_ID = "15"  # PAHMA's tenant id
+ROLES = {
+    "admin": ["ROLE_15_TENANT_ADMINISTRATOR", "ROLE_15_BMU_SCHEDULER"],
+    "limited": ["ROLE_15_TENANT_READER"],
+    "reader": ["ROLE_15_TENANT_READER"],
+}
+
+
+def _roles_for(user: str) -> list[str]:
+    return list(store.role_overrides.get(user, ROLES[user]))
 
 
 PEOPLE = ["Madeleine W. Fang", "Leslie Freund", "Natasha Johnson", "Michael T. Black", "Linda Waterfield", "Zachary Williams"]
@@ -90,6 +104,7 @@ class Store:
         self.content: dict[str, bytes] = {}  # blob CSID -> file bytes (small files only)
         self.fail_next: dict[str, int] = {}  # e.g. {"media": 503} or {"media_blob": 500}: fail the next call once
         self.perm_overrides: dict[str, dict[str, str]] = {}  # e.g. {"admin": {"collectionobjects": "RL"}}: roles changed
+        self.role_overrides: dict[str, list[str]] = {}  # e.g. {"admin": ["ROLE_15_TENANT_READER"]}: the user's role names
         self.searches: list[tuple[str, str | None]] = []  # (service, searched value), to test lookup caching
         self.delay = 0.0  # seconds added to every create or upload, to watch the queue in a browser (/_fake/slow)
         self.rules: list[dict] = []  # failures on demand (/_fake/fail)
@@ -199,6 +214,23 @@ def accountperms(request: Request):
     )
     return _xml(f'<ns2:account_permission xmlns:ns2="http://collectionspace.org/services/authorization/perms">'
                 f"<account><userId>{u}</userId></account>{perms}</ns2:account_permission>")
+
+
+@app.get("/cspace-services/accounts/0/accountroles")
+def accountroles(request: Request):
+    """The signed-in account's roles, shaped like CollectionSpace's (design: Job scheduling). fail_next
+    {"accountroles": 500} makes the next call fail."""
+    u = _user(request)
+    if not u:
+        return _deny()
+    if (fail := store.fail_next.pop("accountroles", None)):
+        return Response(status_code=fail)
+    roles = "".join(f"<role><roleRelationshipId>{uuid.uuid5(uuid.NAMESPACE_URL, u + r)}</roleRelationshipId>"
+                    f"<roleId>{uuid.uuid5(uuid.NAMESPACE_URL, r)}</roleId><roleName>{escape(r)}</roleName></role>"
+                    for r in _roles_for(u))
+    return _xml(f'<ns2:account_role xmlns:ns2="http://collectionspace.org/services/authorization"><account>'
+                f"<accountId>{uuid.uuid5(uuid.NAMESPACE_URL, 'account-' + u)}</accountId><screenName>{u}</screenName>"
+                f"<userId>{u}</userId><tenantId>{TENANT_ID}</tenantId></account>{roles}</ns2:account_role>")
 
 
 def _search(request: Request, table: dict, field: str, service: str):

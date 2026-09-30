@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import logging
 import re
 import secrets
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Literal
 
@@ -14,6 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from . import schedule as sched
 from .config import Settings, get_settings
 from .crypto import Crypto, make_crypto
 from .cspace import CSpaceClient, CSpaceError
@@ -25,6 +28,8 @@ from .storage import RowChanged, Storage, draft_expiry, expiry_of, now
 from .thumbnails import MAX_BROWSER_BYTES, TIFF_EXTENSIONS, NotAnImage, make_thumbnail, tiff_thumbnail_step
 from .tenant import Tenant, load_tenant
 
+log = logging.getLogger("bmu.app")
+
 COOKIE = "bmu_session"
 CSRF_HEADER = "x-bmu"
 # Only drafts are scheduled. A job that needs attention or failed goes to Drafts first (Fix and reschedule).
@@ -32,6 +37,8 @@ RESCHEDULABLE = ("Draft",)
 FIXABLE = ("NeedsAttention", "Failed")
 
 ClientFactory = Callable[[str, str], CSpaceClient]
+
+RUN_AT_GRACE_SECONDS = 60  # a job's own run time may be this far in the past (the browser picks whole minutes)
 
 AUTOCOMPLETE_PAGE = 20  # the first page of each source, as the CollectionSpace UI fetches
 
@@ -44,12 +51,15 @@ _VOCAB_CACHE: dict[tuple[str, str], tuple[float, list[dict]]] = {}
 class Services:
     """Everything a request needs; replaced in tests."""
 
-    def __init__(self, settings: Settings, storage: Storage, crypto: Crypto, client_factory: ClientFactory):
+    def __init__(self, settings: Settings, storage: Storage, crypto: Crypto, client_factory: ClientFactory,
+                 clock: Callable[[], float] | None = None):
         self.settings = settings
         self.storage = storage
         self.crypto = crypto
         self.client_factory = client_factory
         self.tenant: Tenant = load_tenant(settings.tenant)
+        # The time the job schedule is judged by (design: Job scheduling); tests replace it to move time.
+        self.clock: Callable[[], float] = clock or now
 
 
 def create_app(services: Services | None = None) -> FastAPI:
@@ -108,6 +118,7 @@ class Session(BaseModel):
     tenant: str
     perms: dict[str, bool]
     password_token: str
+    scheduler: bool = False  # a BMU scheduler when signing in (design: Job scheduling)
 
     def client(self, s: Services) -> CSpaceClient:
         pw = s.crypto.decrypt("session", self.password_token, {"user": self.user, "session": self.key})
@@ -131,7 +142,7 @@ def current_session(request: Request, s: Services = Depends(svc)) -> Session:
     if request.headers.get("x-bmu-poll") != "1" and t - last > 60:
         s.storage.touch_session(item["PK"], t)
     return Session(key=item["PK"], user=item["user"], tenant=item["tenant"], perms=item["perms"],
-                   password_token=item["password"])
+                   password_token=item["password"], scheduler=bool(item.get("scheduler")))
 
 
 EDIT_REFUSED = ("Your CollectionSpace account can't create and update Media records, so it can't create or edit jobs. "
@@ -150,6 +161,45 @@ def editor_session(sess: Session = Depends(current_session)) -> Session:
     if not can_edit(sess.perms):
         raise HTTPException(403, EDIT_REFUSED)
     return sess
+
+
+SCHEDULER_REFUSED = "Only users with the BMU_Scheduler role can change the schedule or the job queue."
+CANCEL_REFUSED = "Only a BMU scheduler or the person who submitted the job can cancel its run."
+
+
+def _read_scheduler(s: Services, client: CSpaceClient, user: str) -> bool:
+    """Whether the account is a BMU scheduler for this tenant: one of its CollectionSpace roles is one of the
+    tenant's scheduler_roles (design: Job scheduling). Raises CSpaceError if the roles can't be read."""
+    roles = client.account_roles()
+    return s.tenant.is_scheduler(roles.tenant_id, roles.role_names)
+
+
+def _scheduler_now(s: Services, sess: Session) -> bool:
+    """Read the session user's roles again, with their credentials, and keep the session's flag up to date, so
+    a role removed in CollectionSpace takes effect at once. A refused roles request means not a scheduler; a
+    CollectionSpace that doesn't answer (or no longer accepts the sign-in) is reported as such."""
+    client = sess.client(s)
+    try:
+        scheduler = _read_scheduler(s, client, sess.user)
+    except CSpaceError as e:
+        if e.code in ("auth", "unavailable", "server"):
+            raise _cspace_http(e)
+        log.warning("reading the roles of %s failed (%s); not a scheduler", sess.user, e)
+        scheduler = False
+    finally:
+        client.close()
+    if scheduler != sess.scheduler:
+        s.storage.update_session_scheduler(sess.key, scheduler)
+    return scheduler
+
+
+def scheduler_session(sess: Session = Depends(current_session), s: Services = Depends(svc)) -> Session:
+    """The signed-in session of a request that changes the schedule or the job queue: only BMU schedulers,
+    checked against CollectionSpace on every such request (design: Job scheduling). Separate from editing
+    rights: a scheduler who can't create Media records can still manage the schedule and the queue."""
+    if not _scheduler_now(s, sess):
+        raise HTTPException(403, SCHEDULER_REFUSED)
+    return sess.model_copy(update={"scheduler": True})
 
 
 def _job_or_404(s: Services, sess: Session, job_id: str) -> dict:
@@ -236,12 +286,39 @@ def _delete_job(s: "Services", sess: "Session", job: dict, rows: list[dict]) -> 
     s.storage.delete_job_and_files(job["id"])
 
 
-def _public(job: dict, sess: "Session") -> dict:
-    """A job as the API shows it: whether this session is its editor, not the other session's key."""
-    out = {k: v for k, v in job.items() if k != "editingSession"}
+QUEUE_FIELDS = ("runNow", "runAt", "held")  # a scheduler's settings for one queued job (design: Job scheduling)
+
+
+class QueueView:
+    """The plans of a tenant's queued and running jobs, computed once per request from the schedule, the jobs
+    and the clock (bmu.schedule.plans, the same order the worker picks jobs in)."""
+
+    def __init__(self, s: "Services", tenant: str, jobs: list[dict] | None = None):
+        self.schedule = sched.load(s.storage, tenant)
+        self.now = s.clock()
+        self.jobs = s.storage.list_jobs(tenant) if jobs is None else jobs
+        self.always = s.settings.always_run_time
+        self.plans = sched.plans(self.jobs, self.schedule, self.now, self.always)
+
+    def plan(self, job: dict) -> dict:
+        """The job's plan; for a job read after the list (it just changed), with it put into the list."""
+        if next((j for j in self.jobs if j["id"] == job["id"]), None) != job:
+            jobs = [j for j in self.jobs if j["id"] != job["id"]] + [job]
+            return sched.plans(jobs, self.schedule, self.now, self.always)[job["id"]]
+        return self.plans[job["id"]]
+
+
+def _public(job: dict, sess: "Session", s: "Services | None" = None, view: QueueView | None = None) -> dict:
+    """A job as the API shows it: whether this session is its editor, not the other session's key. A queued or
+    running job also shows its scheduling (runNow, runAt, held) and its plan: when it is to start and how many
+    jobs go first (design: Job scheduling); pass the services (or a QueueView for many jobs) for that."""
+    out = {k: v for k, v in job.items() if k != "editingSession" and k not in QUEUE_FIELDS}
     out["editingByYou"] = bool(job.get("editingSession")) and job.get("editingSession") == sess.key
     if job.get("fixFrom"):  # a fix's expiry is kept in draftExpiresAt; the UI reads every draft's as expiresAt
         out["expiresAt"] = expiry_of(job)
+    if job.get("status") in ("Queued", "Running") and (s is not None or view is not None):
+        view = view or QueueView(s, job["tenant"])
+        out.update(runNow=bool(job.get("runNow")), runAt=job.get("runAt"), held=job.get("held") or None, plan=view.plan(job))
     return out
 
 
@@ -305,6 +382,25 @@ class CheckRequest(BaseModel):
     rows: list[int] | None = None  # the rows to look up in CollectionSpace; None: any row whose lookup is stale
 
 
+class ScheduleBody(BaseModel):
+    """The tenant's schedule (design: Job scheduling); validated by bmu.schedule.validate. The time zone is fixed."""
+    days: list[int] = Field(max_length=7)
+    start: str = Field(max_length=5)
+    end: str = Field(default="", max_length=5)
+
+
+class PauseBody(BaseModel):
+    reason: str = Field(min_length=1, max_length=200)
+
+
+class OnOff(BaseModel):
+    on: bool
+
+
+class RunAt(BaseModel):
+    at: float | None  # epoch seconds, or None to clear the job's own run time
+
+
 
 
 def _routes(app: FastAPI) -> None:
@@ -318,6 +414,11 @@ def _routes(app: FastAPI) -> None:
         client = s.client_factory(body.username, body.password)
         try:
             perms = client.account_permissions()
+            try:  # design (Job scheduling): a user whose roles can't be read is not a scheduler; sign-in goes on
+                scheduler = _read_scheduler(s, client, body.username)
+            except CSpaceError as e:
+                log.warning("reading the roles of %s at sign-in failed (%s); not a scheduler", body.username, e)
+                scheduler = False
         except CSpaceError as e:
             if e.code in ("auth", "forbidden"):
                 raise HTTPException(401, "CollectionSpace didn't accept that username and password.")
@@ -328,12 +429,13 @@ def _routes(app: FastAPI) -> None:
         key = _hash(token)
         expires = now() + s.settings.session_hours * 3600
         s.storage.put_session(key, {
-            "user": body.username, "tenant": s.tenant.key, "perms": perms.summary, "expires": int(expires), "lastSeen": now(),
+            "user": body.username, "tenant": s.tenant.key, "perms": perms.summary, "scheduler": scheduler,
+            "expires": int(expires), "lastSeen": now(),
             "password": s.crypto.encrypt("session", body.password, {"user": body.username, "session": key}),
         })
         response.set_cookie(COOKIE, token, httponly=True, secure=s.settings.cookie_secure, samesite="strict",
                             max_age=int(s.settings.session_hours * 3600), path="/")
-        return {"user": body.username, "tenant": s.tenant.public_summary(), "perms": perms.summary}
+        return {"user": body.username, "tenant": s.tenant.public_summary(), "perms": perms.summary, "scheduler": scheduler}
 
     @app.post("/api/logout")
     def logout(response: Response, request: Request, s: Services = Depends(svc)):
@@ -356,7 +458,7 @@ def _routes(app: FastAPI) -> None:
 
     @app.get("/api/me")
     def me(sess: Session = Depends(current_session), s: Services = Depends(svc)):
-        return {"user": sess.user, "tenant": s.tenant.public_summary(), "perms": sess.perms}
+        return {"user": sess.user, "tenant": s.tenant.public_summary(), "perms": sess.perms, "scheduler": sess.scheduler}
 
     # ---- authority autocomplete (existing terms only) ------------------------------------
     @app.get("/api/authorities")
@@ -423,7 +525,8 @@ def _routes(app: FastAPI) -> None:
     # ---- jobs --------------------------------------------------------------------------------
     @app.get("/api/jobs")
     def list_jobs(sess: Session = Depends(current_session), s: Services = Depends(svc)):
-        return {"jobs": [_public(j, sess) for j in s.storage.list_jobs(sess.tenant)]}
+        view = QueueView(s, sess.tenant)
+        return {"jobs": [_public(j, sess, view=view) for j in view.jobs]}
 
     @app.post("/api/jobs")
     def create_job(body: NewJob, sess: Session = Depends(editor_session), s: Services = Depends(svc)):
@@ -433,7 +536,7 @@ def _routes(app: FastAPI) -> None:
     def get_job(job_id: str, sess: Session = Depends(current_session), s: Services = Depends(svc)):
         job = _job_or_404(s, sess, job_id)
         rows = s.storage.get_rows(job_id)
-        return {"job": _public(job, sess), "rows": rows, "runs": s.storage.get_runs(job_id),
+        return {"job": _public(job, sess, s), "rows": rows, "runs": s.storage.get_runs(job_id),
                 "created": created_records(rows, job)["counts"]}
 
     # ---- Fix and reschedule (design: Fixing a job after a run; Rescheduling after a run) --------------
@@ -458,19 +561,25 @@ def _routes(app: FastAPI) -> None:
 
     # ---- the job queue (design: The job queue; State rules) ---------------------------------------
     @app.post("/api/jobs/{job_id}/move")
-    def move_job(job_id: str, body: MoveJob, sess: Session = Depends(current_session), s: Services = Depends(svc)):
-        """Change a queued job's place in the queue. Running jobs stay first and can't be moved."""
+    def move_job(job_id: str, body: MoveJob, sess: Session = Depends(scheduler_session), s: Services = Depends(svc)):
+        """Change a queued job's place in the queue (BMU schedulers only; design: Job scheduling). Running jobs
+        stay first and can't be moved."""
         job = _job_or_404(s, sess, job_id)
         if job["status"] != "Queued":
             raise HTTPException(409, "Only queued jobs can be moved.")
-        queued = sorted((j for j in s.storage.list_jobs(sess.tenant) if j["status"] == "Queued"),
-                        key=lambda j: (j.get("queuePos", 0), j.get("queuedAt", 0)))
+        queued = sorted((j for j in s.storage.list_jobs(sess.tenant) if j["status"] == "Queued"), key=sched.queue_key)
         order = [j for j in queued if j["id"] != job_id]
-        order.insert(min(body.toIndex, len(order)), job)
+        place = min(body.toIndex, len(order))
+        order.insert(place, job)
         for i, j in enumerate(order, start=1):  # positions 1..n in the new order
             if j.get("queuePos") != i:
                 s.storage.update_job(j["id"], {"queuePos": i}, expect_status="Queued")
-        return {"jobs": [_public(s.storage.get_job(j["id"]), sess) for j in order]}
+        if [j["id"] for j in queued] != [j["id"] for j in order]:
+            s.storage.audit(sess.tenant, "Queue reordered", sess.user, job_id,
+                            f"Moved “{job.get('name') or 'Untitled job'}” to place {place + 1} of {len(order)} in the queue.")
+        view = QueueView(s, sess.tenant)
+        by_id = {j["id"]: j for j in view.jobs}
+        return {"jobs": [_public(by_id[j["id"]], sess, view=view) for j in order if j["id"] in by_id]}
 
     @app.post("/api/jobs/{job_id}/edit")
     def edit_queued(job_id: str, sess: Session = Depends(editor_session), s: Services = Depends(svc)):
@@ -489,11 +598,16 @@ def _routes(app: FastAPI) -> None:
 
     @app.post("/api/jobs/{job_id}/cancel")
     def cancel_run(job_id: str, sess: Session = Depends(current_session), s: Services = Depends(svc)):
-        """Cancel run: the worker finishes the document in progress, then stops (Needs attention, cancelled)."""
-        _job_or_404(s, sess, job_id)
+        """Cancel run: the worker finishes the document in progress, then stops (Needs attention, cancelled).
+        Design (Job scheduling): BMU schedulers, or the person who submitted the job."""
+        job = _job_or_404(s, sess, job_id)
+        if job.get("scheduledBy") != sess.user and not _scheduler_now(s, sess):
+            raise HTTPException(403, CANCEL_REFUSED)
         if not s.storage.update_job(job_id, {"cancelRequested": {"by": sess.user, "at": now()}}, expect_status="Running"):
             raise HTTPException(409, "Only a running job can be cancelled.")
-        return _public(s.storage.get_job(job_id), sess)
+        s.storage.audit(sess.tenant, "Run cancelled", sess.user, job_id,
+                        f"Cancelled the run of “{job.get('name') or 'Untitled job'}”; it stops after the document in progress.")
+        return _public(s.storage.get_job(job_id), sess, s)
 
     # ---- drafts: open for editing (one editor at a time), take over, close, save -------------
     @app.post("/api/jobs/{job_id}/open")
@@ -854,13 +968,95 @@ def _routes(app: FastAPI) -> None:
         if not s.storage.queue_with_credential(
                 job_id, sess.user, s.crypto.encrypt("job", pw, {"user": sess.user, "job": job_id}), expires,
                 {"status": "Queued", "queuedAt": t, "queuePos": t, "scheduledBy": sess.user, "note": "",
+                 "runNow": False, "runAt": None, "held": None,  # a scheduler's settings from an earlier time in the queue
                  "credentialExpires": int(expires), "checksAtSchedule": result["counts"],
                  "progress": {"total": len(work), "done": 0, "failed": 0}},
                 list(RESCHEDULABLE), sess.key):
             raise HTTPException(409, "The job changed while scheduling; reload and try again.")
         s.storage.close_draft(job_id, sess.key)  # it leaves Drafts
         s.storage.audit(sess.tenant, "Scheduled", sess.user, job_id, f"Scheduled “{job['name']}” with {len(work)} documents.")
-        return _public(s.storage.get_job(job_id), sess)
+        return _public(s.storage.get_job(job_id), sess, s)  # with its plan: when it runs (design: Job scheduling)
+
+    # ---- the schedule and the scheduler's queue actions (design: Job scheduling) ----------------------------
+    def _schedule_view(s: Services, tenant: str) -> dict:
+        return sched.view(sched.load(s.storage, tenant), s.clock(), s.settings.always_run_time)
+
+    @app.get("/api/schedule")
+    def get_schedule(sess: Session = Depends(current_session), s: Services = Depends(svc)):
+        return _schedule_view(s, sess.tenant)
+
+    @app.put("/api/schedule")
+    def put_schedule(body: ScheduleBody, sess: Session = Depends(scheduler_session), s: Services = Depends(svc)):
+        try:
+            fields = sched.validate(body.days, body.start, body.end)
+        except sched.ScheduleError as e:
+            raise HTTPException(422, str(e))
+        old = sched.load(s.storage, sess.tenant)
+        s.storage.save_schedule(sess.tenant, fields, sess.user)
+        new = sched.load(s.storage, sess.tenant)
+        if sched.describe(old) != sched.describe(new):
+            s.storage.audit(sess.tenant, "Schedule changed", sess.user, "",
+                            f"Jobs run {sched.describe(old)} → {sched.describe(new)}.")
+        return _schedule_view(s, sess.tenant)
+
+    @app.post("/api/schedule/pause")
+    def pause_queue(body: PauseBody, sess: Session = Depends(scheduler_session), s: Services = Depends(svc)):
+        """Pause the queue: no job starts until a scheduler resumes it; a running job runs on."""
+        reason = body.reason.strip()
+        if not reason:
+            raise HTTPException(422, "Give a reason for pausing the queue.")
+        if not s.storage.pause_queue(sess.tenant, sess.user, reason):
+            raise HTTPException(409, "The queue is already paused.")
+        s.storage.audit(sess.tenant, "Queue paused", sess.user, "", f"Paused the job queue: {reason}")
+        return _schedule_view(s, sess.tenant)
+
+    @app.post("/api/schedule/resume")
+    def resume_queue(sess: Session = Depends(scheduler_session), s: Services = Depends(svc)):
+        was = s.storage.resume_queue(sess.tenant)
+        if was:  # resuming a queue that isn't paused changes nothing
+            s.storage.audit(sess.tenant, "Queue resumed", sess.user, "",
+                            f"Resumed the job queue (paused by {was.get('by')}: {was.get('reason')}).")
+        return _schedule_view(s, sess.tenant)
+
+    def _queue_action(s: Services, sess: Session, job_id: str, fields: dict, audit_type: str, detail: str) -> dict:
+        """Set a scheduler's setting on a queued job, only if it is still Queued (one conditional write)."""
+        job = _job_or_404(s, sess, job_id)
+        if job["status"] != "Queued" or not s.storage.update_job(job_id, fields, expect_status="Queued"):
+            now_status = (s.storage.get_job(job_id) or {}).get("status", "gone")
+            raise HTTPException(409, f"The job is {now_status}; only queued jobs can be changed this way.")
+        s.storage.audit(sess.tenant, audit_type, sess.user, job_id, detail.format(name=job.get("name") or "Untitled job"))
+        return {"job": _public(s.storage.get_job(job_id), sess, s)}
+
+    @app.post("/api/jobs/{job_id}/run-now")
+    def run_now(job_id: str, body: OnOff, sess: Session = Depends(scheduler_session), s: Services = Depends(svc)):
+        """Run now: the job goes first, as soon as no job is running, whatever the run times (not while paused)."""
+        if body.on:
+            return _queue_action(s, sess, job_id, {"runNow": True}, "Run now", "“{name}” runs next, as soon as no job is running.")
+        return _queue_action(s, sess, job_id, {"runNow": False}, "Run now undone", "“{name}” runs at its run time again.")
+
+    @app.post("/api/jobs/{job_id}/run-at")
+    def run_at(job_id: str, body: RunAt, sess: Session = Depends(scheduler_session), s: Services = Depends(svc)):
+        """The job's own run time, instead of the schedule's; from now until its saved sign-in expires."""
+        if body.at is None:
+            return _queue_action(s, sess, job_id, {"runAt": None}, "Run time cleared", "“{name}” runs at the next scheduled run time again.")
+        job = _job_or_404(s, sess, job_id)
+        t = s.clock()
+        # a minute's grace: the browser's date-time field has minutes only, so "now" is already past
+        if body.at < t - RUN_AT_GRACE_SECONDS:
+            raise HTTPException(422, "The run time is in the past; choose a time from now on.")
+        if job.get("credentialExpires") and body.at > float(job["credentialExpires"]):
+            raise HTTPException(422, "The run time is after the job's saved sign-in expires; choose an earlier time, or "
+                                     "have the job submitted again.")
+        when = datetime.fromtimestamp(body.at, sched.TZ).strftime("%a %b %-d, %-I:%M %p")
+        return _queue_action(s, sess, job_id, {"runAt": body.at}, "Run time set", f"“{{name}}” runs at {when} (Pacific time).")
+
+    @app.post("/api/jobs/{job_id}/hold")
+    def hold(job_id: str, body: OnOff, sess: Session = Depends(scheduler_session), s: Services = Depends(svc)):
+        """Hold: the job keeps its place but doesn't start until it is released."""
+        if body.on:
+            return _queue_action(s, sess, job_id, {"held": {"by": sess.user, "at": now()}}, "Job held",
+                                 "Held “{name}”: it doesn't start until it is released.")
+        return _queue_action(s, sess, job_id, {"held": None}, "Job released", "Released “{name}”.")
 
 
 def _refresh_permissions(s: Services, sess: Session) -> Session:

@@ -24,7 +24,9 @@ os.environ.setdefault("AWS_DEFAULT_REGION", "us-west-2")
 def settings():
     return Settings(cspace_url="http://fake", aws_region="us-west-2", s3_bucket="bmu-test", table_prefix="t",
                     session_key_b64=base64.b64encode(b"s" * 32).decode(), job_key_b64=base64.b64encode(b"j" * 32).decode(),
-                    cookie_secure=False, _env_file=None)
+                    cookie_secure=False, always_run_time=True, _env_file=None)
+    # always_run_time: a queued job runs at the next worker.tick(), as most tests expect. The scheduling tests
+    # (test_scheduling.py) turn it off and move an injected clock (design: Job scheduling).
 
 
 @pytest.fixture

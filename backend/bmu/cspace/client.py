@@ -118,6 +118,23 @@ class Permissions:
         return cls(res)
 
 
+@dataclass
+class AccountRoles:
+    """The signed-in account's tenant and role names from accounts/0/accountroles, e.g. ("15",
+    ["ROLE_15_TENANT_READER", "ROLE_15_BMU_SCHEDULER"]) (design: Job scheduling)."""
+
+    tenant_id: str = ""
+    role_names: list[str] = field(default_factory=list)
+
+    @classmethod
+    def from_xml(cls, xml: bytes) -> "AccountRoles":
+        # <ns2:account_role><account>…<tenantId>15</tenantId></account><role>…<roleName>ROLE_15_…</roleName></role>…
+        root = SafeET.fromstring(xml)
+        tenant = next((_text(a, "tenantId") for a in _children(root, "account")), "") or _text(root, "tenantId")
+        names = [n for n in (_text(r, "roleName") for r in _children(root, "role")) if n]
+        return cls(tenant, names)
+
+
 class CSpaceClient:
     def __init__(self, base_url: str, username: str, password: str,
                  http: httpx.Client | None = None, timeout: float = 300.0, agent: str = "bmu-web"):
@@ -166,6 +183,12 @@ class CSpaceClient:
         """Verifies the credentials (401 if wrong) and returns the account's permissions."""
         r = self._request("GET", "accounts/0/accountperms")
         return Permissions.from_xml(r.content)
+
+    def account_roles(self) -> AccountRoles:
+        """The account's tenant id and roles (GET accounts/0/accountroles), to tell BMU schedulers (design: Job
+        scheduling). VERIFY on QA: check_cspace.py --roles prints them."""
+        r = self._request("GET", "accounts/0/accountroles")
+        return AccountRoles.from_xml(r.content)
 
     # -- lookups --------------------------------------------------------------------------
     def find_objects(self, object_number: str) -> list[str]:

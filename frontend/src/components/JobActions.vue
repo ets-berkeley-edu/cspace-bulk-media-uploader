@@ -4,16 +4,18 @@
  * the job queue; UI mockup actionsFor). Drafts: Preview, Edit (Continue editing), or Take over… after a warning
  * when someone else is editing, and Delete. Job queue: Preview, Edit (after a warning: it leaves the queue) and
  * Delete for a queued job; Cancel run (after a warning) for a running one. The preview shows the same actions
- * without Preview; Save draft and Schedule job belong to Create / edit job only.
+ * without Preview; Save draft and Submit job belong to Create / edit job only.
  * editWhy: why this user can't create or edit jobs (design: Permissions in the UI); those buttons are then off.
+ * user, scheduler: Cancel run is only for BMU schedulers and whoever submitted the job (design: Job scheduling).
  */
 import { computed, ref } from "vue";
 import { api } from "../api";
 import { formatTime } from "../lib/files";
+import { canCancelRun, NO_CANCEL_WHY } from "../lib/schedule";
 import type { Created, Job } from "../types";
 import DeleteJobConfirm from "./DeleteJobConfirm.vue";
 
-const props = defineProps<{ job: Job; kind: "drafts" | "queue"; inPreview?: boolean; editWhy?: string }>();
+const props = defineProps<{ job: Job; kind: "drafts" | "queue"; inPreview?: boolean; editWhy?: string; user?: string; scheduler?: boolean }>();
 const emit = defineEmits<{
   open: [id: string, mode: "edit" | "preview", takeOverSince?: number];
   done: [flash: string]; // the job changed (deleted, cancelled): the list refreshes
@@ -26,6 +28,8 @@ const created = ref<Created | null | undefined>(undefined);
 const running = computed(() => props.job.status === "Running");
 const lockedByOther = computed(() => props.job.status === "Draft" && !!props.job.editingBy && !props.job.editingByYou);
 const noEdit = computed(() => props.editWhy ?? "");
+/** design: Job scheduling — why this user can't cancel the run, or "" when they can. */
+const noCancel = computed(() => (canCancelRun(props.job, { user: props.user, scheduler: props.scheduler }) ? "" : NO_CANCEL_WHY));
 
 function askDelete() {
   confirm.value = "delete";
@@ -76,7 +80,7 @@ const del = () => act(() => api.deleteJob(props.job.id), props.kind === "queue" 
               @click="askDelete">Delete</button>
     </template>
     <template v-else-if="running">
-      <button :disabled="!!job.cancelRequested" title="Stop after the document in progress" @click="confirm = 'cancel'">Cancel run</button>
+      <button :disabled="!!job.cancelRequested || !!noCancel" :title="noCancel || 'Stop after the document in progress'" @click="confirm = 'cancel'">Cancel run</button>
       <button disabled title="A running job can't be deleted">Delete</button>
     </template>
     <template v-else>

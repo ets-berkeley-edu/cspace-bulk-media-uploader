@@ -10,6 +10,7 @@ x-bmu-env: &bmu-env
   BMU_S3_PUBLIC_ENDPOINT: http://localhost:9000   # the browser uploads here
   BMU_CREATE_TABLES: "true"
   BMU_COOKIE_SECURE: "false"                       # local http only
+  BMU_ALWAYS_RUN_TIME: ${BMU_ALWAYS_RUN_TIME:-false} # true: every moment is run time (queued jobs start at once)
   AWS_ACCESS_KEY_ID: local                        # moto accepts any credentials
   AWS_SECRET_ACCESS_KEY: local
   AWS_DEFAULT_REGION: us-west-2

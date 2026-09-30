@@ -17,7 +17,8 @@ import PagerBar from "./PagerBar.vue";
 import SortTh from "./SortTh.vue";
 import ThumbCell from "./ThumbCell.vue";
 
-const props = defineProps<{ jobId: string; from: "drafts" | "queue"; tenant: TenantInfo; editWhy?: string }>();
+/** user, scheduler: for Cancel run (design: Job scheduling). */
+const props = defineProps<{ jobId: string; from: "drafts" | "queue"; tenant: TenantInfo; editWhy?: string; user?: string; scheduler?: boolean }>();
 const emit = defineEmits<{ back: []; open: [id: string, mode: "edit" | "preview", takeOverSince?: number] }>();
 
 const job = ref<Job | null>(null);
@@ -195,7 +196,7 @@ function checksText(c: { block: number; warn: number }) {
       <PagerBar :state="table" :total="view.total" :of="view.of" :pages="view.pages" :start="view.start" noun="documents" bottom />
       <div v-if="inTab" class="schedule-bar">
         <span class="spacer"></span>
-        <JobActions :job="job" :kind="from" in-preview :edit-why="editWhy" @open="(id, m, since) => emit('open', id, m, since)"
+        <JobActions :job="job" :kind="from" in-preview :edit-why="editWhy" :user="user" :scheduler="scheduler" @open="(id, m, since) => emit('open', id, m, since)"
                     @done="done" @error="error = $event" />
       </div>
     </template>

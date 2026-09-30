@@ -224,3 +224,13 @@ table.inner td { background: var(--surface-2); }
 .preset-tag { font-size: 9px; font-weight: 600; font-style: normal; padding: 1px 5px; border-radius: 10px; margin-left: 4px;
   background: var(--bg-preset); color: var(--text-preset); }
 .jd-more { margin: 4px 0 6px; }
+
+/* job scheduling (design: Job scheduling; UI mockup scheduleBannerHtml, runsAtCell) */
+.banner.warn { background: var(--bg-warning); color: var(--text-warning); }
+.sched-hint { margin: -6px 0 8px; }
+.sched-tools { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 0 0 10px; }
+.sched-panel { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin: 0 0 12px; font-size: 13px; display: flex; flex-direction: column; gap: 8px; }
+.sched-panel .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.sched-panel .days label { display: inline-flex; gap: 3px; align-items: center; margin-right: 6px; }
+.runs-at .run-acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 3px; font-size: 12px; }
+.runs-at .runat-edit { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; margin-top: 4px; }

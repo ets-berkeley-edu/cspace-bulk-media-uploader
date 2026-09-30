@@ -62,6 +62,12 @@ authority_fields:
   contributor: [person, organization]
   rightsHolder: [person, organization]
 
+# Job scheduling: members of these CollectionSpace roles (display names) are BMU schedulers. They change the
+# tenant's schedule, pause the queue and reorder, hold or run its jobs. CollectionSpace stores the role as
+# ROLE_<tenantId>_BMU_SCHEDULER (tenant.role_name has the naming rule).
+# `python scripts/check_cspace.py --roles` shows an account's roles.
+scheduler_roles: [BMU_Scheduler]
+
 # Sensitivity and publishing (design: Protected files). The BMU reads the linked Object record and applies
 # these rules: a "protect" rule makes the document a protected file automatically (users can't set or clear
 # it); a "warn" rule is a soft signal that only raises a warning. "hides" marks the rule the museum's public

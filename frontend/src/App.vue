@@ -8,6 +8,7 @@ import FinishedJobs from "./components/FinishedJobs.vue";
 import QueueList from "./components/QueueList.vue";
 import LoginForm from "./components/LoginForm.vue";
 import { EDIT_BLOCKED_EXPLAIN, editBlocked } from "./lib/status";
+import { submitMessage } from "./lib/schedule";
 import type { Job, Me } from "./types";
 
 const me = ref<Me | null>(null);
@@ -82,10 +83,12 @@ async function openJob(id: string, m: "edit" | "preview" = "edit", since?: numbe
   tab.value = "editor";
 }
 
+/** Submit job succeeded: say when it runs, from the response's plan (design: Job scheduling; UI mockup submitJob). */
 async function scheduled(j: Job) {
-  jobId.value = null; // scheduling already took it out of Drafts
+  jobId.value = null; // submitting already took it out of Drafts
+  const sched = await api.getSchedule().catch(() => null); // only to tell the development setting apart
   await newJob();
-  notice.value = `“${j.name || "Untitled job"}” was scheduled and added to the end of the queue. It runs with your sign-in, which is deleted when the run ends.`;
+  notice.value = submitMessage(j, { alwaysRunTime: !!sched?.alwaysRunTime });
   tab.value = "queue";
 }
 </script>
@@ -122,13 +125,15 @@ async function scheduled(j: Job) {
                    @scheduled="scheduled" @opened="jobId = $event" @close="newJob" />
         <template v-if="tab === 'drafts'">
           <JobPreview v-if="previewing.drafts" :key="previewing.drafts" :job-id="previewing.drafts" from="drafts" :tenant="me.tenant" :edit-why="editWhy"
+                      :user="me.user" :scheduler="!!me.scheduler"
                       @back="previewing.drafts = null" @open="openJob" />
           <DraftsList v-else :tenant="me.tenant" :edit-why="editWhy" @open="openJob" />
         </template>
         <template v-if="tab === 'queue'">
           <JobPreview v-if="previewing.queue" :key="previewing.queue" :job-id="previewing.queue" from="queue" :tenant="me.tenant" :edit-why="editWhy"
+                      :user="me.user" :scheduler="!!me.scheduler"
                       @back="previewing.queue = null" @open="openJob" />
-          <QueueList v-else :tenant="me.tenant" :edit-why="editWhy" @open="openJob" />
+          <QueueList v-else :tenant="me.tenant" :edit-why="editWhy" :user="me.user" :scheduler="!!me.scheduler" @open="openJob" />
         </template>
         <FinishedJobs v-if="tab === 'jobs'" :tenant="me.tenant" :edit-why="editWhy" @open="(id) => openJob(id)" />
       </div>

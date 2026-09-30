@@ -15,6 +15,7 @@ dependencies = [
   "defusedxml>=0.7",
   "python-multipart>=0.0.9",
   "pillow>=10",
+  "tzdata>=2024.1",  # America/Los_Angeles for the job schedule, also where the OS has no time zone database
 ]
 
 [project.optional-dependencies]
