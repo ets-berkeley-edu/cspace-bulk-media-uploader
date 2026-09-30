@@ -74,7 +74,7 @@ def main():
         if roles is not None:
             print(f"     tenantId: {roles.tenant_id or '(none)'}")
             print(f"     roles: {', '.join(roles.role_names) or '(none)'}")
-            wanted = [f"ROLE_{roles.tenant_id}_{n.upper().replace(' ', '_')}" for n in t.scheduler_roles]
+            wanted = t.scheduler_role_names(roles.tenant_id)
             print(f"     BMU scheduler for {t.key}: {'yes' if t.is_scheduler(roles.tenant_id, roles.role_names) else 'no'}"
                   f" (scheduler roles: {', '.join(wanted) or 'none configured'})")
         return

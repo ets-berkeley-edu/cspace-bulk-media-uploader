@@ -64,7 +64,8 @@ authority_fields:
 
 # Job scheduling: members of these CollectionSpace roles (display names) are BMU schedulers. They change the
 # tenant's schedule, pause the queue and reorder, hold or run its jobs. CollectionSpace stores the role as
-# ROLE_<tenantId>_BMU_SCHEDULER. `python scripts/check_cspace.py --roles` shows an account's roles.
+# ROLE_<tenantId>_BMU_SCHEDULER (tenant.role_name has the naming rule).
+# `python scripts/check_cspace.py --roles` shows an account's roles.
 scheduler_roles: [BMU_Scheduler]
 
 # Sensitivity and publishing (design: Protected files). The BMU reads the linked Object record and applies

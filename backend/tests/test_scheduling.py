@@ -9,7 +9,7 @@ import pytest
 from bmu import schedule as sched
 from bmu.cspace import AccountRoles
 from bmu.storage import now
-from bmu.tenant import load_tenant
+from bmu.tenant import load_tenant, role_name
 from bmu.worker import Worker
 from conftest import worker_factory
 from test_flow import _second_user, new_job
@@ -211,6 +211,18 @@ def test_the_scheduler_role_name_rule():
     assert not t.is_scheduler("15", ["ROLE_16_BMU_SCHEDULER"])  # another tenant's role
     assert not t.is_scheduler("15", ["ROLE_15_TENANT_ADMINISTRATOR"])
     assert not t.is_scheduler("", ["ROLE_15_BMU_SCHEDULER"])
+    assert t.scheduler_role_names("15") == ["ROLE_15_BMU_SCHEDULER"]
+
+
+def test_role_name_follows_cspace_sanitizing():
+    # cspace-ui: upper-case, spaces -> _, drop all but A-Z 0-9 _, collapse repeated _; services: add ROLE_<t>_
+    assert role_name("15", "BMU_Scheduler") == "ROLE_15_BMU_SCHEDULER"
+    assert role_name("15", "BMU Scheduler") == "ROLE_15_BMU_SCHEDULER"
+    assert role_name("15", "bmu  scheduler") == "ROLE_15_BMU_SCHEDULER"  # repeated underscores collapse
+    assert role_name("15", "BMU-Scheduler (PAHMA)") == "ROLE_15_BMUSCHEDULER_PAHMA"
+    assert role_name("15", "+ cow") == "ROLE_15__COW"  # the prefix is added after the collapse
+    assert role_name("15", "ROLE_15_BMU_SCHEDULER") == "ROLE_15_BMU_SCHEDULER"  # prefix not added twice
+    assert role_name("16", "BMU_Scheduler") == "ROLE_16_BMU_SCHEDULER"
 
 
 def test_account_roles_are_parsed_from_collectionspace_xml():
