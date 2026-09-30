@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ChevronIcon from "./ChevronIcon.vue";
 /**
  * The Drafts tab (design: Drafts, scheduling and the job queue): every draft in the tenant, which anyone can
  * preview and edit, one person at a time. Checks are re-run against CollectionSpace each time it is shown.
@@ -88,7 +89,7 @@ function countsOf(id: string): { block: number; warn: number } | null {
       <button class="link" @click="expandAll(false)">Collapse all</button></div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th style="width:28px"></th><SortTh :state="table" sort-key="name" label="Draft" /><SortTh :state="table" sort-key="docs" label="Docs" style="width:70px" />
+        <thead><tr><th style="width:40px"></th><SortTh :state="table" sort-key="name" label="Draft" /><SortTh :state="table" sort-key="docs" label="Docs" style="width:70px" />
           <SortTh :state="table" sort-key="checks" label="Checks now" style="width:170px" /><SortTh :state="table" sort-key="saved" label="Last saved" style="width:150px" />
           <SortTh :state="table" sort-key="editing" label="Editing" style="width:110px" /><SortTh :state="table" sort-key="expires" label="Expires" style="width:140px" />
           <th style="width:250px"></th></tr></thead>
@@ -97,7 +98,7 @@ function countsOf(id: string): { block: number; warn: number } | null {
           <template v-for="j in sorted" :key="j.id">
           <tr>
             <td><button class="chevron" :class="{ open: expanded.has(j.id) }" :aria-expanded="expanded.has(j.id)"
-                        :aria-label="`Show details of ${j.name || 'Untitled job'}`" @click="toggle(j)">▸</button></td>
+                        :aria-label="`Show details of ${j.name || 'Untitled job'}`" @click="toggle(j)"><ChevronIcon /></button></td>
             <td>{{ j.name || "Untitled job" }}<div class="sub">created by {{ j.createdBy }}</div>
               <div v-if="j.fixFrom" class="sub">🔧 fixing after run {{ j.fixFrom.run }} ({{ j.fixFrom.status === "Failed" ? "failed" : "needed attention" }})</div>
               <div v-if="j.note" class="sub note">⚠ {{ j.note }}</div></td>

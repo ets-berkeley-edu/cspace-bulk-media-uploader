@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ChevronIcon from "./ChevronIcon.vue";
 import { computed, nextTick, ref, watch } from "vue";
 import type { Handling, Option, Perms, Row, TenantInfo } from "../types";
 import { formatBytes } from "../lib/files";
@@ -129,7 +130,7 @@ function text(field: keyof Row, e: Event) {
     <td><ThumbCell :job-id="jobId" :row="row" :preview="preview" /></td>
     <td class="keep"><input type="checkbox" :checked="selected" :aria-label="`Select ${row.file}`"
       @change="emit('select', ($event.target as HTMLInputElement).checked)" /></td>
-    <td class="keep"><button class="chevron" :class="{ open: expanded }" :aria-expanded="expanded" aria-label="Show details" @click="emit('toggle')">▸</button></td>
+    <td class="keep"><button class="chevron" :class="{ open: expanded }" :aria-expanded="expanded" aria-label="Show details" @click="emit('toggle')"><ChevronIcon /></button></td>
     <td>
       <div>{{ row.file }}<span v-if="renamed" class="badge b-accent" style="margin-left:6px" :title="`Original: ${original}`">Renamed</span>
         <span v-if="row.protected" class="badge b-danger" style="margin-left:6px" :title="`Protected file: ${row.protected.reason}`">🔒 Protected</span></div>

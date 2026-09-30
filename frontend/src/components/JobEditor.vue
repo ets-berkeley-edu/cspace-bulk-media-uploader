@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ChevronIcon from "./ChevronIcon.vue";
 import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { api, ApiError } from "../api";
 import { canPreview, formatTime, makeThumbnail, mapLimit, skippedText, splitSupported, uploadToS3 } from "../lib/files";
@@ -626,8 +627,8 @@ function toggle(n: number) {
           <th style="width:64px"><span class="sr-only">Preview</span></th>
           <th style="width:28px"><input type="checkbox" :checked="pageSelected" :disabled="!view.shown.length" aria-label="Select all documents on this page"
             @change="selectPage(($event.target as HTMLInputElement).checked)" /></th>
-          <th style="width:28px"><button class="chevron" :class="{ open: pageExpanded }" :disabled="!view.shown.length"
-            title="Expand or collapse all rows on this page" aria-label="Expand or collapse all rows on this page" @click="expandPage">▸</button></th>
+          <th style="width:40px"><button class="chevron" :class="{ open: pageExpanded }" :disabled="!view.shown.length"
+            title="Expand or collapse all rows on this page" aria-label="Expand or collapse all rows on this page" @click="expandPage"><ChevronIcon /></button></th>
           <SortTh :state="table" sort-key="file" label="Document" />
           <SortTh :state="table" sort-key="handling" label="Handling" style="width:220px" />
           <SortTh :state="table" sort-key="publish" :label="me.tenant.publish.header" style="width:110px" />

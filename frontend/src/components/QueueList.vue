@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ChevronIcon from "./ChevronIcon.vue";
 /**
  * The Job queue tab (design: The job queue; Job scheduling): running jobs first, then queued jobs in the order
  * workers take them. Queued jobs start at the tenant's run times (the schedule banner), one at a time. BMU
@@ -263,7 +264,7 @@ const pct = (j: Job, k: "done" | "failed") => (j.progress?.total ? (100 * (j.pro
       <button class="link" @click="table.sort = null">clear the sort</button> to {{ scheduler ? "drag or move jobs" : "see it in run order" }}.</div>
     <div class="table-wrap">
       <table class="queue">
-        <thead><tr><th style="width:28px"></th><SortTh :state="table" sort-key="order" label="Order" style="width:96px" /><SortTh :state="table" sort-key="name" label="Job" />
+        <thead><tr><th style="width:40px"></th><SortTh :state="table" sort-key="order" label="Order" style="width:96px" /><SortTh :state="table" sort-key="name" label="Job" />
           <SortTh :state="table" sort-key="docs" label="Docs" style="width:64px" /><SortTh :state="table" sort-key="checks" label="Checks now" style="width:170px" />
           <SortTh :state="table" sort-key="scheduled" label="Submitted" style="width:150px" /><SortTh :state="table" sort-key="runs" label="Runs at" style="width:190px" />
           <th style="width:190px">Status</th><th style="width:250px"></th></tr></thead>
@@ -272,7 +273,7 @@ const pct = (j: Job, k: "done" | "failed") => (j.progress?.total ? (100 * (j.pro
           <template v-for="j in running" :key="j.id">
           <tr title="Running jobs stay first">
             <td><button class="chevron" :class="{ open: expanded.has(j.id) }" :aria-expanded="expanded.has(j.id)"
-                        :aria-label="`Show details of ${j.name || 'Untitled job'}`" @click="toggle(j)">▸</button></td>
+                        :aria-label="`Show details of ${j.name || 'Untitled job'}`" @click="toggle(j)"><ChevronIcon /></button></td>
             <td><span class="run-spin" role="img" aria-label="Running" title="Running"></span> {{ running.indexOf(j) + 1 }}</td>
             <td>{{ j.name || "Untitled job" }}<div v-if="(j.run ?? 0) > 1" class="sub">rerun (run {{ j.run }})</div></td>
             <td>{{ j.rowCount }}</td>
@@ -300,7 +301,7 @@ const pct = (j: Job, k: "done" | "failed") => (j.progress?.total ? (100 * (j.pro
               :title="movable ? 'Drag to change the order' : ''"
               @dragstart="dragId = movable ? j.id : null" @dragend="dragId = null; dropAt = null" @dragover="onDragOver($event, j)" @drop.prevent="onDrop">
             <td><button class="chevron" :class="{ open: expanded.has(j.id) }" :aria-expanded="expanded.has(j.id)"
-                        :aria-label="`Show details of ${j.name || 'Untitled job'}`" @click="toggle(j)">▸</button></td>
+                        :aria-label="`Show details of ${j.name || 'Untitled job'}`" @click="toggle(j)"><ChevronIcon /></button></td>
             <td><span v-if="canReorder" class="grip" aria-hidden="true">⋮⋮</span> {{ running.length + queued.indexOf(j) + 1 }}
               <span v-if="canReorder" class="order-btns">
                 <button :disabled="sortedView || queued.indexOf(j) === 0" :aria-label="`Move ${j.name} up`" @click="move(j, queued.indexOf(j) - 1)">▲</button>
