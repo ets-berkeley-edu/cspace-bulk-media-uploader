@@ -282,10 +282,18 @@ def test_languages_no_longer_in_the_vocabulary_block(fake):
     assert [x for x in _texts(r, "block") if x.startswith("Language")] == [
         "Language “English” is no longer in CollectionSpace’s language list. Choose another language.",
         "Language “Spanish” is no longer in CollectionSpace’s language list. Choose another language."]
-    # a term renamed in CollectionSpace is still the same term
+    # a term renamed in CollectionSpace is still the same term: a draft takes its current name, like an authority term's
     apply_edit(t, r, {"language": [ENG.replace("(eng)'English'", "(fre)'Français'")]})
     check_rows(t, [r], client(), ALL, languages=terms)
-    assert not any(x.startswith("Language") for x in _texts(r))
+    assert not _texts(r, "block") and r["language"] == [ENG.replace("(eng)'English'", "(fre)'French'")]
+    assert ("Language “Français” was renamed in CollectionSpace; this document now uses its current name, “French”."
+            in _texts(r, "info"))
+    # a job that isn't a draft is only told
+    r["language"] = [ENG.replace("(eng)'English'", "(fre)'Français'")]
+    check_rows(t, [r], client(), ALL, languages=terms, set_publish=False)
+    assert r["language"] == [ENG.replace("(eng)'English'", "(fre)'Français'")]
+    assert ("Language “Français” is now called “French” in CollectionSpace. The job will use the new name when it runs."
+            in _texts(r, "info"))
 
 
 def test_a_language_list_that_could_not_be_read_warns(fake):
@@ -401,3 +409,49 @@ def test_a_date_that_could_not_be_checked_says_it_is_checked_again_on_submit(fak
     c.parse_date = unavailable
     check_rows(t, [r], c, ALL)
     assert "Couldn't check the date with CollectionSpace (server). It is checked again when you submit the job." in _texts(r, "block")
+
+
+# ---- renamed terms ---------------------------------------------------------------------------------------
+LESLIE_RENAMED = LESLIE.replace("'Leslie Freund'", "'Leslie F. Freund'")
+
+
+def test_a_renamed_term_in_a_draft_takes_its_current_name(fake):
+    t = load_tenant("pahma")
+    r = uploaded(t, handling="mediaonly")
+    apply_edit(t, r, {"creator": LESLIE})
+    fake.term_renames["7475"] = "Leslie F. Freund"
+    check_rows(t, [r], client(), ALL)
+    assert r["creator"] == LESLIE_RENAMED and "creator" in r["touched"]  # touched by the user's own edit, not this
+    assert ("Creator “Leslie Freund” was renamed in CollectionSpace; this document now uses its current name, "
+            "“Leslie F. Freund”.") in _texts(r, "info")
+    assert not _texts(r, "block") and r["lookups"]["term:creator"]["value"] == LESLIE_RENAMED
+    reads = len(fake.term_reads)
+    check_rows(t, [r], client(), ALL)  # the stored lookup now matches: no new request, no notice
+    assert len(fake.term_reads) == reads and not any("renamed" in x for x in _texts(r))
+
+
+def test_a_renamed_preset_term_is_not_marked_as_user_edited(fake):
+    t = tenant_with({"mediaonly": {"contributor": HEARST}})
+    r = uploaded(t, handling="mediaonly")
+    assert r["contributor"] == HEARST and "contributor" not in r["touched"]
+    fake.term_renames["PhoebeAHearstMuseumofAnthropology1400000000000"] = "Hearst Museum"
+    check_rows(t, [r], client(), ALL)
+    assert r["contributor"].endswith("'Hearst Museum'") and "contributor" not in r["touched"]
+
+
+def test_a_renamed_term_through_the_api_is_saved_in_a_draft_and_only_reported_when_queued(api, login, add_uploaded, fake,
+                                                                                            monkeypatch):
+    monkeypatch.setattr("bmu.rows.LOOKUP_TTL_SECONDS", -1)  # every check looks the terms up again
+    login()
+    job = new_job(api)
+    n = add_uploaded(job, ["15-1234_1.jpg"])[0]["n"]
+    api.patch(f"/api/jobs/{job}/rows/{n}", json={"handling": "mediaonly", "creator": LESLIE})
+    fake.term_renames["7475"] = "Leslie F. Freund"
+    api.post(f"/api/jobs/{job}/check", json={})
+    assert api.get(f"/api/jobs/{job}").json()["rows"][0]["creator"] == LESLIE_RENAMED  # saved with the checks
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    fake.term_renames["7475"] = "L. Freund"
+    preview = api.post(f"/api/jobs/{job}/check", json={}).json()
+    assert ("Creator “Leslie F. Freund” is now called “L. Freund” in CollectionSpace. The job will use the new name when "
+            "it runs.") in _texts(preview["rows"][0], "info")
+    assert api.get(f"/api/jobs/{job}").json()["rows"][0]["creator"] == LESLIE_RENAMED  # a queued job isn't changed

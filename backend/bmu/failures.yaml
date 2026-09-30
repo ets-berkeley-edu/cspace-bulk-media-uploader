@@ -78,12 +78,26 @@ server_error:
   explain: CollectionSpace returned an error (or didn't answer in time) for one step of this document. It wasn't part of a longer outage, so the job carried on with the other documents.
   fix: Reschedule the job. Only the failed step and the steps that depend on it run again.
 
+value_missing:
+  title: A value no longer exists in CollectionSpace
+  level: row
+  needs_fix: true
+  explain: "Just before creating this document's records, the BMU checked its values again, and one no longer exists in CollectionSpace: a creator, contributor or rights holder was deleted or merged into another term, a language left the language list, or a media type left the tenant's list. Nothing was created for this document."
+  fix: Use Fix and reschedule, choose another value for the field named in the details, and submit the job again.
+
 duplicate_at_run:
   title: Identification number already in use
   level: notice
   needs_fix: false
   explain: When the job ran, a Media record with the same identification number already existed; it was created after the job was submitted. As with the editor's warning, the document was still processed.
   fix: Review both Media records in CollectionSpace. No rerun is needed.
+
+term_renamed:
+  title: A name changed in CollectionSpace
+  level: notice
+  needs_fix: false
+  explain: A term this document uses was renamed in CollectionSpace after the job was submitted. The BMU used its current name, so the record shows the name CollectionSpace has now.
+  fix: Nothing to do.
 
 group_failed:
   title: The group could not be created

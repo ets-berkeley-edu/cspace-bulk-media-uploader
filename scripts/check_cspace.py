@@ -9,6 +9,8 @@ Relations) using a tiny generated image; those records stay.
   python scripts/check_cspace.py --object 1-2345 --term smith [--create]
   python scripts/check_cspace.py --vocabularies   # only list the Person and Organization vocabularies
   python scripts/check_cspace.py --roles          # only show the account's roles and whether it is a BMU scheduler
+  python scripts/check_cspace.py --terms person:7475 "urn:cspace:...:item:name(abc)'Name'"
+                                                  # only read authority terms one by one, as the BMU's term check does
 
 Run from the backend directory's environment (pip install -e backend).
 """
@@ -24,7 +26,7 @@ from defusedxml import ElementTree as SafeET
 from bmu.sensitivity import evaluate as evaluate_sensitivity
 from bmu.cspace.payloads import group_xml, media_xml, object_xml, relation_xml
 from bmu.rows import new_row
-from bmu.tenant import load_tenant
+from bmu.tenant import AUTHORITY_REF, load_tenant
 
 # 1x1 transparent PNG
 PNG = bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082")
@@ -50,6 +52,50 @@ def _repeating(c: CSpaceClient, media: str) -> dict:
     return {"type": vals("type"), "language": vals("language"), "date": date}
 
 
+def check_term(c: CSpaceClient, t, term: str) -> None:
+    """Read one authority term the way the BMU's term check does (GET <authority>/urn:cspace:name(<vocabulary>)/
+    items/urn:cspace:name(<shortId>)) and print the raw answer and the BMU's verdict. Read-only."""
+    m = AUTHORITY_REF.match(term)
+    if m:
+        service, vocab, short, shown = m["service"], m["vocab"], m["short"], m["display"]
+    else:
+        kind, _, short = term.partition(":")
+        cfg = t.authorities.get(kind) or next((v for k, v in t.authorities.items() if k.startswith(kind)), None)
+        if not cfg or not short:
+            print(f"SKIP {term}: expected a refName or <authority>:<short identifier>, "
+                  f"with <authority> one of {', '.join(t.authorities)}")
+            return
+        service, vocab, shown = cfg["service"], cfg["vocabulary"], None
+    path = f"{service}/urn:cspace:name({vocab})/items/urn:cspace:name({short})"
+    print(f"--   {term}")
+    try:
+        r = c._request("GET", path)
+    except CSpaceError as e:
+        print(f"     GET {path} -> {e.status or e.code} {e.detail}")
+        verdict = "missing (404)" if e.status == 404 else "couldn't check: the row would get a warning, not a block"
+        print(f"     the BMU concludes: {verdict}")
+        return
+    print(f"     GET {path} -> {r.status_code}")
+    fields: list[tuple[str, str]] = []
+    for el in SafeET.fromstring(r.content).iter():
+        if len(el) == 0 and (el.text or "").strip():
+            fields.append((el.tag.rsplit("}", 1)[-1], el.text.strip()))
+    get = lambda name: next((v for k, v in fields if k == name), "")
+    print(f"     workflowState: {get('workflowState') or '(none)'}")
+    print(f"     refName: {get('refName') or '(none)'}")
+    print("     every field (element: value); look for one that names a replacement term:")
+    for k, v in fields:
+        print(f"       {k}: {v[:100]}")
+    current = c.authority_term(service, vocab, short)
+    if current is None:
+        verdict = "missing (deleted): the row is blocked"
+    elif shown is not None and current != term:
+        verdict = f"exists, renamed: a draft's row would take {current}"
+    else:
+        verdict = "exists"
+    print(f"     the BMU concludes: {verdict}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--object", default="1-2345", help="an object number that exists on the server")
@@ -63,12 +109,22 @@ def main():
     ap.add_argument("--roles", action="store_true",
                     help="only show the account's tenant id and roles (accounts/0/accountroles) and whether it is a "
                          "BMU scheduler for the tenant (design: Job scheduling)")
+    ap.add_argument("--terms", nargs="+", metavar="TERM",
+                    help="only read these authority terms one by one, as the BMU's term check does, and show what "
+                         "CollectionSpace returns (workflow state, refName, every field) and what the BMU concludes. "
+                         "A TERM is a full refName, or <authority>:<short identifier> with <authority> one of the "
+                         "tenant's (e.g. person:7475). Use it to see how a deleted, merged or renamed term reads "
+                         "(design: Authority term fields)")
     a = ap.parse_args()
     url, user, pw = os.environ.get("CSPACE_URL"), os.environ.get("CSPACE_USER"), os.environ.get("CSPACE_PASSWORD")
     if not (url and user and pw):
         sys.exit("Set CSPACE_URL, CSPACE_USER and CSPACE_PASSWORD")
     t = load_tenant(a.tenant)
     c = CSpaceClient(url, user, pw)
+    if a.terms:
+        for term in a.terms:
+            check_term(c, t, term)
+        return
     if a.roles:
         roles = step("accountroles", lambda: c.account_roles())
         if roles is not None:
