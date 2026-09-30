@@ -13,6 +13,7 @@ import { absLabel, DAY_NAMES, DAY_ORDER, parsePtInput, pausedBanner, ptInputValu
 import { tableState, tableView } from "../lib/table";
 import type { Job, Row, Schedule, TenantInfo } from "../types";
 import JobActions from "./JobActions.vue";
+import RunNow from "./RunNow.vue";
 import JobDocs from "./JobDocs.vue";
 import SortTh from "./SortTh.vue";
 
@@ -265,14 +266,14 @@ const pct = (j: Job, k: "done" | "failed") => (j.progress?.total ? (100 * (j.pro
         <thead><tr><th style="width:28px"></th><SortTh :state="table" sort-key="order" label="Order" style="width:96px" /><SortTh :state="table" sort-key="name" label="Job" />
           <SortTh :state="table" sort-key="docs" label="Docs" style="width:64px" /><SortTh :state="table" sort-key="checks" label="Checks now" style="width:170px" />
           <SortTh :state="table" sort-key="scheduled" label="Submitted" style="width:150px" /><SortTh :state="table" sort-key="runs" label="Runs at" style="width:190px" />
-          <th style="width:130px">Status</th><th style="width:250px"></th></tr></thead>
+          <th style="width:190px">Status</th><th style="width:250px"></th></tr></thead>
         <tbody>
           <tr v-if="!jobs.length"><td colspan="9" class="muted" style="text-align:center;padding:18px">No jobs in the queue. Create one in Create / edit job and submit it.</td></tr>
           <template v-for="j in running" :key="j.id">
           <tr title="Running jobs stay first">
             <td><button class="chevron" :class="{ open: expanded.has(j.id) }" :aria-expanded="expanded.has(j.id)"
                         :aria-label="`Show details of ${j.name || 'Untitled job'}`" @click="toggle(j)">▸</button></td>
-            <td><span class="grip" aria-hidden="true">▶</span> {{ running.indexOf(j) + 1 }}</td>
+            <td><span class="run-spin" role="img" aria-label="Running" title="Running"></span> {{ running.indexOf(j) + 1 }}</td>
             <td>{{ j.name || "Untitled job" }}<div v-if="(j.run ?? 0) > 1" class="sub">rerun (run {{ j.run }})</div></td>
             <td>{{ j.rowCount }}</td>
             <td><span class="sub">—</span></td>
@@ -284,7 +285,7 @@ const pct = (j: Job, k: "done" | "failed") => (j.progress?.total ? (100 * (j.pro
                 {{ (j.progress?.total ?? 0) - (j.progress?.done ?? 0) - (j.progress?.failed ?? 0) }} to go</div>
               <div class="progress"><span class="ok" :style="{ width: pct(j, 'done') + '%' }"></span><span class="bad" :style="{ width: pct(j, 'failed') + '%' }"></span></div>
               <div v-if="j.cancelRequested" class="sub lock">Cancelling after the document in progress…</div>
-              <div v-else-if="j.currentFile" class="sub" title="Document in progress">▶ {{ j.currentFile }}</div>
+              <RunNow v-else :job="j" />
             </td>
             <td>
               <JobActions :job="j" kind="queue" :edit-why="editWhy" :user="user" :scheduler="scheduler"

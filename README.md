@@ -123,7 +123,11 @@ The simulator's state is at http://localhost:8180/_fake/state; reset it with `cu
 ### Changing things in the simulated CollectionSpace
 
 To watch the job queue, or to cancel a run partway, slow the simulated CollectionSpace down so each create and
-upload takes a while: `curl -X POST 'localhost:8180/_fake/slow?seconds=2'` (`seconds=0` turns it off).
+upload takes a while: `curl -X POST 'localhost:8180/_fake/slow?seconds=2'` (`seconds=0` turns it off). Add
+`upload_mbps` to also receive files slowly, so the running job's upload bar ("Now: …, uploading the file" with
+the share and MB sent) can be watched with large files: `curl -X POST 'localhost:8180/_fake/slow?seconds=1&upload_mbps=10'`.
+To slow the uploads in Create / edit job instead (the browser sends those straight to S3), use your browser's
+network throttling (Chrome DevTools → Network).
 
 To see how the BMU handles terms and languages that change after a document was filled in:
 

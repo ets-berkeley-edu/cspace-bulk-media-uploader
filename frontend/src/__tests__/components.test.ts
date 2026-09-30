@@ -135,7 +135,10 @@ describe("DocumentRow checks", () => {
   });
 
   it("in a running job's preview, Status shows each document's run state", () => {
-    expect(mountRow({ row: row({ result: { state: "In progress", steps: {} } }), runView: true, readonly: true }).text()).toContain("▶ In progress");
+    const busy = mountRow({ row: row({ result: { state: "In progress", steps: {} } }), runView: true, readonly: true });
+    expect(busy.text()).toContain("In progress");
+    expect(busy.text()).not.toContain("▶");
+    expect(busy.find(".badge .run-spin").exists()).toBe(true); // a spinning ring, not a play/expand triangle
     expect(mountRow({ row: row(), runView: true, readonly: true }).text()).toContain("Not started");
     expect(mountRow({ row: row({ result: { state: "Partial", steps: { media: { s: "done", csid: "m" } } } }), runView: true, readonly: true }).text()).toContain("Partial");
   });

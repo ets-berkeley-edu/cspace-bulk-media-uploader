@@ -578,7 +578,7 @@ class Worker:
                                     codeDetail=code_detail, **where)
         self.storage.update_job(job_id, {
             "status": status, "code": code, "codeDetail": code_detail, "finishedAt": t, "progress": _progress(rows), "counts": counts,
-            "currentRow": None, "currentFile": "", "cancelRequested": None, "cancelledBy": cancelled_by,
+            "currentRow": None, "currentFile": "", "currentStep": "", "currentUpload": None, "cancelRequested": None, "cancelledBy": cancelled_by,
             "runBy": job.get("scheduledBy") or user,
             "expiresAt": t + self.s.completed_days * 86400 if status == "Completed" else None})
 
@@ -597,7 +597,9 @@ class Worker:
                 return "cancelled"
             self._where = f"at document {row['n']}"
             self.storage.acquire_lock(self.tenant.key, self.owner, self.s.worker_lock_seconds)
-            self.storage.update_job(job_id, {"currentRow": row["n"], "currentFile": row["file"], "heartbeatAt": now()})
+            self.storage.update_job(job_id, {"currentRow": row["n"], "currentFile": row["file"], "currentStep": "",
+                                             "currentUpload": None, "heartbeatAt": now()})
+            self._progress_job = job_id
             err = self.run_row(client, job_id, row, run_no, created)
             if err in JOB_LEVEL:
                 e = (row.get("result") or {}).get("error") or {}
@@ -651,6 +653,8 @@ class Worker:
                 st.update(s="skipped", after=blocked)
                 self.storage.put_row(job_id, row, guard=False)
                 continue
+            # Design (The job queue): the queue shows the step in progress, and while the file is sent its progress
+            self.storage.update_job(job_id, {"currentStep": name, "currentUpload": None})
             try:
                 if name == "values":
                     self._check_values(row)
@@ -784,6 +788,13 @@ class Worker:
             row["result"].setdefault("notices", []).append(
                 {"code": "duplicate_at_run", "detail": f"GET media?as=identificationNumber = \"{idn}\" found {', '.join(new[:5])}"})
 
+    def _report_upload(self, sent: int, total: int) -> None:
+        """Design (The job queue): the bytes of the document in progress sent to CollectionSpace so far, for the
+        queue's upload bar; written at most every UPLOAD_PROGRESS_SECONDS, and at the end."""
+        job_id = getattr(self, "_progress_job", None)
+        if job_id:
+            self.storage.update_job(job_id, {"currentUpload": {"sent": sent, "total": total}})
+
     # ---- values (design: Job execution; Authority term fields) ----------------------------------------
     def _check_all_values(self, client: CSpaceClient, rows: list[dict]) -> None:
         """The check before the first document: look up every distinct authority term and the languages vocabulary
@@ -890,8 +901,9 @@ class Worker:
                 body = self.storage.open_object(row["s3Key"], version)
             except ClientError as e:
                 raise _RowError("file_missing", f"S3 GetObject {e.response['Error'].get('Code', '')}: the staged file is gone") from e
+            sent = _UploadProgress(body, int(row.get("size") or 0), self._report_upload)
             try:
-                blob = client.upload_file(media, row["file"], body, row.get("contentType") or "application/octet-stream")
+                blob = client.upload_file(media, row["file"], sent, row.get("contentType") or "application/octet-stream")
             finally:
                 body.close()
             return blob or client.media_blob_csid(media), False
@@ -932,6 +944,42 @@ def _unavailable_before(client: CSpaceClient) -> str:
     last = getattr(client, "last_failure", "")
     return (f"{client.failures_in_a_row} requests in a row to CollectionSpace failed" + (f", the last: {last}" if last else "") +
             "; stopped while checking values before the first document")
+
+
+UPLOAD_PROGRESS_SECONDS = 2.0
+
+
+class _UploadProgress:
+    """A read-only file object around the staged file's S3 stream that counts the bytes read (so sent) while the
+    file is streamed to CollectionSpace, and reports them at most every UPLOAD_PROGRESS_SECONDS and when the
+    stream ends. It adds no seek or fileno, so the request is sent exactly as it was from the stream itself."""
+
+    def __init__(self, stream, total: int, report, clock=time.monotonic):
+        self.stream, self.total, self.report, self.clock = stream, total, report, clock
+        self.sent = 0
+        self._last = clock()
+        self._ended = False
+
+    def read(self, size: int = -1) -> bytes:
+        data = self.stream.read(size) if size is not None and size >= 0 else self.stream.read()
+        self.sent += len(data)
+        if not data or (self.total and self.sent >= self.total):
+            if not self._ended:
+                self._ended = True
+                self._send()
+        elif self.clock() - self._last >= UPLOAD_PROGRESS_SECONDS:
+            self._send()
+        return data
+
+    def _send(self) -> None:
+        self._last = self.clock()
+        try:
+            self.report(self.sent, self.total or self.sent)
+        except Exception:  # progress is only shown; never let it stop the upload
+            log.warning("upload progress not recorded", exc_info=True)
+
+    def close(self) -> None:
+        self.stream.close()
 
 
 class _ValueLookups:
