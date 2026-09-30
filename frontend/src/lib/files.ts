@@ -38,6 +38,8 @@ export function uploadToS3(
     data.append("file", file);
     const xhr = new XMLHttpRequest();
     xhr.open("POST", form.url);
+    // Demo builds with a browser upload speed set send the form to the web app (Demo tools), which checks X-BMU.
+    if (form.url.startsWith("/api/")) xhr.setRequestHeader("X-BMU", "1");
     xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(Math.round((e.loaded / e.total) * 100));
     xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(`Upload failed (${xhr.status})`)));
     xhr.onerror = () => reject(new Error("Upload failed (network)"));

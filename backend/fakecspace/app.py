@@ -703,6 +703,17 @@ def objects():
                   key=lambda o: o["objectNumber"])
 
 
+@app.get("/_fake/settings")
+def settings():
+    """Development only: what the /_fake controls are set to now, and the sample terms and languages they take
+    (the BMU's Demo tools pane shows these)."""
+    return {"delay": store.delay, "upload_mbps": store.upload_mbps, "rules": store.rules,
+            "term_states": {**store.term_states}, "term_renames": {**store.term_renames},
+            "deleted_languages": sorted(store.deleted_languages), "language_renames": {**store.language_renames},
+            "steps": sorted(STEPS), "people": PEOPLE, "orgs": ORGS, "languages": LANGUAGES,
+            "term_names": {_short(n): n for n in PEOPLE + ORGS}}
+
+
 @app.post("/_fake/reset")
 def reset():
     store.reset()

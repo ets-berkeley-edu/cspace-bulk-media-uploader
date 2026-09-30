@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from . import demo
 from . import schedule as sched
 from .config import Settings, get_settings
 from .crypto import Crypto, make_crypto
@@ -72,6 +73,7 @@ class Services:
         self.tenant: Tenant = load_tenant(settings.tenant)
         # The time the job schedule is judged by (design: Job scheduling); tests replace it to move time.
         self.clock: Callable[[], float] = clock or now
+        self.demo = demo.DemoState(settings)  # Demo tools (BMU_DEMO only); tests replace its HTTP clients
 
 
 def create_app(services: Services | None = None) -> FastAPI:
@@ -102,6 +104,7 @@ def create_app(services: Services | None = None) -> FastAPI:
                                        "finished). Nothing was saved; try again."}, status_code=409)
 
     _routes(app)
+    demo.register(app)
 
     static = services.settings.static_dir
     if static and Path(static).is_dir():
@@ -328,14 +331,22 @@ def _after_rows_deleted(s: "Services", sess: "Session", job: dict, rows: list[di
     return {"others": _recheck(s, sess, job_id, targets=set())["changed"]}
 
 
-def _delete_job(s: "Services", sess: "Session", job: dict, rows: list[dict]) -> None:
+def _upload_form(s: "Services", key: str, size: int, content_type: str) -> dict:
+    """The presigned POST the browser sends a file with (design: Browser uploads). In a demo with a browser upload
+    speed set (Demo tools), it goes through the web app instead, which passes it on to S3 at that speed."""
+    form = s.storage.presign_upload(key, size, content_type)
+    return demo.route_upload(s, form)
+
+
+def _delete_job(s: "Services", sess: "Session", job: dict, rows: list[dict],
+                statuses: tuple[str, ...] = ("Draft", "Queued", *FIXABLE)) -> None:
     """Delete a job and its staged files. Records its runs created stay in CollectionSpace; the audit entry
     lists every one, by row and record type, so they can still be found and finished there.
     First one write marks it Deleting (with who deleted it) and removes its sign-in, so the worker can't start it
     meanwhile; if the job changed since it was read (claimed, or taken over), nothing is deleted. The complete
     audit entry is written next, before anything is deleted, so a deletion that stops part way never loses the
     list of CSIDs; the sweep then only removes what is left (see Worker.sweep_unfinished_deletions)."""
-    statuses = ["Draft", "Queued", *FIXABLE]
+    statuses = list(statuses)
     if job.get("status") not in statuses or not s.storage.begin_delete(job["id"], statuses, sess.key, sess.user):
         raise HTTPException(409, "This job changed while deleting it (it may have started running); nothing was deleted. "
                                  "Reload and try again.")
@@ -765,7 +776,7 @@ def _routes(app: FastAPI) -> None:
                 row["addedInFix"] = True  # an abandoned fix removes it again
             new.append(row)
         rows = s.storage.add_rows(job_id, new)
-        return {"rows": [{**r, "uploadForm": s.storage.presign_upload(r["s3Key"], f.size, r["contentType"])}
+        return {"rows": [{**r, "uploadForm": _upload_form(s, r["s3Key"], f.size, r["contentType"])}
                          for r, f in zip(rows, body.files)]}
 
     @app.post("/api/jobs/{job_id}/rows/{n}/uploaded")
@@ -856,7 +867,7 @@ def _routes(app: FastAPI) -> None:
         row.update(file=name, fileOriginal=name, size=body.size, contentType=content_type(name) or body.type, upload={"s": "pending"},
                    s3Key=s.storage.staging_key(job_id, n), replacedFor=(row.get("result") or {}).get("run"))
         s.storage.put_row(job_id, row)
-        return {"row": row, "uploadForm": s.storage.presign_upload(row["s3Key"], body.size, row["contentType"])}
+        return {"row": row, "uploadForm": _upload_form(s, row["s3Key"], body.size, row["contentType"])}
 
     @app.post("/api/jobs/{job_id}/rows/{n}/retry-upload")
     def retry_upload(job_id: str, n: int, body: FileSpec, sess: Session = Depends(editor_session), s: Services = Depends(svc)):
@@ -884,7 +895,7 @@ def _routes(app: FastAPI) -> None:
         row.update(size=body.size, contentType=content_type(name) or body.type or row.get("contentType", ""), upload={"s": "pending"},
                    s3Key=s.storage.staging_key(job_id, n))
         s.storage.put_row(job_id, row)
-        return {"row": row, "uploadForm": s.storage.presign_upload(row["s3Key"], body.size, row["contentType"])}
+        return {"row": row, "uploadForm": _upload_form(s, row["s3Key"], body.size, row["contentType"])}
 
     @app.post("/api/jobs/{job_id}/rows/{n}/upload-failed")
     def upload_failed(job_id: str, n: int, sess: Session = Depends(editor_session), s: Services = Depends(svc)):

@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     # Development only (design: Job scheduling): every moment counts as run time, so a queued job without its own
     # run time is due at once, as before scheduling existed. Pause and hold still apply. Env BMU_ALWAYS_RUN_TIME.
     always_run_time: bool = False
+    # Demo builds only: the Demo tools pane's endpoints (/api/_demo/...), which slow the browser's uploads, control the
+    # simulated CollectionSpace and delete every job in the tenant. Off (404) unless BMU_DEMO=true; never in production.
+    demo: bool = False
 
     worker_poll_seconds: float = 2.0
     worker_lock_seconds: int = 120

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, defineAsyncComponent, onMounted, reactive, ref } from "vue";
 import { api, ApiError } from "./api";
 import DraftsList from "./components/DraftsList.vue";
 import JobEditor from "./components/JobEditor.vue";
@@ -10,6 +10,10 @@ import LoginForm from "./components/LoginForm.vue";
 import { EDIT_BLOCKED_EXPLAIN, editBlocked } from "./lib/status";
 import { submitMessage } from "./lib/schedule";
 import type { Job, Me } from "./types";
+
+// Demo tools: only in demo builds. In a production build MODE is "production", so this is null and the pane's code
+// isn't even in the bundle (see lib/demo.ts).
+const DemoPane = import.meta.env.MODE !== "production" ? defineAsyncComponent(() => import("./components/DemoPane.vue")) : null;
 
 const me = ref<Me | null>(null);
 const loading = ref(true);
@@ -83,6 +87,15 @@ async function openJob(id: string, m: "edit" | "preview" = "edit", since?: numbe
   tab.value = "editor";
 }
 
+/** Demo tools deleted every job: nothing is open any more. */
+function jobsDeleted(message: string) {
+  jobId.value = null;
+  previewing.drafts = null;
+  previewing.queue = null;
+  editorKey.value++;
+  notice.value = message;
+}
+
 /** Submit job succeeded: say when it runs, from the response's plan (design: Job scheduling; UI mockup submitJob). */
 async function scheduled(j: Job) {
   jobId.value = null; // submitting already took it out of Drafts
@@ -110,6 +123,7 @@ async function scheduled(j: Job) {
         <span class="spacer"></span>
         <button @click="signOut">Sign out</button>
       </div>
+      <component :is="DemoPane" v-if="DemoPane" @jobs-deleted="jobsDeleted" />
       <div v-if="notice" class="msg msg-info" role="status">{{ notice }}</div>
       <div class="tabs" role="tablist">
         <button class="tab" :class="{ active: tab === 'editor' }" role="tab" :aria-selected="tab === 'editor'" @click="tab = 'editor'">Create / edit job</button>
