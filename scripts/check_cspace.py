@@ -8,6 +8,7 @@ Relations) using a tiny generated image; those records stay.
   export CSPACE_URL=https://pahma.qa.collectionspace.org CSPACE_USER=... CSPACE_PASSWORD=...
   python scripts/check_cspace.py --object 1-2345 --term smith [--create]
   python scripts/check_cspace.py --vocabularies   # only list the Person and Organization vocabularies
+  python scripts/check_cspace.py --roles          # only show the account's roles and whether it is a BMU scheduler
 
 Run from the backend directory's environment (pip install -e backend).
 """
@@ -59,12 +60,24 @@ def main():
     ap.add_argument("--tenant", default="pahma")
     ap.add_argument("--vocabularies", action="store_true",
                     help="only list the server's Person and Organization vocabularies (is there a 'shared' one?)")
+    ap.add_argument("--roles", action="store_true",
+                    help="only show the account's tenant id and roles (accounts/0/accountroles) and whether it is a "
+                         "BMU scheduler for the tenant (design: Job scheduling)")
     a = ap.parse_args()
     url, user, pw = os.environ.get("CSPACE_URL"), os.environ.get("CSPACE_USER"), os.environ.get("CSPACE_PASSWORD")
     if not (url and user and pw):
         sys.exit("Set CSPACE_URL, CSPACE_USER and CSPACE_PASSWORD")
     t = load_tenant(a.tenant)
     c = CSpaceClient(url, user, pw)
+    if a.roles:
+        roles = step("accountroles", lambda: c.account_roles())
+        if roles is not None:
+            print(f"     tenantId: {roles.tenant_id or '(none)'}")
+            print(f"     roles: {', '.join(roles.role_names) or '(none)'}")
+            wanted = [f"ROLE_{roles.tenant_id}_{n.upper().replace(' ', '_')}" for n in t.scheduler_roles]
+            print(f"     BMU scheduler for {t.key}: {'yes' if t.is_scheduler(roles.tenant_id, roles.role_names) else 'no'}"
+                  f" (scheduler roles: {', '.join(wanted) or 'none configured'})")
+        return
     if a.vocabularies:
         configured = {cfg["service"]: cfg["vocabulary"] for cfg in t.authorities.values()}
         for service in ("personauthorities", "orgauthorities"):

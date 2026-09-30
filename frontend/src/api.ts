@@ -1,4 +1,4 @@
-import type { Check, Created, Failure, Job, Me, Row, RowChange, Run, Term } from "./types";
+import type { Check, Created, Failure, Job, Me, Row, RowChange, Run, Schedule, Term } from "./types";
 
 export class ApiError extends Error {
   constructor(public status: number, message: string, public detail: unknown = null) {
@@ -91,7 +91,16 @@ export const api = {
   /** Check rows against CollectionSpace: the given rows, or (no rows) any whose lookups are stale. */
   check: (id: string, rows?: number[]) =>
     request<{ rows: Row[]; counts: { block: number; warn: number } }>("POST", `/api/jobs/${id}/check`, rows ? { rows } : {}),
+  /** Submit job: check the whole job again and add it to the queue; the job comes back with its plan. */
   schedule: (id: string) => request<Job>("POST", `/api/jobs/${id}/schedule`),
+  /** Job scheduling (design: Job scheduling): the tenant's run times, pause, and per-job run controls (schedulers). */
+  getSchedule: (poll = false) => request<Schedule>("GET", "/api/schedule", undefined, poll),
+  putSchedule: (s: { days: number[]; start: string; end: string }) => request<Schedule>("PUT", "/api/schedule", s),
+  pauseQueue: (reason: string) => request<Schedule>("POST", "/api/schedule/pause", { reason }),
+  resumeQueue: () => request<Schedule>("POST", "/api/schedule/resume"),
+  runNow: (id: string, on: boolean) => request<{ job: Job }>("POST", `/api/jobs/${id}/run-now`, { on }),
+  runAt: (id: string, at: number | null) => request<{ job: Job }>("POST", `/api/jobs/${id}/run-at`, { at }),
+  hold: (id: string, on: boolean) => request<{ job: Job }>("POST", `/api/jobs/${id}/hold`, { on }),
   /** CollectionSpace's date parser (structureddates), for the preview under the Date field. */
   parseDate: (text: string) =>
     request<{ ok: boolean; group: Record<string, string> }>("GET", `/api/dates/parse?text=${encodeURIComponent(text)}`),

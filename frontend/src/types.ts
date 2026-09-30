@@ -46,6 +46,30 @@ export interface Me {
   user: string;
   tenant: TenantInfo;
   perms: Perms;
+  /** Has the tenant's BMU_Scheduler role: may change the schedule and the job queue (design: Job scheduling). */
+  scheduler?: boolean;
+}
+
+/** A tenant's run times (design: Job scheduling). days: ISO weekdays (1 = Mon … 7 = Sun); times "HH:MM", Pacific. */
+export interface Schedule {
+  days: number[];
+  start: string;
+  end: string; // "" = no end: new jobs may start any time after the start
+  timezone: string;
+  paused: { by: string; at: number; reason: string } | null;
+  updatedBy?: string | null;
+  updatedAt?: number | null;
+  nextRunAt: number | null; // the next scheduled start at or after now
+  windowOpen: boolean;
+  alwaysRunTime: boolean; // development setting: every moment counts as run time
+}
+
+/** When a queued job is planned to start (design: Job scheduling). */
+export interface JobPlan {
+  kind: "running" | "held" | "paused" | "runNow" | "at" | "schedule";
+  at: number | null; // planned start: its runAt, or the next start for "schedule"
+  ahead: number; // not-held queued jobs picked before it
+  signInExpiresFirst: boolean;
 }
 
 export type CheckLevel = "block" | "warn" | "info";
@@ -212,6 +236,11 @@ export interface Job {
   cancelRequested?: { by: string; at: number } | null;
   cancelledBy?: string;
   currentFile?: string;
+  // job scheduling (design: Job scheduling)
+  runNow?: boolean;
+  runAt?: number | null;
+  held?: { by: string; at: number } | null;
+  plan?: JobPlan | null;
   // finished jobs (design: Finished jobs and error messages)
   counts?: ResultCounts;
   runBy?: string;

@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     max_file_bytes: int = 2 * 1024**3
     max_rows: int = 1000
 
+    # Development only (design: Job scheduling): every moment counts as run time, so a queued job without its own
+    # run time is due at once, as before scheduling existed. Pause and hold still apply. Env BMU_ALWAYS_RUN_TIME.
+    always_run_time: bool = False
+
     worker_poll_seconds: float = 2.0
     worker_lock_seconds: int = 120
     heartbeat_seconds: float = 30.0  # a running job's heartbeat is renewed this often

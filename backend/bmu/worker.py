@@ -16,6 +16,7 @@ import uuid
 
 from botocore.exceptions import ClientError
 
+from . import schedule as sched
 from .config import Settings, get_settings
 from .crypto import Crypto, make_crypto
 from .cspace import CSpaceClient, CSpaceError, CSpaceUnavailable
@@ -126,8 +127,12 @@ class _Heartbeat(threading.Thread):
 
 
 class Worker:
-    def __init__(self, settings: Settings, storage: Storage, crypto: Crypto, client_factory, tenant: Tenant | None = None):
+    def __init__(self, settings: Settings, storage: Storage, crypto: Crypto, client_factory, tenant: Tenant | None = None,
+                 clock=None):
+        """clock: the time the job schedule is judged by (design: Job scheduling), a callable returning epoch
+        seconds; tests pass their own to move time. Expiry and the sweeps keep the real time."""
         self.s = settings
+        self.clock = clock or now
         self.storage = storage
         self.crypto = crypto
         self.client_factory = client_factory
@@ -400,11 +405,13 @@ class Worker:
             self.storage.release_lock(self.tenant.key, self.owner)
 
     def _next_job(self) -> dict | None:
+        """The first due job (design: Job scheduling): Run now jobs first, then the rest in queue order; none while
+        the queue is paused, never a held job, and a job without its own run time only in its run window (every
+        moment with Settings.always_run_time). Not-due jobs wait. See bmu.schedule.pick_next."""
         # A job left Running by a worker that stopped is not resumed: the heartbeat check stops it as
         # "worker_stopped", and a user reschedules it (its finished steps are skipped).
-        queued = sorted((j for j in self.storage.list_jobs(self.tenant.key) if j["status"] == "Queued"),
-                        key=lambda j: (j.get("queuePos", 0), j.get("queuedAt", 0)))
-        return queued[0] if queued else None
+        schedule = sched.load(self.storage, self.tenant.key)
+        return sched.pick_next(self.storage.list_jobs(self.tenant.key), schedule, self.clock(), self.s.always_run_time)
 
     # ---- one job ------------------------------------------------------------------------------
     def run_job(self, job_id: str) -> None:
@@ -419,7 +426,8 @@ class Worker:
         t = now()
         # Claim it only if it is still Queued and its sign-in is still stored (one conditional write)
         if not self.storage.claim_job(job_id, {"status": "Running", "run": run_no, "startedAt": t, "heartbeatAt": t, "code": "",
-                                               "fixFrom": None, "expiresAt": None, "draftExpiresAt": None, "cancelledBy": ""}):
+                                               "fixFrom": None, "expiresAt": None, "draftExpiresAt": None, "cancelledBy": "",
+                                               "runNow": False, "runAt": None}):  # used: they were for this start
             if not self.storage.get_credential(job_id) and (self.storage.get_job(job_id) or {}).get("status") == "Queued":
                 self._sign_in_expired(job)
             return

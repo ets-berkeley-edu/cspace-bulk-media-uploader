@@ -474,7 +474,7 @@ function toggle(n: number) {
     </div>
     <div v-else-if="job && job.status === 'Draft' && job.editingByYou" class="banner">
       Editing draft <strong>{{ job.name || "Untitled job" }}</strong>. Others in {{ me.tenant.name }} see it under Drafts as being
-      edited by you. Changes are saved as you make them. Schedule job moves it to the job queue.
+      edited by you. Changes are saved as you make them. Submit job moves it to the job queue.
       <button class="link" @click="emit('close')">Close this draft and start a new job</button>
     </div>
     <div v-if="job?.fixFrom && job.status === 'Draft'" class="msg msg-warn">
@@ -595,7 +595,7 @@ function toggle(n: number) {
               @click="saveDraft">Save draft</button>
       <!-- A preview of a queued, running or finished job has nothing to schedule: that's done from its own tab -->
       <button v-if="!readonly && mode !== 'preview'" class="primary" :disabled="!job || busy || !!scheduleBlocked || (job.status === 'Draft' && !editable)"
-              :title="scheduleBlocked || 'Check the whole job again, then add it to the job queue'" @click="schedule">Schedule job</button>
+              :title="scheduleBlocked || 'Check the whole job again, then add it to the job queue; it runs at the next run time'" @click="schedule">Submit job</button>
       <div v-if="savedNote" class="result">{{ savedNote }}</div>
     </div>
   </div>

@@ -59,6 +59,8 @@ class Tenant:
     # From the tenant's UI profile; cspace-ui's defaults are 500 ms and 3 characters
     autocomplete: dict[str, int] = field(default_factory=lambda: {"find_delay_ms": 500, "min_length": 3})
     sensitivity: dict[str, Any] = field(default_factory=dict)  # Object-level rules (design: Protected files)
+    # Display names of the CollectionSpace roles whose members are BMU schedulers (design: Job scheduling)
+    scheduler_roles: tuple[str, ...] = ()
 
     @property
     def media_type_values(self) -> set[str]:
@@ -66,6 +68,15 @@ class Tenant:
 
     def handling_by_id(self, hid: str) -> Handling | None:
         return next((h for h in self.handling if h.id == hid), None)
+
+    def is_scheduler(self, tenant_id: str, role_names: list[str]) -> bool:
+        """Design (Job scheduling): CollectionSpace stores a role's name as ROLE_<tenantId>_<display name
+        upper-cased, spaces as underscores>. A user is a BMU scheduler if any of their roles is one of the
+        tenant's scheduler_roles under that name (compared case-insensitively)."""
+        if not tenant_id:
+            return False
+        wanted = {f"ROLE_{tenant_id}_{name.upper().replace(' ', '_')}".upper() for name in self.scheduler_roles}
+        return any((r or "").strip().upper() in wanted for r in role_names)
 
     def public_summary(self) -> dict[str, Any]:
         return {
@@ -108,6 +119,7 @@ def load_tenant(key: str) -> Tenant:
         authority_fields=raw.get("authority_fields", {}),
         autocomplete={"find_delay_ms": 500, "min_length": 3, **(raw.get("autocomplete") or {})},
         sensitivity=raw.get("sensitivity") or {},
+        scheduler_roles=tuple(raw.get("scheduler_roles") or ()),
     )
 
 
