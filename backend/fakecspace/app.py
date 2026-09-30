@@ -9,7 +9,8 @@ Users: admin/admin (all permissions; a BMU scheduler), limited/limited (can't cr
 (read only). Roles (accounts/0/accountroles): admin has ROLE_15_TENANT_ADMINISTRATOR and ROLE_15_BMU_SCHEDULER, the
 others ROLE_15_TENANT_READER.
 Development hooks: /_fake/state, /_fake/reset, /_fake/slow, /_fake/fail (failures on demand), /_fake/delete-term,
-/_fake/rename-term and /_fake/delete-language (terms deleted or renamed in CollectionSpace meanwhile).
+/_fake/rename-term, /_fake/delete-language and /_fake/rename-language (terms deleted or renamed in CollectionSpace
+meanwhile).
 """
 from __future__ import annotations
 
@@ -128,6 +129,7 @@ class Store:
         self.term_states: dict[str, str] = {}
         self.term_renames: dict[str, str] = {}  # short identifier -> its new display name (the term was renamed)
         self.deleted_languages: set[str] = set()
+        self.language_renames: dict[str, str] = {}  # language code -> its new display name
         self.term_reads: list[str] = []  # short identifiers read one by one, to test the per-check cache
         self.delay = 0.0  # seconds added to every create or upload, to watch the queue in a browser (/_fake/slow)
         self.rules: list[dict] = []  # failures on demand (/_fake/fail)
@@ -172,7 +174,7 @@ def _check(request: Request, resource: str, action: str) -> Response | None:
 
 
 # ---- failures on demand (development only; see /_fake/fail) ----------------------------------------
-STEPS = {"media", "upload", "objectSearch", "objectCreate", "relation", "mediaSearch", "group"}
+STEPS = {"media", "upload", "objectSearch", "objectCreate", "relation", "mediaSearch", "group", "termRead"}
 
 
 def _rule(request: Request, step: str, names: list[str]) -> dict | None:
@@ -294,7 +296,11 @@ LANGUAGES = {"eng": "English", "spa": "Spanish", "fre": "French", "ger": "German
 
 
 def _language_ref(code: str) -> str:
-    return f"urn:cspace:{DOMAIN}:vocabularies:name(languages):item:name({code})'{LANGUAGES[code]}'"
+    return f"urn:cspace:{DOMAIN}:vocabularies:name(languages):item:name({code})'{_language_name(code)}'"
+
+
+def _language_name(code: str) -> str:
+    return store.language_renames.get(code, LANGUAGES[code])
 
 
 def _page(items: list, request: Request, default: int = 40) -> list:
@@ -309,7 +315,7 @@ def search_terms(service: str, vocab: str, request: Request):
         if (d := _check(request, "vocabularies", "R")):
             return d
         items = "".join(f"<list-item><csid>{uuid.uuid5(uuid.NAMESPACE_URL, c)}</csid><shortIdentifier>{c}</shortIdentifier>"
-                        f"<displayName>{escape(n)}</displayName><refName>{escape(_language_ref(c))}</refName></list-item>"
+                        f"<displayName>{escape(_language_name(c))}</displayName><refName>{escape(_language_ref(c))}</refName></list-item>"
                         for c, n in _page([x for x in LANGUAGES.items() if x[0] not in store.deleted_languages], request))
         return _xml(f'<ns2:abstract-common-list xmlns:ns2="http://collectionspace.org/services/jaxb">{items}</ns2:abstract-common-list>')
     if service not in ("personauthorities", "orgauthorities"):
@@ -338,6 +344,8 @@ def get_term(service: str, vocab: str, short: str, request: Request):
     if (d := _check(request, service, "R")):
         return d
     name = next((n for n in _term_names(service) if _short(n) == short), None)
+    if (f := _fail(request, "termRead", [short, name or ""])) is not None:
+        return f
     state = store.term_states.get(short, "")
     if not name or state == "gone":
         return Response(status_code=404)
@@ -572,8 +580,10 @@ def slow(seconds: float = 2.0):
 def add_failure(step: str, match: str = "", status: int = 500, effect: str = "", count: int = 1, client: str = "worker"):
     """Development only: make CollectionSpace fail on purpose, to see how the BMU reports it.
 
-    step:   media | upload | objectSearch | objectCreate | relation | mediaSearch | group
-    match:  only requests whose identification number, filename, object number or group title contains this text ("" = any)
+    step:   media | upload | objectSearch | objectCreate | relation | mediaSearch | group | termRead (reading one
+            authority term, as the worker's value checks do)
+    match:  only requests whose identification number, filename, object number, group title or (termRead) term's short
+            identifier or display name contains this text ("" = any)
     status: the HTTP status to return, e.g. 400 (rejected), 401 (sign-in), 403 (permission), 409 (inactive
             account), 413 (file too large), 415 (file type), 500 (server error)
     effect: for objectSearch, "none" (no object found) or "many" (several objects) instead of a status
@@ -630,6 +640,15 @@ def delete_language(code: str):
         return Response(status_code=400, content=f"code is one of {', '.join(LANGUAGES)}")
     store.deleted_languages.add(code)
     return {"deleted": sorted(store.deleted_languages)}
+
+
+@app.post("/_fake/rename-language")
+def rename_language(code: str, to: str):
+    """Development only: a language (by code, e.g. spa) is renamed in the languages vocabulary."""
+    if code not in LANGUAGES or not to.strip():
+        return Response(status_code=400, content="code is a sample language's code; to is its new name")
+    store.language_renames[code] = to.strip()
+    return {"renamed": store.language_renames}
 
 
 @app.get("/_fake/fail")

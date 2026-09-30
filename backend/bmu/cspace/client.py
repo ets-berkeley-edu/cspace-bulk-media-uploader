@@ -234,16 +234,21 @@ class CSpaceClient:
         (GET <authority>/urn:cspace:name(<vocabulary>)/items/urn:cspace:name(<shortId>)), or None when the term is
         gone: 404, or soft-deleted (its workflow state is deleted). Other failures raise CSpaceError, so a term
         that couldn't be checked is never reported as missing. VERIFY on QA: a merged term's state."""
+        return self.authority_term_state(service, vocabulary, short_id)[0]
+
+    def authority_term_state(self, service: str, vocabulary: str, short_id: str) -> tuple[str | None, str]:
+        """authority_term with why a term is gone: (current refName, ""), or (None, "deleted") when its workflow
+        state is deleted, or (None, "404") when CollectionSpace doesn't have it. Other failures raise CSpaceError."""
         try:
             r = self._request("GET", f"{service}/urn:cspace:name({vocabulary})/items/urn:cspace:name({short_id})")
         except CSpaceError as e:
             if e.status == 404:
-                return None
+                return None, "404"
             raise
         root = SafeET.fromstring(r.content)
         if "deleted" in _text(root, "workflowState").lower():  # deleted, or locked_deleted / replicated_deleted
-            return None
-        return _text(root, "refName") or short_id
+            return None, "deleted"
+        return _text(root, "refName") or short_id, ""
 
     def parse_date(self, text: str) -> dict[str, str] | None:
         """Parse a display date with CollectionSpace's own parser (GET structureddates?displayDate=), as the

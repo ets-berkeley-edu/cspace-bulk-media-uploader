@@ -478,21 +478,21 @@ class Storage:
 
     def save_checks(self, job_id: str, row: dict) -> bool:
         """Save a row's checks and lookups, and what they set automatically (the protected-file flag and the
-        publish default it implies, and a renamed authority term's current refName), only if its data hasn't changed since they were computed (same "v");
+        publish default it implies, and a renamed term's current refName), only if its data hasn't changed since they were computed (same "v");
         otherwise a newer save has re-checked it already. Doesn't bump the version."""
         old = int(row.get("v", 0))
         try:
             self.jobs.update_item(
                 Key={"PK": f"JOB#{job_id}", "SK": f"ROW#{row['n']:05d}"},
                 UpdateExpression="SET checks = :c, lookups = :l, #p = :p, softSignals = :w, restricted = :r, restrictedAuto = :a, thumbKey = :t, "
-                                 "creator = :cr, contributor = :co, rightsHolder = :rh",
+                                 "creator = :cr, contributor = :co, rightsHolder = :rh, #lg = :lg",
                 ConditionExpression=(Attr("PK").exists() & Attr("v").not_exists()) if old == 0 else Attr("v").eq(old),
-                ExpressionAttributeNames={"#p": "protected"},
+                ExpressionAttributeNames={"#p": "protected", "#lg": "language"},
                 ExpressionAttributeValues=_dyn({":c": row.get("checks", []), ":l": row.get("lookups", {}), ":p": row.get("protected"),
                                                 ":w": row.get("softSignals") or [], ":r": bool(row.get("restricted")),
                                                 ":a": bool(row.get("restrictedAuto")), ":t": row.get("thumbKey"),
                                                 ":cr": row.get("creator") or "", ":co": row.get("contributor") or "",
-                                                ":rh": row.get("rightsHolder") or ""}))
+                                                ":rh": row.get("rightsHolder") or "", ":lg": row.get("language") or []}))
             return True
         except ClientError as e:
             if e.response["Error"]["Code"] == "ConditionalCheckFailedException":

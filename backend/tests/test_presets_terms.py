@@ -282,10 +282,18 @@ def test_languages_no_longer_in_the_vocabulary_block(fake):
     assert [x for x in _texts(r, "block") if x.startswith("Language")] == [
         "Language “English” is no longer in CollectionSpace’s language list. Choose another language.",
         "Language “Spanish” is no longer in CollectionSpace’s language list. Choose another language."]
-    # a term renamed in CollectionSpace is still the same term
+    # a term renamed in CollectionSpace is still the same term: a draft takes its current name, like an authority term's
     apply_edit(t, r, {"language": [ENG.replace("(eng)'English'", "(fre)'Français'")]})
     check_rows(t, [r], client(), ALL, languages=terms)
-    assert not any(x.startswith("Language") for x in _texts(r))
+    assert not _texts(r, "block") and r["language"] == [ENG.replace("(eng)'English'", "(fre)'French'")]
+    assert ("Language “Français” was renamed in CollectionSpace; this document now uses its current name, “French”."
+            in _texts(r, "info"))
+    # a job that isn't a draft is only told
+    r["language"] = [ENG.replace("(eng)'English'", "(fre)'Français'")]
+    check_rows(t, [r], client(), ALL, languages=terms, set_publish=False)
+    assert r["language"] == [ENG.replace("(eng)'English'", "(fre)'Français'")]
+    assert ("Language “Français” is now called “French” in CollectionSpace. The job will use the new name when it runs."
+            in _texts(r, "info"))
 
 
 def test_a_language_list_that_could_not_be_read_warns(fake):
@@ -444,6 +452,6 @@ def test_a_renamed_term_through_the_api_is_saved_in_a_draft_and_only_reported_wh
     assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
     fake.term_renames["7475"] = "L. Freund"
     preview = api.post(f"/api/jobs/{job}/check", json={}).json()
-    assert ("Creator “Leslie F. Freund” is now called “L. Freund” in CollectionSpace. This job will send the old name; "
-            "edit the job to send the new one.") in _texts(preview["rows"][0], "info")
+    assert ("Creator “Leslie F. Freund” is now called “L. Freund” in CollectionSpace. The job will use the new name when "
+            "it runs.") in _texts(preview["rows"][0], "info")
     assert api.get(f"/api/jobs/{job}").json()["rows"][0]["creator"] == LESLIE_RENAMED  # a queued job isn't changed

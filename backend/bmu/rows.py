@@ -384,15 +384,16 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
     terms: dict[str, list[str] | CSpaceError] = {}  # refName -> [its current refName] or [] (gone), once per call
     services = {a["service"] for a in tenant.authorities.values()}
 
-    def term_exists(r: dict, name: str, ref: str) -> bool | None:
-        """Design (Authority term fields): whether the term in this field still exists and isn't deleted, kept
-        like a lookup (under "term:<field>"); None if not known yet. A failed read raises CSpaceError (for every
-        row with that refName, without asking again), so a term that couldn't be checked isn't called missing."""
+    def term_state(r: dict, name: str, ref: str) -> dict | None:
+        """Design (Authority term fields): the term in this field, for value_findings: {"current": its current
+        refName, or None when it no longer exists or is deleted, "why": ""}, kept like a lookup (under
+        "term:<field>"); None if not known yet. A failed read raises CSpaceError (for every row with that refName,
+        without asking again), so a term that couldn't be checked isn't called missing."""
         kind = f"term:{name}"
         stored = (r.get("lookups") or {}).get(kind)
         may_query = targets is None or r["n"] in targets
         if stored is not None and stored.get("value") == ref and not refresh and (not may_query or now - stored["at"] < LOOKUP_TTL_SECONDS):
-            return bool(stored["csids"])
+            return {"current": (stored["csids"] or [None])[0], "why": ""}
         if not may_query:
             incomplete.add(r["n"])
             return None
@@ -407,16 +408,16 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
         if isinstance(found, CSpaceError):
             raise found
         r.setdefault("lookups", {})[kind] = {"value": ref, "csids": found, "at": int(now)}
-        return bool(found)
+        return {"current": (found or [None])[0], "why": ""}
 
-    vocab: dict[str, set[str] | CSpaceError] = {}
+    vocab: dict[str, dict[str, str] | CSpaceError] = {}
 
-    def language_ids() -> set[str]:
-        """The languages vocabulary's terms, as refNames without their display names (a renamed term is the same
-        term); read once per call. Raises CSpaceError if it couldn't be read."""
+    def language_terms() -> dict[str, str]:
+        """The languages vocabulary's terms, read once per call (see value_findings). Raises CSpaceError if it
+        couldn't be read."""
         if "languages" not in vocab:
             try:
-                vocab["languages"] = {_term_id(t["refName"]) for t in languages()} if languages else set()
+                vocab["languages"] = language_map(languages()) if languages else {}
             except CSpaceError as e:
                 vocab["languages"] = e
         got = vocab["languages"]
@@ -424,22 +425,18 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
             raise got
         return got
 
-    def renamed_term(r: dict, name: str, label: str, ref: str) -> list[dict]:
+    def renamed(r: dict, f: dict) -> list[dict]:
         """Design (Authority term fields): a term renamed in CollectionSpace keeps its short identifier, so it still
         exists, but the refName the row holds carries its old display name, and that refName is what the Media
         record would store. In a draft the row takes the term's current refName (not a user edit, so it isn't
-        marked touched); a job that isn't a draft is never changed here, so its checks only say so."""
-        current = ((r.get("lookups") or {}).get(f"term:{name}") or {}).get("csids") or []
-        new = current[0] if current else ref
-        if new == ref or _term_id(new) != _term_id(ref):
-            return []
-        old_name, new_name = display_name(ref), display_name(new)
+        marked touched); a job that isn't a draft is never changed here: the worker takes the current name when it
+        runs (see worker.Worker._check_values), so its checks only say so."""
+        old_name, new_name = display_name(f["value"]), display_name(f["current"])
         if not set_publish:
-            return [{"level": "info", "text": f"{label} “{old_name}” is now called “{new_name}” in CollectionSpace. This job "
-                                              f"will send the old name; edit the job to send the new one."}]
-        r[name] = new
-        r["lookups"][f"term:{name}"] = {**r["lookups"][f"term:{name}"], "value": new}
-        return [{"level": "info", "text": f"{label} “{old_name}” was renamed in CollectionSpace; this document now uses "
+            return [{"level": "info", "text": f"{f['label']} “{old_name}” is now called “{new_name}” in CollectionSpace. "
+                                              f"The job will use the new name when it runs."}]
+        use_current(r, f)
+        return [{"level": "info", "text": f"{f['label']} “{old_name}” was renamed in CollectionSpace; this document now uses "
                                           f"its current name, “{new_name}”."}]
 
     def preset_note(r: dict, name: str) -> str:
@@ -447,42 +444,32 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
                 if from_preset(tenant, r, name) else "")
 
     def value_checks(r: dict) -> list[dict]:
-        """Design (Media record fields; Authority term fields): values must still exist where they come from. An
-        authority term deleted or merged in CollectionSpace, a language no longer in the vocabulary, or a media type
-        no longer in the tenant's option list blocks the row. A term whose authority the user can't read is left to
-        authority_read_checks."""
-        out: list[dict[str, str]] = []
-        for name, label in AUTHORITY_LABEL.items():
-            ref = r.get(name) or ""
-            if not ref:
+        """Design (Media record fields; Authority term fields): values must still exist where they come from (see
+        value_findings). An authority term deleted or merged in CollectionSpace, a language no longer in the
+        vocabulary, or a media type no longer in the tenant's option list blocks the row. A term whose authority the
+        user can't read is left to authority_read_checks."""
+        for name in AUTHORITY_LABEL:
+            if not r.get(name):
                 (r.get("lookups") or {}).pop(f"term:{name}", None)
-                continue
-            if not authority_readable(ref, perms):
-                continue
-            try:
-                exists = term_exists(r, name, ref)
-            except CSpaceError as e:
-                out.append({"level": "warn", "text": f"Couldn't check {label} “{display_name(ref)}” in CollectionSpace ({e.code})."})
-                continue
-            if exists is False:
-                out.append({"level": "block", "text": f"{label} “{display_name(ref)}” no longer exists in CollectionSpace (it was "
-                                                      f"deleted, or merged into another term). Choose another {label.lower()}."
+        out: list[dict[str, str]] = []
+        for f in value_findings(tenant, r, lambda name, ref: term_state(r, name, ref),
+                                language_terms if languages is not None else None,
+                                readable=lambda ref: authority_readable(ref, perms)):
+            name, label, shown = f["field"], f["label"], display_name(f["value"])
+            if f["kind"] == "renamed":
+                out += renamed(r, f)
+            elif f["kind"] == "unchecked":
+                out.append({"level": "warn", "text": f"Couldn't check the language list in CollectionSpace ({f['error'].code})."
+                            if name == "language" else f"Couldn't check {label} “{shown}” in CollectionSpace ({f['error'].code})."})
+            elif name in AUTHORITY_LABEL:
+                out.append({"level": "block", "text": f"{label} “{shown}” no longer exists in CollectionSpace (it was deleted, "
+                                                      f"or merged into another term). Choose another {label.lower()}."
                                                       + preset_note(r, name)})
-            elif exists:
-                out += renamed_term(r, name, label, ref)
-        chosen = [x for x in r.get("language") or [] if x]
-        if chosen and languages is not None:
-            try:
-                known = language_ids()
-            except CSpaceError as e:
-                out.append({"level": "warn", "text": f"Couldn't check the language list in CollectionSpace ({e.code})."})
+            elif name == "language":
+                out.append({"level": "block", "text": f"Language “{shown}” is no longer in CollectionSpace’s language list. "
+                                                      f"Choose another language.{preset_note(r, 'language')}"})
             else:
-                out += [{"level": "block", "text": f"Language “{display_name(x)}” is no longer in CollectionSpace’s language list. "
-                                                   f"Choose another language.{preset_note(r, 'language')}"}
-                        for x in chosen if _term_id(x) not in known]
-        for v in r.get("type") or []:
-            if v and v not in tenant.media_type_values:
-                out.append({"level": "block", "text": f"Media type “{v}” isn’t one of {tenant.name}’s media types. "
+                out.append({"level": "block", "text": f"Media type “{shown}” isn’t one of {tenant.name}’s media types. "
                                                       f"Choose another media type.{preset_note(r, 'type')}"})
         return out
 
@@ -620,6 +607,76 @@ _AUTHORITY_READ = {"personauthorities": ("readPersons", "Person"), "orgauthoriti
 def _term_id(ref: str) -> str:
     """A refName without its display name: urn:...:item:name(eng)'English' -> urn:...:item:name(eng)."""
     return ref[:ref.index("'")] if "'" in ref else ref
+
+
+def language_map(terms: list[dict]) -> dict[str, str]:
+    """The languages vocabulary's terms (vocabulary_items) as {refName without its display name: current refName}:
+    a renamed term is the same term."""
+    return {_term_id(t["refName"]): t["refName"] for t in terms}
+
+
+def value_findings(tenant: Tenant, r: dict, term: Callable[[str, str], dict | None],
+                   languages: Callable[[], dict[str, str]] | None = None,
+                   readable: Callable[[str], bool] | None = None) -> list[dict]:
+    """Design (Media record fields; Authority term fields): whether each of a row's values still exists where it
+    comes from. Used by the editor's checks (check_rows) and by the worker just before it creates a row's records
+    (worker.Worker._check_values), each with its own lookups:
+    term(field, refName): {"current": the term's current refName, or None when it is gone, "why": "deleted",
+    "404" or ""}, or None when not known yet; raises CSpaceError if the term couldn't be read.
+    languages(): the languages vocabulary as language_map gives it (raises CSpaceError if it couldn't be read);
+    None skips the language check. readable(refName): False skips a term whose authority the user can't read.
+    Media types are checked against the tenant's option list.
+    Each finding: {"kind", "field", "label", "value"}: kind "missing" (with "why": for an authority term as term
+    gave it, else "language" or "type"), "renamed" (the same term under a new display name, with "current") or
+    "unchecked" (with "error", the CSpaceError; for the language list, value is "")."""
+    out: list[dict] = []
+    for name, label in AUTHORITY_LABEL.items():
+        ref = r.get(name) or ""
+        if not ref or (readable and not readable(ref)):
+            continue
+        base = {"field": name, "label": label, "value": ref}
+        try:
+            state = term(name, ref)
+        except CSpaceError as e:
+            out.append({**base, "kind": "unchecked", "error": e})
+            continue
+        if state is None:
+            continue
+        current = state.get("current")
+        if not current:
+            out.append({**base, "kind": "missing", "why": state.get("why") or ""})
+        elif current != ref and _term_id(current) == _term_id(ref):
+            out.append({**base, "kind": "renamed", "current": current})
+    chosen = [x for x in r.get("language") or [] if x]
+    if chosen and languages is not None:
+        try:
+            known = languages()
+        except CSpaceError as e:
+            out.append({"field": "language", "label": "Language", "value": "", "kind": "unchecked", "error": e})
+        else:
+            for x in chosen:
+                base = {"field": "language", "label": "Language", "value": x}
+                current = known.get(_term_id(x))
+                if not current:
+                    out.append({**base, "kind": "missing", "why": "language"})
+                elif current != x:
+                    out.append({**base, "kind": "renamed", "current": current})
+    for v in r.get("type") or []:
+        if v and v not in tenant.media_type_values:
+            out.append({"field": "type", "label": "Media type", "value": v, "kind": "missing", "why": "type"})
+    return out
+
+
+def use_current(r: dict, f: dict) -> None:
+    """Put a renamed term's current refName (a value_findings "renamed" finding) in the row's field, and in the
+    stored lookup of an authority field so the next check doesn't take it for a change."""
+    if f["field"] == "language":
+        r["language"] = list(dict.fromkeys(f["current"] if x == f["value"] else x for x in r.get("language") or []))
+        return
+    r[f["field"]] = f["current"]
+    stored = (r.get("lookups") or {}).get(f"term:{f['field']}")
+    if stored is not None:
+        r["lookups"][f"term:{f['field']}"] = {**stored, "value": f["current"]}
 
 
 def authority_readable(ref: str, perms: dict[str, bool]) -> bool:
@@ -787,7 +844,7 @@ def _rerun_checks(tenant: Tenant, r: dict, perms: dict[str, bool], lookup, clien
     return out
 
 
-STEP_TEXT = {"media": "create the Media record", "findObject": "find the object", "createObject": "create the object",
+STEP_TEXT = {"values": "check its values in CollectionSpace", "media": "create the Media record", "findObject": "find the object", "createObject": "create the object",
              "findOrCreateObject": "find or create the object",
              "upload": "upload the file", "relMediaObject": "link it to its object", "relObjectMedia": "link it to its object",
              "addToGroup": "add its object to the job's group"}

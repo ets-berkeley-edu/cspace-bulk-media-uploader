@@ -95,20 +95,30 @@ export function importantRows(rows: Row[], n = 10): Row[] {
 }
 
 // ---- steps ----------------------------------------------------------------------------------------
+// In the order a document's steps run. "values": the worker checks the document's values against CollectionSpace
+// again just before creating its records (failure value_missing; see backend worker.plan_steps).
 export const STEP_LABEL: Record<string, string> = {
-  media: "Create Media record", findObject: "Find object", createObject: "Create object", findOrCreateObject: "Find or create object",
+  values: "Check values in CollectionSpace", media: "Create Media record", findObject: "Find object", createObject: "Create object", findOrCreateObject: "Find or create object",
   upload: "Upload file (creates the Blob)", relMediaObject: "Relate Media → Object", relObjectMedia: "Relate Object → Media",
   addToGroup: "Add object to the job's group",
 };
 export const STEP_MARK: Record<Step["s"], string> = { done: "✓", failed: "✗", skipped: "–", "not run": "·", "not needed": "○" };
 
+const STEP_ORDER = Object.keys(STEP_LABEL);
+const stepRank = (k: string) => (STEP_ORDER.includes(k) ? STEP_ORDER.indexOf(k) : STEP_ORDER.length);
+
+/** A document's recorded steps in the order they run (a step added in a later run, like the value check, keeps its place). */
 export function stepList(r: Row): { key: string; label: string; step: Step }[] {
-  return Object.entries(r.result?.steps ?? {}).map(([key, step]) => ({ key, label: STEP_LABEL[key] ?? key, step }));
+  return Object.entries(r.result?.steps ?? {}).sort(([a], [b]) => stepRank(a) - stepRank(b))
+    .map(([key, step]) => ({ key, label: STEP_LABEL[key] ?? key, step }));
 }
 
 export function stepNote(key: string, st: Step): string {
   if (st.s === "skipped" && st.after === "group") return "skipped: the job's group couldn't be created";
-  if (st.s === "skipped") return `skipped: needs ${(STEP_LABEL[st.after ?? ""] ?? st.after ?? "").toLowerCase()}`;
+  if (st.s === "skipped") {
+    const needs = STEP_LABEL[st.after ?? ""] ?? st.after ?? "";
+    return `skipped: needs ${needs.charAt(0).toLowerCase()}${needs.slice(1)}`; // "check values in CollectionSpace"
+  }
   if (st.s === "done" && st.sameAs) return `added by document ${st.sameAs}`;
   if (st.s === "not needed") return key === "addToGroup" ? "not needed: left out of the group" : "not needed: you stopped linking this document";
   if (st.s === "not run") return "not run";

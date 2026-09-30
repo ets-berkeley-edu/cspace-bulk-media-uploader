@@ -6,6 +6,7 @@ import FinishedJobs from "../components/FinishedJobs.vue";
 import JobResults from "../components/JobResults.vue";
 import {
   canReplaceFile, countsText, createdSomething, createdText, failures, fixFields, importantRows, needsFix, resultCounts, resultState,
+  stepList, stepNote,
 } from "../lib/results";
 import type { Failure, Job, Perms, Row, Run, TenantInfo } from "../types";
 
@@ -16,7 +17,8 @@ const CATALOG: Record<string, Failure> = {
   upload_too_large: F("File too large for CollectionSpace", true), object_gone: F("Object not found when the job ran", true),
   no_permission: F("Permission denied", true), server_error: F("CollectionSpace error on this document", false),
   auth: F("Sign-in failed", false), cancelled: F("Run cancelled", false), media_rejected: F("CollectionSpace rejected the Media record", true),
-  unknown: F("Unexpected problem", false),
+  unknown: F("Unexpected problem", false), value_missing: F("A value no longer exists in CollectionSpace", true),
+  term_renamed: { ...F("A name changed in CollectionSpace", false), level: "notice" },
 };
 failures.value = CATALOG;
 
@@ -43,6 +45,12 @@ const gone = row({ n: 3, file: "15-1240_1.jpg", obj: "15-1240", result: { state:
   steps: { media: { s: "done", csid: "m3" }, findObject: { s: "failed", code: "object_gone", obj: "15-1240" }, upload: { s: "done", csid: "b3" },
     relMediaObject: { s: "skipped", after: "findObject" }, relObjectMedia: { s: "skipped", after: "findObject" } } } });
 const notRun = row({ n: 4, file: "12-5678_1.jpg" });
+// the worker's check just before creating the records found a deleted creator: nothing was created
+const valueMissing = row({ n: 7, file: "16-4711_1.jpg", result: { state: "Failed", run: 1,
+  error: { code: "value_missing", detail: "Creator “Leslie Freund”: deleted in CollectionSpace", step: "values" },
+  steps: { media: { s: "skipped", after: "values" }, findObject: { s: "skipped", after: "values" }, upload: { s: "skipped", after: "media" },
+    relMediaObject: { s: "skipped", after: "media" }, relObjectMedia: { s: "skipped", after: "media" },
+    values: { s: "failed", code: "value_missing", detail: "Creator “Leslie Freund”: deleted in CollectionSpace", run: 1 } } } });
 const disabled = row({ n: 5, file: "9-9999.jpg", include: false, disabledBy: "jdoe", disabledAt: 1 });
 
 describe("results helpers (design: Finished jobs and error messages)", () => {
@@ -85,6 +93,34 @@ describe("results helpers (design: Finished jobs and error messages)", () => {
     // Zero counts are left out (design: Deleting a job)
     expect(createdText({ media: 0, files: 0, objects: 1, relations: 0, unfinished: 0 })).toBe("1 Object");
     expect(createdText({ media: 1, files: 0, objects: 0, relations: 0, groups: 1, unfinished: 1 })).toBe("1 Media record and the job's group");
+  });
+});
+
+describe("a value that no longer exists when the job ran (value_missing)", () => {
+  it("lists the value check first and names it in the skipped steps", () => {
+    expect(stepList(valueMissing).map((s) => s.label)).toEqual(["Check values in CollectionSpace", "Create Media record", "Find object",
+      "Upload file (creates the Blob)", "Relate Media → Object", "Relate Object → Media"]);
+    expect(stepNote("media", valueMissing.result!.steps!.media!)).toBe("skipped: needs check values in CollectionSpace");
+    expect(stepNote("upload", valueMissing.result!.steps!.upload!)).toBe("skipped: needs create Media record");
+  });
+
+  it("is a failed document that created nothing and needs a fix", () => {
+    expect(resultState(valueMissing)).toBe("Failed");
+    expect(resultCounts([valueMissing, done(1, "a.jpg")])).toEqual({ done: 1, partial: 0, failed: 1, notStarted: 0, disabled: 0 });
+    expect(createdSomething(valueMissing)).toBe(false); // it can be deleted
+    expect(fixFields(valueMissing)).toEqual({ obj: false, skipLink: false, handling: false });
+    expect(needsFix({ id: "j", status: "NeedsAttention", code: "" } as Job, [valueMissing], 0, CATALOG)).toBe(true);
+  });
+
+  it("shows the failure and a renamed term's notice in the results", () => {
+    const renamed = { ...done(8, "3-1001.jpg") };
+    renamed.result = { ...renamed.result!, notices: [{ code: "term_renamed", detail: "Creator “Leslie Freund” → “Leslie F. Freund”" }] };
+    const job = { id: "j", name: "batch", status: "NeedsAttention", run: 1, code: "" } as Job;
+    const w = mount(JobResults, { props: { job, rows: [valueMissing, renamed], runs: [], tenant } });
+    const [bad, good] = w.findAll("tbody tr").map((r) => r.text());
+    expect(bad).toContain("✗ Check values in CollectionSpace");
+    expect(bad).toContain("A value no longer exists in CollectionSpace.");
+    expect(good).toContain("A name changed in CollectionSpace.");
   });
 });
 

@@ -118,9 +118,12 @@ def test_kms_crypto(aws):
 def test_step_plan_follows_design():
     from bmu.worker import plan_steps
     r = new_row(T, "15-1234_a.jpg", 10, "image/jpeg")
-    assert plan_steps(T, r) == [("media", []), ("findObject", []), ("upload", ["media"]),
+    assert plan_steps(T, r) == [("values", []), ("media", ["values"]), ("findObject", ["values"]), ("upload", ["media"]),
                                 ("relMediaObject", ["media", "findObject"]), ("relObjectMedia", ["media", "findObject"])]
     r["handling"] = "mediaonly"
+    assert plan_steps(T, r) == [("values", []), ("media", ["values"]), ("upload", ["media"])]
+    # a row whose Media record exists sent its values already: they aren't checked again
+    r["result"] = {"steps": {"media": {"s": "done", "csid": "m1"}, "upload": {"s": "failed"}}}
     assert plan_steps(T, r) == [("media", []), ("upload", ["media"])]
 
 

@@ -733,7 +733,13 @@ def test_no_request_is_sent_after_the_fifth_failure_in_a_row(api, login, add_upl
 
     def four_failed_already(u, p):
         c = real(u, p)
-        c.failures_in_a_row = 4
+        vocabulary_items = c.vocabulary_items
+
+        def then_four_failures(name):  # the value check before the run reads the language list: then four failures
+            out = vocabulary_items(name)
+            c.failures_in_a_row = 4
+            return out
+        c.vocabulary_items = then_four_failures
         return c
     worker.client_factory = four_failed_already
     media_before = len(fake.media)

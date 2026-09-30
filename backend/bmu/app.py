@@ -1087,7 +1087,7 @@ def _recheck(s: Services, sess: Session, job_id: str, targets: set[int] | None, 
     writable = editable and can_edit(sess.perms)
     # a real copy: check_rows updates each row's lookups in place
     auto = ("checks", "lookups", "protected", "softSignals", "restricted", "restrictedAuto", "thumbKey",
-            "creator", "contributor", "rightsHolder")  # a renamed term's current refName (see rows.renamed_term)
+            "creator", "contributor", "rightsHolder", "language")  # a renamed term's current refName (see rows.value_findings)
     before = {r["n"]: copy.deepcopy(tuple(r.get(k) for k in auto)) for r in rows}
     client = sess.client(s)
     try:

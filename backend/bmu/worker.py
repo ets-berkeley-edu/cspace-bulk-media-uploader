@@ -21,12 +21,14 @@ from . import schedule as sched
 from .config import Settings, get_settings
 from .crypto import Crypto, make_crypto
 from .cspace import CSpaceClient, CSpaceError, CSpaceUnavailable
+from .cspace.client import display_name
 from .cspace.payloads import group_xml, media_xml, object_xml, relation_xml
 from .failures import JOB_LEVEL, classify
 from .filetypes import HEAD_BYTES, mismatch
-from .rows import created_records, describe_deletion
+from .rows import (AUTHORITY_FIELDS, AUTHORITY_LABEL, created_records, describe_deletion, language_map, media_created,
+                   use_current, value_findings)
 from .storage import Storage, draft_expiry, expiry_of, now
-from .tenant import OBJECT_STEPS, Tenant, load_tenant
+from .tenant import AUTHORITY_REF, OBJECT_STEPS, Tenant, load_tenant
 
 log = logging.getLogger("bmu.worker")
 
@@ -41,6 +43,9 @@ RECORD_TYPE = {"media": "Media", "upload": "Blob", "createObject": "CollectionOb
 STOPPED_JOB = {"unavailable", "worker_stopped", "unknown"} | JOB_LEVEL  # these end the job as Failed
 LINK_STEPS = OBJECT_STEPS + ("relMediaObject", "relObjectMedia", "addToGroup")  # what "Stop linking" skips
 FINISHED = ("done", "not needed")
+# Design (Job execution): a row's values are checked against CollectionSpace just before its records are created,
+# from lookups at most this old; each distinct term is read about once a minute however many rows use it.
+VALUE_CHECK_SECONDS = 60
 
 
 class JobStop(Exception):
@@ -60,17 +65,22 @@ def _step(row: dict, name: str) -> dict:
 def plan_steps(tenant: Tenant, row: dict, job: dict | None = None) -> list[tuple[str, list[str]]]:
     """A row's steps in order, each with the steps it depends on (design: "Steps within a row").
 
-    Create Media record      depends on nothing
-    Find, create, or find or create the Object (per the handling)       depends on nothing
+    Check values in CollectionSpace (only while the Media record doesn't exist; run again every run)  depends on nothing
+    Create Media record      depends on the value check
+    Find, create, or find or create the Object (per the handling)       depends on the value check
     Upload file (PUT media/{csid}/blob, which creates the Blob record)   depends on Media
     Create Relations, both directions                                    depend on Media and Object
     Add the Object to the job's Group (if the job creates one and the row is in it)  depends on the Relations
     """
     h = tenant.handling_by_id(row["handling"])
     obj = h.object_step
-    steps: list[tuple[str, list[str]]] = [("media", [])]
+    # Design (Job execution): nothing is created for a row whose values weren't checked just before. A row whose
+    # Media record exists sent its fields already, so it isn't checked again.
+    check = [] if media_created(row) else ["values"]
+    steps: list[tuple[str, list[str]]] = [("values", [])] if check else []
+    steps.append(("media", check))
     if obj:
-        steps.append((obj, []))
+        steps.append((obj, check))
     steps.append(("upload", ["media"]))
     if obj:
         steps += [("relMediaObject", ["media", obj]), ("relObjectMedia", ["media", obj])]
@@ -129,11 +139,14 @@ class _Heartbeat(threading.Thread):
 
 class Worker:
     def __init__(self, settings: Settings, storage: Storage, crypto: Crypto, client_factory, tenant: Tenant | None = None,
-                 clock=None):
+                 clock=None, lookup_clock=None):
         """clock: the time the job schedule is judged by (design: Job scheduling), a callable returning epoch
-        seconds; tests pass their own to move time. Expiry and the sweeps keep the real time."""
+        seconds; tests pass their own to move time. Expiry and the sweeps keep the real time. lookup_clock: the time
+        a run's value lookups age by (VALUE_CHECK_SECONDS), in seconds; tests pass their own."""
         self.s = settings
         self.clock = clock or now
+        self.lookup_clock = lookup_clock or time.monotonic
+        self._values: _ValueLookups | None = None  # the running job's value lookups
         self.storage = storage
         self.crypto = crypto
         self.client_factory = client_factory
@@ -570,8 +583,11 @@ class Worker:
             "expiresAt": t + self.s.completed_days * 86400 if status == "Completed" else None})
 
     def _run_rows(self, job_id: str, client: CSpaceClient, run_no: int, created: list[dict]) -> str:
-        self._job_media = {((r.get("result") or {}).get("steps") or {}).get("media", {}).get("csid")
-                           for r in self.storage.get_rows(job_id)} - {None}
+        rows = self.storage.get_rows(job_id)
+        self._job_media = {((r.get("result") or {}).get("steps") or {}).get("media", {}).get("csid") for r in rows} - {None}
+        self._values = _ValueLookups(self.tenant, client, self.lookup_clock)
+        self._where = "while checking values before the first document"
+        self._check_all_values(client, rows)
         for row in self.storage.get_rows(job_id):
             if not row.get("include") or (row.get("result") or {}).get("state") == "Done":
                 continue
@@ -623,8 +639,8 @@ class Worker:
                 raise JobStop("unavailable", _unavailable(client, row, name))
             self._where = f"at document {row['n']}, step {name}"
             st = _step(row, name)
-            if st.get("s") in FINISHED:
-                continue  # a rerun never repeats a done step
+            if st.get("s") in FINISHED and name != "values":
+                continue  # a rerun never repeats a done step (the value check is made again before every run's creates)
             if row.get("skipLink") and name in LINK_STEPS:
                 st.clear()
                 st.update(s="not needed")
@@ -636,6 +652,11 @@ class Worker:
                 self.storage.put_row(job_id, row, guard=False)
                 continue
             try:
+                if name == "values":
+                    self._check_values(row)
+                    st.clear()
+                    st.update(s="done", run=run_no)
+                    continue
                 if name == "media":
                     self._notice_new_duplicates(client, row)
                 if name == "addToGroup":
@@ -760,8 +781,62 @@ class Worker:
         known |= self._job_media  # Media records this job created aren't news: the editor warned about IDs shared in the job
         new = [c for c in existing if c not in known]
         if new:
-            row["result"]["notices"] = [{"code": "duplicate_at_run",
-                                         "detail": f"GET media?as=identificationNumber = \"{idn}\" found {', '.join(new[:5])}"}]
+            row["result"].setdefault("notices", []).append(
+                {"code": "duplicate_at_run", "detail": f"GET media?as=identificationNumber = \"{idn}\" found {', '.join(new[:5])}"})
+
+    # ---- values (design: Job execution; Authority term fields) ----------------------------------------
+    def _check_all_values(self, client: CSpaceClient, rows: list[dict]) -> None:
+        """The check before the first document: look up every distinct authority term and the languages vocabulary
+        that the rows about to create their Media records use (media types come from the tenant's own list). The
+        answers are kept for VALUE_CHECK_SECONDS, so the per-row checks (the "values" step, _check_values) of the
+        first rows reuse them. A lookup that fails here is asked again by the check of the row that uses it, which
+        records the failure on that row; a refused sign-in or five failures in a row stop the job at once."""
+        todo = [r for r in rows if r.get("include") and (r.get("result") or {}).get("state") != "Done" and not media_created(r)]
+        refs = list(dict.fromkeys(r.get(f) for r in todo for f in AUTHORITY_LABEL if r.get(f)))
+        lookups: list = [lambda ref=ref: self._values.term(ref) for ref in refs]
+        if any(r.get("language") for r in todo):
+            lookups.append(self._values.languages)
+        for look in lookups:
+            try:  # after five failures in a row the client sends nothing more (CSpaceUnavailable)
+                look()
+            except CSpaceUnavailable as e:
+                raise JobStop("unavailable", _unavailable_before(client)) from e
+            except CSpaceError as e:
+                code, detail = classify("values", e)
+                if code in JOB_LEVEL:
+                    raise JobStop(code, f"Checking values before the first document: {detail}") from e
+
+    def _check_values(self, row: dict) -> None:
+        """The "values" step: check the row's values again just before its records are created (rows.value_findings,
+        as the editor checks them, from lookups at most VALUE_CHECK_SECONDS old). A renamed term or language: the
+        row takes its current refName (saved with the step; the Media record is sent with it) and gets a
+        term_renamed notice. A value that no longer exists fails the step (value_missing), so nothing is created
+        for the row. A lookup that failed raises its CSpaceError, recorded like any failed request."""
+        findings = value_findings(self.tenant, row, lambda _field, ref: self._values.term(ref), self._values.languages)
+        for f in findings:
+            if f["field"] in AUTHORITY_FIELDS and f["kind"] in ("missing", "renamed"):
+                # the editor's checks reuse this lookup, so a fix sees at once what the run saw
+                current = f.get("current")
+                row.setdefault("lookups", {})[f"term:{f['field']}"] = {"value": current or f["value"],
+                                                                        "csids": [current] if current else [], "at": int(now())}
+        errors = [f["error"] for f in findings if f["kind"] == "unchecked"]
+        for e in errors:  # a refused sign-in, or a request not sent after five failures, stops the job first
+            if isinstance(e, CSpaceUnavailable) or classify("values", e)[0] in JOB_LEVEL:
+                raise e
+        missing = [f for f in findings if f["kind"] == "missing"]
+        if missing:
+            raise _RowError("value_missing", "; ".join(self._missing_text(f) for f in missing))
+        if errors:
+            raise errors[0]
+        for f in findings:  # renamed
+            use_current(row, f)
+            row["result"].setdefault("notices", []).append(
+                {"code": "term_renamed", "detail": f"{f['label']} “{display_name(f['value'])}” → “{display_name(f['current'])}”"})
+
+    def _missing_text(self, f: dict) -> str:
+        why = {"deleted": "deleted in CollectionSpace", "404": "not found (404)", "language": "not in the language list",
+               "type": f"not in {self.tenant.name}’s media types"}.get(f["why"], f"not a term of {self.tenant.name}’s authorities")
+        return f"{f['label']} “{display_name(f['value'])}”: {why}"
 
     def _delete_staged(self, row: dict) -> None:
         # the staged file and its thumbnail are no longer needed once the file is in CollectionSpace, whose own
@@ -850,6 +925,51 @@ def _unavailable(client: CSpaceClient, row: dict, step: str) -> str:
     last = getattr(client, "last_failure", "")
     return (f"{client.failures_in_a_row} requests in a row to CollectionSpace failed" + (f", the last: {last}" if last else "") +
             f"; stopped at document {row['n']}, step {step}")
+
+
+def _unavailable_before(client: CSpaceClient) -> str:
+    """As _unavailable, for a job stopped while checking values before its first document."""
+    last = getattr(client, "last_failure", "")
+    return (f"{client.failures_in_a_row} requests in a row to CollectionSpace failed" + (f", the last: {last}" if last else "") +
+            "; stopped while checking values before the first document")
+
+
+class _ValueLookups:
+    """A run's CollectionSpace lookups for the value checks (design: Job execution), each kept VALUE_CHECK_SECONDS
+    from when its answer arrived: authority terms by refName, and the languages vocabulary. A failed lookup isn't
+    kept, so the next check asks again. clock: seconds, e.g. time.monotonic."""
+
+    def __init__(self, tenant: Tenant, client: CSpaceClient, clock):
+        self.client, self.clock = client, clock
+        self.services = {a["service"] for a in tenant.authorities.values()}
+        self._terms: dict[str, tuple[float, dict]] = {}
+        self._languages: tuple[float, dict[str, str]] | None = None
+
+    def _fresh(self, at: float) -> bool:
+        return self.clock() - at < VALUE_CHECK_SECONDS
+
+    def term(self, ref: str) -> dict:
+        """{"current": the term's current refName or None, "why": "deleted", "404", "authority" or ""}, as
+        rows.value_findings takes it. Raises CSpaceError if the term couldn't be read."""
+        hit = self._terms.get(ref)
+        if hit and self._fresh(hit[0]):
+            return hit[1]
+        m = AUTHORITY_REF.match(ref)
+        if m and m["service"] in self.services:
+            current, why = self.client.authority_term_state(m["service"], m["vocab"], m["short"])
+        else:  # not a refName of one of the tenant's authorities: it can't name an existing term
+            current, why = None, "authority"
+        state = {"current": current, "why": why}
+        self._terms[ref] = (self.clock(), state)
+        return state
+
+    def languages(self) -> dict[str, str]:
+        """The languages vocabulary (rows.language_map). Raises CSpaceError if it couldn't be read."""
+        if self._languages and self._fresh(self._languages[0]):
+            return self._languages[1]
+        terms = language_map(self.client.vocabulary_items("languages"))
+        self._languages = (self.clock(), terms)
+        return terms
 
 
 def _unexpected(e: Exception, where: str) -> str:
