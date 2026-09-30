@@ -973,7 +973,7 @@ def _routes(app: FastAPI) -> None:
                 list(RESCHEDULABLE), sess.key):
             raise HTTPException(409, "The job changed while submitting it; reload and try again.")
         s.storage.close_draft(job_id, sess.key)  # it leaves Drafts
-        s.storage.audit(sess.tenant, "Scheduled", sess.user, job_id, f"Submitted “{job['name']}” with {len(work)} documents.")
+        s.storage.audit(sess.tenant, "Submitted", sess.user, job_id, f"Submitted “{job['name']}” with {len(work)} documents.")
         return _public(s.storage.get_job(job_id), sess, s)  # with its plan: when it runs (design: Job scheduling)
 
     # ---- the schedule and the scheduler's queue actions (design: Job scheduling) ----------------------------

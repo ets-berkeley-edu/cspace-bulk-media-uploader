@@ -60,6 +60,8 @@ def test_full_run_path(api, login, add_uploaded, worker, services, fake):
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "Queued"
     assert services.storage.get_credential(job) is not None
+    submitted = [a for a in services.storage.list_audit("pahma") if a["job"] == job and a["type"] == "Submitted"]
+    assert len(submitted) == 1 and submitted[0]["detail"].startswith("Submitted “")
     # queued jobs can't be edited
     assert api.patch(f"/api/jobs/{job}/rows/1", json={"description": "x"}).status_code == 409
 
