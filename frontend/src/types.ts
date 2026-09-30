@@ -240,6 +240,9 @@ export interface Job {
   cancelRequested?: { by: string; at: number } | null;
   cancelledBy?: string;
   currentFile?: string;
+  /** The step in progress on currentRow (a key of STEP_LABEL), and while its file is sent, the bytes sent so far. */
+  currentStep?: string;
+  currentUpload?: { sent: number; total: number } | null;
   // job scheduling (design: Job scheduling)
   runNow?: boolean;
   runAt?: number | null;

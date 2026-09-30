@@ -8,6 +8,7 @@ import { failureOf, loadFailures, OUTCOME } from "../lib/results";
 import type { Job, Me, Option, Row, RowChange } from "../types";
 import type { BulkChanges } from "../lib/bulk";
 import BulkPanel from "./BulkPanel.vue";
+import RunNow from "./RunNow.vue";
 import DocumentRow from "./DocumentRow.vue";
 import PagerBar from "./PagerBar.vue";
 import SortTh from "./SortTh.vue";
@@ -493,11 +494,12 @@ function toggle(n: number) {
     <div v-if="job && job.status !== 'Draft'" class="msg msg-info">
       This job is {{ OUTCOME[job.status]?.text ?? job.status }}; it can't be changed here.
       <template v-if="job.status === 'Running' && job.progress">{{ job.progress.done }} done · {{ job.progress.failed }} failed ·
-        {{ job.progress.total - job.progress.done - job.progress.failed }} to go<template v-if="job.currentFile">; now on {{ job.currentFile }}</template>.
+        {{ job.progress.total - job.progress.done - job.progress.failed }} to go.
         The Status column shows each document's run state.</template>
       <template v-else-if="job.status === 'Queued'">The checks below were run again just now.</template>
       <template v-if="job.status === 'NeedsAttention' || job.status === 'Failed'">Use Fix and reschedule under Finished jobs.</template>
     </div>
+    <RunNow v-if="job && job.status === 'Running'" :job="job" style="margin:-6px 0 10px;max-width:420px" />
     <div v-if="job?.status === 'Queued' && counts.block" class="msg msg-block" role="alert">
       Something changed in CollectionSpace since this job was submitted: {{ counts.block }} document{{ counts.block === 1 ? " now needs" : "s now need" }}
       fixing. Edit the job to fix {{ counts.block === 1 ? "it" : "them" }} before it runs; otherwise {{ counts.block === 1 ? "it" : "they" }} will most likely fail.

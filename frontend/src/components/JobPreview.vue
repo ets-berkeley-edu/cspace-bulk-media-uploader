@@ -13,6 +13,7 @@ import { worstLevel } from "../lib/status";
 import { tableState, tableView } from "../lib/table";
 import type { Job, Row, TenantInfo } from "../types";
 import JobActions from "./JobActions.vue";
+import RunNow from "./RunNow.vue";
 import PagerBar from "./PagerBar.vue";
 import SortTh from "./SortTh.vue";
 import ThumbCell from "./ThumbCell.vue";
@@ -130,11 +131,12 @@ function checksText(c: { block: number; warn: number }) {
           v-if="job.status === 'Queued' && (job.run ?? 0) > 0"> — rerun (run {{ (job.run ?? 0) + 1 }})</template></span></h2>
       <div class="sub" style="margin-bottom:8px">Read-only preview.
         <template v-if="running && job.progress">{{ job.progress.done }} done · {{ job.progress.failed }} failed ·
-          {{ job.progress.total - job.progress.done - job.progress.failed }} to go<template v-if="job.currentFile">; now on {{ job.currentFile }}</template>.</template>
+          {{ job.progress.total - job.progress.done - job.progress.failed }} to go.</template>
         <template v-else-if="checking">Checking against CollectionSpace…</template>
         <template v-else-if="checkedAt">Checks were re-run against CollectionSpace at {{ formatTime(checkedAt) }}.
           <button class="link" @click="check">Check again</button></template>
       </div>
+      <RunNow v-if="running" :job="job" style="margin:-4px 0 10px;max-width:420px" />
       <div v-if="!inTab" class="msg msg-info">This job is now {{ job.status === "NeedsAttention" ? "Needs attention" : job.status }}, so it's no longer in
         {{ from === "drafts" ? "Drafts" : "the job queue" }}.</div>
       <div v-if="error" class="msg msg-block">{{ error }}</div>

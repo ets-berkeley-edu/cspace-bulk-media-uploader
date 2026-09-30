@@ -66,7 +66,7 @@ const status = computed(() => {
   if (props.runView) {
     if (!props.row.include) return { text: "Excluded — ignored", cls: "b-accent" };
     const s = props.row.result?.state ?? "Not started";
-    return { text: s === "In progress" ? "▶ In progress" : s, cls: RUN_BADGE[s] ?? "b-muted" };
+    return { text: s, cls: RUN_BADGE[s] ?? "b-muted", spin: s === "In progress" };
   }
   return stalled.value && props.row.include ? { text: "Upload not finished", cls: "b-danger" } : rowStatus(props.row, props.tenant, props.checking);
 });
@@ -123,7 +123,7 @@ function text(field: keyof Row, e: Event) {
       <input type="checkbox" :checked="inGroup && handling?.object !== 'none'" :aria-label="`${row.file} in the job's group`" :title="groupWhy"
              :disabled="readonly || !row.include || handling?.object === 'none' || groupDone || done || (!perms.groups && !inGroup)"
              @change="emit('edit', { group: ($event.target as HTMLInputElement).checked })" /></td>
-    <td><span class="badge" :class="status.cls">{{ status.text }}</span>
+    <td><span class="badge" :class="status.cls"><span v-if="'spin' in status && status.spin" class="run-spin sm" aria-hidden="true"></span>{{ status.text }}</span>
       <span v-if="hasWarnings && !runView && status.cls !== 'b-danger'" class="badge b-warn" title="This document has warnings"> !</span>
       <div v-if="row.upload.s === 'uploading' && !stalled" class="progress"><span class="up" :style="{ width: (row.upload.pct ?? 0) + '%' }"></span></div>
       <div v-if="canRetry" class="retry-line">

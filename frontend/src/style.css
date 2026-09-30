@@ -234,3 +234,14 @@ table.inner td { background: var(--surface-2); }
 .sched-panel .days label { display: inline-flex; gap: 3px; align-items: center; margin-right: 6px; }
 .runs-at .run-acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 3px; font-size: 12px; }
 .runs-at .runat-edit { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; margin-top: 4px; }
+
+/* A running job (design: The job queue): a small spinning ring; a still dot for people who turn off motion. */
+.run-spin { display: inline-block; width: 12px; height: 12px; border-radius: 50%; vertical-align: -1px; margin-right: 4px;
+  border: 2px solid var(--border); border-top-color: var(--text-success); animation: run-spin 0.9s linear infinite; }
+.run-spin.sm { width: 9px; height: 9px; border-width: 1.5px; margin-right: 5px; vertical-align: 0; border-top-color: currentColor; }
+@keyframes run-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .run-spin { animation: none; border-color: var(--text-success); background: var(--text-success); }
+  .run-spin.sm { border-color: currentColor; background: currentColor; }
+}
+.run-now .progress { margin-top: 3px; }

@@ -132,6 +132,7 @@ class Store:
         self.language_renames: dict[str, str] = {}  # language code -> its new display name
         self.term_reads: list[str] = []  # short identifiers read one by one, to test the per-check cache
         self.delay = 0.0  # seconds added to every create or upload, to watch the queue in a browser (/_fake/slow)
+        self.upload_mbps = 0.0  # file uploads (PUT media/{csid}/blob) are received at this many MB/s (0 = no limit)
         self.rules: list[dict] = []  # failures on demand (/_fake/fail)
         for num, note in SAMPLE_OBJECTS:
             self.objects[str(uuid.uuid4())] = {"objectNumber": num, "deleted": False, "note": note}
@@ -569,11 +570,37 @@ async def slow_down(request: Request, call_next):
     return await call_next(request)
 
 
+class _ThrottleUploads:
+    """With /_fake/slow?upload_mbps=N, a file upload's body is read at about N MB/s, so the worker's upload
+    progress can be watched in the Job queue (a pure ASGI middleware: it slows reading the request body)."""
+
+    def __init__(self, inner):
+        self.inner = inner
+
+    async def __call__(self, scope, receive, send):
+        if (scope["type"] != "http" or not store.upload_mbps or scope["method"] != "PUT"
+                or not scope["path"].endswith("/blob")):
+            return await self.inner(scope, receive, send)
+        import asyncio
+
+        async def slow_receive():
+            message = await receive()
+            if message["type"] == "http.request" and message.get("body"):
+                await asyncio.sleep(len(message["body"]) / (store.upload_mbps * 1024 * 1024))
+            return message
+        return await self.inner(scope, slow_receive, send)
+
+
+app.add_middleware(_ThrottleUploads)
+
+
 @app.post("/_fake/slow")
-def slow(seconds: float = 2.0):
-    """Development only: add this many seconds to every create and upload (0 to turn it off)."""
+def slow(seconds: float = 2.0, upload_mbps: float = 0.0):
+    """Development only: add this many seconds to every create and upload (0 to turn it off), and with
+    upload_mbps receive file uploads at about that many MB/s (0 = no limit), to watch a run's upload bar."""
     store.delay = max(0.0, min(seconds, 30.0))
-    return {"delay": store.delay}
+    store.upload_mbps = max(0.0, upload_mbps)
+    return {"delay": store.delay, "upload_mbps": store.upload_mbps}
 
 
 @app.post("/_fake/fail")
