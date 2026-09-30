@@ -56,6 +56,8 @@ class Tenant:
     language_default: str
     authorities: dict[str, dict[str, str]]
     authority_fields: dict[str, list[str]] = field(default_factory=dict)
+    # From the tenant's UI profile; cspace-ui's defaults are 500 ms and 3 characters
+    autocomplete: dict[str, int] = field(default_factory=lambda: {"find_delay_ms": 500, "min_length": 3})
     sensitivity: dict[str, Any] = field(default_factory=dict)  # Object-level rules (design: Protected files)
 
     @property
@@ -78,6 +80,7 @@ class Tenant:
             "fileTypes": list(SUPPORTED_EXTENSIONS),
             "fileTypesHint": SUPPORTED_HINT,
             "authorityFields": self.authority_fields,
+            "autocomplete": {"findDelayMs": self.autocomplete["find_delay_ms"], "minLength": self.autocomplete["min_length"]},
             "sensitivity": {"summary": self.sensitivity.get("summary", ""), "explain": self.sensitivity.get("explain", [])},
         }
 
@@ -103,6 +106,7 @@ def load_tenant(key: str) -> Tenant:
         language_default=raw["language"]["default"],
         authorities=raw["authorities"],
         authority_fields=raw.get("authority_fields", {}),
+        autocomplete={"find_delay_ms": 500, "min_length": 3, **(raw.get("autocomplete") or {})},
         sensitivity=raw.get("sensitivity") or {},
     )
 

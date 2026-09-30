@@ -7,6 +7,7 @@ Relations) using a tiny generated image; those records stay.
 
   export CSPACE_URL=https://pahma.qa.collectionspace.org CSPACE_USER=... CSPACE_PASSWORD=...
   python scripts/check_cspace.py --object 1-2345 --term smith [--create]
+  python scripts/check_cspace.py --vocabularies   # only list the Person and Organization vocabularies
 
 Run from the backend directory's environment (pip install -e backend).
 """
@@ -56,12 +57,23 @@ def main():
     ap.add_argument("--show-object", action="store_true",
                     help="print the Object record's fields and what the tenant's sensitivity rules make of it")
     ap.add_argument("--tenant", default="pahma")
+    ap.add_argument("--vocabularies", action="store_true",
+                    help="only list the server's Person and Organization vocabularies (is there a 'shared' one?)")
     a = ap.parse_args()
     url, user, pw = os.environ.get("CSPACE_URL"), os.environ.get("CSPACE_USER"), os.environ.get("CSPACE_PASSWORD")
     if not (url and user and pw):
         sys.exit("Set CSPACE_URL, CSPACE_USER and CSPACE_PASSWORD")
     t = load_tenant(a.tenant)
     c = CSpaceClient(url, user, pw)
+    if a.vocabularies:
+        configured = {cfg["service"]: cfg["vocabulary"] for cfg in t.authorities.values()}
+        for service in ("personauthorities", "orgauthorities"):
+            vocabs = step(f"{service} vocabularies", lambda s=service: [v["shortIdentifier"] for v in c.authority_vocabularies(s)])
+            if vocabs is not None:
+                extra = [v for v in vocabs if v != configured.get(service)]
+                print(f"     the BMU searches: {configured.get(service)}; also on the server: {extra or 'nothing'}"
+                      + ("  <- 'shared' exists: consider adding it to the tenant's authorities" if "shared" in vocabs else ""))
+        return
     perms = step("accountperms", lambda: c.account_permissions())
     if perms:
         print("     summary:", perms.summary)

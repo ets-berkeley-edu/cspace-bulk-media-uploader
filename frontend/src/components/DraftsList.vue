@@ -7,12 +7,13 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { api } from "../api";
 import { formatTime } from "../lib/files";
 import { tableState, tableView } from "../lib/table";
-import type { Created, Job, Row, TenantInfo } from "../types";
-import DeleteJobConfirm from "./DeleteJobConfirm.vue";
+import type { Job, Row, TenantInfo } from "../types";
+import JobActions from "./JobActions.vue";
 import JobDocs from "./JobDocs.vue";
 import SortTh from "./SortTh.vue";
 
-defineProps<{ tenant: TenantInfo }>();
+/** editWhy: why this user can't create or edit jobs (design: Permissions in the UI); "" when they can. */
+defineProps<{ tenant: TenantInfo; editWhy?: string }>();
 const emit = defineEmits<{ open: [id: string, mode: "edit" | "preview", takeOverSince?: number] }>();
 const drafts = ref<Job[]>([]);
 const docs = reactive(new Map<string, Row[]>()); // each draft's documents, from its latest check
@@ -35,8 +36,12 @@ function expandAll(on: boolean) {
   drafts.value.forEach((j) => { if (!expanded.has(j.id)) toggle(j); });
 }
 const checks = reactive(new Map<string, { block: number; warn: number } | "checking">());
-const confirm = ref<{ id: string; kind: "delete" | "takeover" } | null>(null);
 const error = ref("");
+/** Pass on JobActions' open (a take-over carries when the other person started editing). */
+function reopen(id: string, m: "edit" | "preview", since?: number) {
+  if (since === undefined) emit("open", id, m);
+  else emit("open", id, m, since);
+}
 let timer: ReturnType<typeof setInterval> | undefined;
 
 async function refresh(runChecks = false) {
@@ -67,27 +72,9 @@ function checksText(c: { block: number; warn: number }) {
   if (c.warn) parts.push(`${c.warn} warning${c.warn === 1 ? "" : "s"}`);
   return parts.join(" · ");
 }
-const lockedByOther = (j: Job) => !!j.editingBy && !j.editingByYou;
 function countsOf(id: string): { block: number; warn: number } | null {
   const c = checks.get(id);
   return c && c !== "checking" ? c : null;
-}
-
-// What each draft's runs created, for the delete confirmation (null: it has never run)
-const created = reactive(new Map<string, Created | null>());
-function askDelete(j: Job) {
-  confirm.value = { id: j.id, kind: "delete" };
-  if (!j.run) created.set(j.id, null);
-  else api.job(j.id).then((r) => created.set(j.id, r.created)).catch((e) => { error.value = (e as Error).message; });
-}
-async function del(j: Job) {
-  try {
-    await api.deleteJob(j.id);
-    confirm.value = null;
-    await refresh();
-  } catch (e) {
-    error.value = (e as Error).message;
-  }
 }
 </script>
 
@@ -95,7 +82,7 @@ async function del(j: Job) {
   <div>
     <p class="subtitle">Jobs saved but not scheduled, including incomplete jobs and jobs with problems. Everyone signed in can see and
       edit them, one person at a time; you can take over a draft someone else is editing. A draft that has never run is deleted
-      30 days after it was last changed or saved; a fix of a job that has run is reverted instead, and the job returns to Finished jobs. Checks are re-run against CollectionSpace each time this list is shown.</p>
+      30 days after it was last changed or saved (7 days if it has protected files); a fix of a job that has run is reverted instead, and the job returns to Finished jobs. Checks are re-run against CollectionSpace each time this list is shown.</p>
     <div v-if="error" class="msg msg-block">{{ error }}</div>
     <div v-if="drafts.length" class="list-tools"><button class="link" @click="expandAll(true)">Expand all</button> ·
       <button class="link" @click="expandAll(false)">Collapse all</button></div>
@@ -127,20 +114,8 @@ async function del(j: Job) {
             <td><span :class="{ soon: expiry(j).soon }">{{ expiry(j).text }}</span><div class="sub" :title="j.fixFrom ? 'The edits are discarded and the job returns to Finished jobs as it was' : 'The draft is deleted with its files'">{{ j.fixFrom ? "then reverted" : "then deleted" }}</div>
               <div v-if="j.protectedCount" class="sub" title="A draft with protected files expires 7 days after it was last saved">7 days: protected files</div></td>
             <td>
-              <DeleteJobConfirm v-if="confirm?.id === j.id && confirm.kind === 'delete'" :job="j" :created="created.get(j.id)"
-                                @confirm="del(j)" @cancel="confirm = null" />
-              <div v-else-if="confirm?.id === j.id && confirm.kind === 'takeover'" class="msg msg-warn">
-                {{ j.editingBy }} has been editing this draft since {{ formatTime(j.editingSince) }}. If you take over, their editing ends
-                and their page becomes read-only; everything they changed so far is already saved.
-                <button @click="emit('open', j.id, 'edit', j.editingSince)">Take over and edit</button> <button @click="confirm = null">Cancel</button>
-              </div>
-              <div v-else class="actions">
-                <button @click="emit('open', j.id, 'preview')">Preview</button>
-                <button v-if="lockedByOther(j)" @click="confirm = { id: j.id, kind: 'takeover' }">Take over…</button>
-                <button v-else @click="emit('open', j.id, 'edit')">{{ j.editingByYou ? "Continue editing" : "Edit" }}</button>
-                <button :disabled="lockedByOther(j)" :title="lockedByOther(j) ? `${j.editingBy} is editing this draft` : ''"
-                        @click="askDelete(j)">Delete</button>
-              </div>
+              <JobActions :job="j" kind="drafts" :edit-why="editWhy" @open="reopen"
+                          @done="refresh()" @error="error = $event" />
             </td>
           </tr>
           <tr v-if="expanded.has(j.id)" class="detail"><td colspan="8">

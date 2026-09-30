@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, reactive, ref } from "vue";
 import { api, ApiError } from "./api";
 import DraftsList from "./components/DraftsList.vue";
 import JobEditor from "./components/JobEditor.vue";
+import JobPreview from "./components/JobPreview.vue";
 import FinishedJobs from "./components/FinishedJobs.vue";
 import QueueList from "./components/QueueList.vue";
 import LoginForm from "./components/LoginForm.vue";
+import { EDIT_BLOCKED_EXPLAIN, editBlocked } from "./lib/status";
 import type { Job, Me } from "./types";
 
 const me = ref<Me | null>(null);
@@ -16,6 +18,11 @@ const mode = ref<"edit" | "preview">("edit");
 const takeOverSince = ref<number | null>(null);
 const editorKey = ref(0);
 const notice = ref("");
+// The job each list tab is previewing, shown inside that tab (design: Drafts, scheduling and the job queue; UI
+// mockup renderPreview). Previewing never touches the draft open in Create / edit job.
+const previewing = reactive<{ drafts: string | null; queue: string | null }>({ drafts: null, queue: null });
+// Without create and update on Media the user can view jobs but not create or edit them (design: Permissions in the UI).
+const editWhy = computed(() => (me.value ? editBlocked(me.value.perms) : ""));
 
 // Signed out while working (idle or absolute timeout): back to the sign-in page, saying why.
 if (typeof window !== "undefined") {
@@ -59,6 +66,13 @@ async function newJob() {
 }
 
 async function openJob(id: string, m: "edit" | "preview" = "edit", since?: number) {
+  if (m === "preview") {
+    if (tab.value === "drafts" || tab.value === "queue") previewing[tab.value] = id;
+    return;
+  }
+  // Opening a job for editing ends any preview of it: it's about to change.
+  if (previewing.drafts === id) previewing.drafts = null;
+  if (previewing.queue === id) previewing.queue = null;
   await leaveCurrent(id);
   notice.value = "";
   jobId.value = id;
@@ -89,7 +103,7 @@ async function scheduled(j: Job) {
       <div class="bar">
         <strong>{{ me.tenant.name }}</strong>
         <span class="muted">Signed in as {{ me.user }}</span>
-        <span v-if="!me.perms.media" class="badge b-warn">Your account can't create Media records</span>
+        <span v-if="editWhy" class="badge b-warn" :title="editWhy">View only: your account can't create and update Media records</span>
         <span class="spacer"></span>
         <button @click="signOut">Sign out</button>
       </div>
@@ -100,14 +114,23 @@ async function scheduled(j: Job) {
         <button class="tab" :class="{ active: tab === 'queue' }" role="tab" :aria-selected="tab === 'queue'" @click="tab = 'queue'">Job queue</button>
         <button class="tab" :class="{ active: tab === 'jobs' }" role="tab" :aria-selected="tab === 'jobs'" @click="tab = 'jobs'">Finished jobs</button>
         <span class="spacer"></span>
-        <button class="primary new-job" @click="newJob">+ New job</button>
+        <button class="primary new-job" :disabled="!!editWhy" :title="editWhy" @click="newJob">+ New job</button>
       </div>
       <div class="card view">
-        <JobEditor v-show="tab === 'editor'" :key="editorKey" :me="me" :job-id="jobId" :mode="mode" :take-over-since="takeOverSince"
+        <div v-if="editWhy && !jobId" v-show="tab === 'editor'" class="msg msg-info" role="status">{{ EDIT_BLOCKED_EXPLAIN }}</div>
+        <JobEditor v-else v-show="tab === 'editor'" :key="editorKey" :me="me" :job-id="jobId" :mode="mode" :take-over-since="takeOverSince"
                    @scheduled="scheduled" @opened="jobId = $event" @close="newJob" />
-        <DraftsList v-if="tab === 'drafts'" :tenant="me.tenant" @open="openJob" />
-        <QueueList v-if="tab === 'queue'" :tenant="me.tenant" @open="openJob" />
-        <FinishedJobs v-if="tab === 'jobs'" :tenant="me.tenant" @open="(id) => openJob(id)" />
+        <template v-if="tab === 'drafts'">
+          <JobPreview v-if="previewing.drafts" :key="previewing.drafts" :job-id="previewing.drafts" from="drafts" :tenant="me.tenant" :edit-why="editWhy"
+                      @back="previewing.drafts = null" @open="openJob" />
+          <DraftsList v-else :tenant="me.tenant" :edit-why="editWhy" @open="openJob" />
+        </template>
+        <template v-if="tab === 'queue'">
+          <JobPreview v-if="previewing.queue" :key="previewing.queue" :job-id="previewing.queue" from="queue" :tenant="me.tenant" :edit-why="editWhy"
+                      @back="previewing.queue = null" @open="openJob" />
+          <QueueList v-else :tenant="me.tenant" :edit-why="editWhy" @open="openJob" />
+        </template>
+        <FinishedJobs v-if="tab === 'jobs'" :tenant="me.tenant" :edit-why="editWhy" @open="(id) => openJob(id)" />
       </div>
     </template>
   </div>

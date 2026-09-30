@@ -23,11 +23,19 @@ def text(xml: bytes, tag: str) -> list[str]:
     ("15-1234_a.jpg", "15-1234", True),
     ("15-1234.tif", "15-1234", True),
     ("1-2345_1.tif", "1-2345", True),
+    ("1-2345_01_b.tif", "1-2345", True),  # legacy: the text before the first _
+    ("9-12345.1.2_3.jpg", "9-12345.1.2", True),
     ("_bad name.jpg", "", False),
 ])
 def test_parse_filename(name, obj, ok):
     p = parse_filename(T, name)
     assert p["ok"] is ok and p["obj"] == obj
+
+
+def test_the_image_number_is_the_whole_name_without_its_extension():
+    # a deliberate change from legacy, which cut it at the first "." and so truncated dotted PAHMA numbers
+    assert parse_filename(T, "9-12345.1.2_3.jpg")["img"] == "9-12345.1.2_3"
+    assert parse_filename(T, "1-2345_01_b.tif")["img"] == "1-2345_01_b"
 
 
 def test_new_row_defaults_and_mediaonly_idnum():

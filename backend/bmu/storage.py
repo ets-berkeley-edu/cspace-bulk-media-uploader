@@ -47,6 +47,23 @@ def _dyn(v: Any) -> Any:
     return v
 
 
+def draft_expiry(job: dict | None, at: float) -> dict:
+    """The job-item fields that set a draft's expiry to `at`. A fix of a job that has run keeps it in
+    draftExpiresAt, which only the sweeper reads (it reverts the fix); every other draft in expiresAt, the job
+    item's TTL attribute in a deployment (design: State rules, Abandoned fixes; Retention). A fix never has an
+    expiresAt, so the TTL can't delete the job it must return to Needs attention or Failed."""
+    if (job or {}).get("fixFrom"):
+        return {"draftExpiresAt": at, "expiresAt": None}
+    return {"expiresAt": at, "draftExpiresAt": None}
+
+
+def expiry_of(job: dict) -> float | None:
+    """When a draft expires: draftExpiresAt for a fix (expiresAt on items saved before it existed), else expiresAt."""
+    if job.get("fixFrom"):
+        return job.get("draftExpiresAt") or job.get("expiresAt")
+    return job.get("expiresAt")
+
+
 class RowChanged(Exception):
     """A row was saved by someone else after it was read."""
 
@@ -239,13 +256,14 @@ class Storage:
             if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
                 raise
 
-    def mark_saved(self, job_id: str, user: str, session: str, draft_days: int) -> bool:
-        """Every change to a draft is saved at once; this records who saved it last and restarts its expiry.
-        Only for the session that is editing it."""
+    def mark_saved(self, job_id: str, user: str, session: str, draft_days: int, fix: bool = False) -> bool:
+        """Every change to a draft is saved at once; this records who saved it last and restarts its expiry
+        (a fix's in draftExpiresAt, see draft_expiry). Only for the session that is editing it."""
         t = now()
+        field, other = ("draftExpiresAt", "expiresAt") if fix else ("expiresAt", "draftExpiresAt")
         try:
             self.jobs.update_item(Key={"PK": f"JOB#{job_id}", "SK": "META"}, ConditionExpression=Attr("editingSession").eq(session),
-                                  UpdateExpression="SET lastSavedBy = :u, lastSavedAt = :t, expiresAt = :e, updated = :t",
+                                  UpdateExpression=f"SET lastSavedBy = :u, lastSavedAt = :t, {field} = :e, updated = :t REMOVE {other}",
                                   ExpressionAttributeValues=_dyn({":u": user, ":t": t, ":e": t + draft_days * 86400}))
             return True
         except ClientError as e:
@@ -423,6 +441,11 @@ class Storage:
                     pass  # changed again in the meantime: the newer save stands
             raise
 
+    def clear_thumbnail(self, job_id: str, n: int) -> None:
+        """Forget a row's stored thumbnail (already deleted from S3), whatever the job's state."""
+        self.jobs.update_item(Key={"PK": f"JOB#{job_id}", "SK": f"ROW#{n:05d}"}, UpdateExpression="REMOVE thumbKey",
+                              ConditionExpression=Attr("PK").exists())
+
     def save_checks(self, job_id: str, row: dict) -> bool:
         """Save a row's checks and lookups, and what they set automatically (the protected-file flag and the
         publish default it implies), only if its data hasn't changed since they were computed (same "v");
@@ -519,6 +542,19 @@ class Storage:
                        "Item": _dyn({"PK": f"JOB#{job_id}", "user": user, "token": token, "expires": int(expires)})}}
         return self._transact([put, update])
 
+    def begin_delete(self, job_id: str, statuses: list[str], session: str, user: str = "") -> bool:
+        """Start deleting a job (design: Deleting a job): in one write, set it to Deleting, only if it is still in
+        one of these statuses and no other session is editing it, and delete its saved sign-in. From then on the
+        worker can't claim it (claim_job needs Queued and a sign-in), so its files are never used by a run.
+        deletedBy: who deleted it, for the audit entry if the sweep has to finish the deletion."""
+        allowed = ", ".join(f":c_s{i}" for i in range(len(statuses)))
+        update = self._job_update(job_id, {"status": "Deleting", "deletingSince": now(), "deletedBy": user},
+                                  f"#c_status IN ({allowed}) AND (attribute_not_exists(#c_ed) OR #c_ed = :c_ed)",
+                                  {**{f":c_s{i}": st for i, st in enumerate(statuses)}, ":c_ed": session},
+                                  {"#c_status": "status", "#c_ed": "editingSession"})
+        delete = {"Delete": {"TableName": self.credentials.name, "Key": _dyn({"PK": f"JOB#{job_id}"})}}
+        return self._transact([update, delete])
+
     def claim_job(self, job_id: str, fields: dict) -> bool:
         """The worker claims a queued job, only if it is still Queued and its sign-in is still stored and valid."""
         check = {"ConditionCheck": {"TableName": self.credentials.name, "Key": _dyn({"PK": f"JOB#{job_id}"}),
@@ -555,12 +591,38 @@ class Storage:
         self.credentials.delete_item(Key={"PK": f"JOB#{job_id}"})
 
     # ---- audit ------------------------------------------------------------------------------
+    def _audit_item(self, tenant: str, type_: str, user: str, job_id: str, detail: str, csids: list[dict] | None,
+                    **extra: Any) -> dict:
+        t = now()
+        return _dyn({"PK": f"TENANT#{tenant}", "SK": f"{t:.6f}#{uuid.uuid4().hex[:6]}", "type": type_, "user": user,
+                     "job": job_id, "detail": detail, "csids": csids or [], "expires": int(t + 365 * 86400), **extra})
+
     def audit(self, tenant: str, type_: str, user: str, job_id: str, detail: str, csids: list[dict] | None = None,
               **extra: Any) -> None:
-        t = now()
-        self.audit_table.put_item(Item=_dyn({
-            "PK": f"TENANT#{tenant}", "SK": f"{t:.6f}#{uuid.uuid4().hex[:6]}", "type": type_, "user": user,
-            "job": job_id, "detail": detail, "csids": csids or [], "expires": int(t + 365 * 86400), **extra}))
+        self.audit_table.put_item(Item=self._audit_item(tenant, type_, user, job_id, detail, csids, **extra))
+
+    def audit_once(self, tenant: str, job_id: str, status: str, flag: str, type_: str, user: str, detail: str,
+                   csids: list[dict] | None = None, **extra: Any) -> bool:
+        """An audit entry that must be written exactly once for a job in a temporary state (Deleting, Expiring),
+        before the job is deleted: one transaction writes the entry and sets the job's flag, only if the job is
+        still in that status and the flag isn't set. So an interrupted deletion that the sweep redoes, or the sweep
+        and the web app overlapping, never writes it twice. False if it was written already."""
+        put = {"Put": {"TableName": self.audit_table.name,
+                       "Item": self._audit_item(tenant, type_, user, job_id, detail, csids, **extra)}}
+        mark = self._job_update(job_id, {flag: True}, "#c_status = :c_st AND attribute_not_exists(#c_flag)",
+                                {":c_st": status}, {"#c_status": "status", "#c_flag": flag})
+        return self._transact([put, mark])
+
+    def audit_job_deleted(self, tenant: str, job_id: str, user: str, detail: str, created: dict, **extra: Any) -> bool:
+        """The "Job deleted" entry of a job being deleted (status Deleting), written before anything is deleted,
+        with every CSID its runs created (created_records), or for a big job a pointer to them in S3. Written once
+        (flag deleteAudited, see audit_once)."""
+        csids = created["csids"]
+        big = len(csids) > 500  # a 1,000-row job's CSIDs go in S3, the entry points to them
+        if big:
+            extra["detailKey"] = self.put_audit_detail(tenant, job_id, 0, csids)
+        return self.audit_once(tenant, job_id, "Deleting", "deleteAudited", "Job deleted", user, detail,
+                               [] if big else csids, counts=created["counts"], **extra)
 
     # ---- the CSID index (design: Job data model, CSID index entry; Reading the audit log) ------------
     def index_csid(self, tenant: str, csid: str, **entry: Any) -> None:

@@ -21,6 +21,8 @@ export interface TenantInfo {
   languageDefault: string;
   /** File extensions the BMU accepts, and how to name them (design: Supported file types). */
   fileTypes?: string[];
+  /** Autocomplete timing from the tenant's UI profile. */
+  autocomplete?: { findDelayMs: number; minLength: number };
   fileTypesHint?: string;
   authorityFields: Record<string, string[]>;
   sensitivity?: { summary: string; explain: string[] };
@@ -71,6 +73,8 @@ export interface RowResult {
   error?: { code: string; detail: string; step: string } | null;
   notices?: { code: string; detail: string }[];
   run?: number;
+  /** The run in which the worker stopped while on this document: a create may have reached CollectionSpace. */
+  interrupted?: number;
 }
 
 /** One entry of the failure catalog (design: Finished jobs and error messages). */
@@ -132,6 +136,8 @@ export interface Row {
   parseOk: boolean;
   /** Fields the user has edited; presets (such as the default language) no longer apply to them. */
   touched?: string[];
+  /** The date the browser read from the file's EXIF when it was added, if any (the Date field says so). */
+  dateExif?: string;
   idnum: string;
   date: string;
   restricted: boolean;

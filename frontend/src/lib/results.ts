@@ -116,13 +116,18 @@ export function stepNote(key: string, st: Step): string {
   return "";
 }
 
-/** "2 Media records (1 with its file), 1 Object and 2 Relations" for the job-deletion warning. */
+/**
+ * "2 Media records (1 with its file), 1 Object and 2 Relations" for the job-deletion warning; zero counts are
+ * left out, so a job that only created an Object reads "1 Object" (design: Deleting a job; UI mockup createdSummary).
+ */
 export function createdText(c: Created): string {
   const n = (k: number, one: string, many: string) => `${k} ${k === 1 ? one : many}`;
-  const parts = [`${n(c.media, "Media record", "Media records")} (${c.files} with ${c.files === 1 ? "its file" : "their files"})`];
+  const parts: string[] = [];
+  if (c.media) parts.push(n(c.media, "Media record", "Media records") + (c.files ? ` (${c.files} with ${c.files === 1 ? "its file" : "their files"})` : ""));
   if (c.objects) parts.push(n(c.objects, "Object", "Objects"));
   if (c.groups) parts.push("the job's group");
   if (c.relations) parts.push(n(c.relations, "Relation", "Relations"));
+  if (!parts.length) return "no records";
   return parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}` : parts[0];
 }
 
@@ -145,7 +150,8 @@ export function objectStepRan(r: Row): boolean {
 
 /** Created anything in CollectionSpace (finding an existing object doesn't count), so it can't be deleted. */
 export function createdSomething(r: Row): boolean {
-  if (r.result?.state === "In progress") return true;
+  // A document the worker was on when a run stopped may have created a record whose CSID wasn't recorded.
+  if (r.result?.state === "In progress" || r.result?.interrupted) return true;
   return Object.entries(r.result?.steps ?? {}).some(([k, s]) => k !== "findObject" && !!s.csid && !s.found && !s.sameAs);
 }
 

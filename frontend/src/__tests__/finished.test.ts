@@ -21,7 +21,7 @@ const CATALOG: Record<string, Failure> = {
 failures.value = CATALOG;
 
 const tenant: TenantInfo = {
-  key: "pahma", name: "PAHMA", filenameHint: "hint", filenamePattern: "^(?P<obj>[A-Za-z0-9][A-Za-z0-9.-]*?)(?:_(?P<suffix>[A-Za-z0-9-]+))?$",
+  key: "pahma", name: "PAHMA", filenameHint: "hint", filenamePattern: "^(?P<obj>[A-Za-z0-9][A-Za-z0-9.-]*)(?:_(?P<suffix>[A-Za-z0-9._-]+))?$",
   mediaTypes: [], languageDefault: "", authorityFields: {}, publish: { field: "approvedForWeb", header: "Restricted", invert: true },
   handling: [{ id: "link", label: "Link to existing object", object: "existing", id_rule: "object" }],
 };
@@ -79,7 +79,12 @@ describe("results helpers (design: Finished jobs and error messages)", () => {
     expect(canReplaceFile(gone)).toBe(false);
     expect(createdSomething(tooLarge)).toBe(true);
     expect(createdSomething(notRun)).toBe(false);
+    // the worker stopped on it: a create may have reached CollectionSpace unrecorded, so it counts as having created something
+    expect(createdSomething({ ...notRun, result: { state: "Not started" as const, steps: {}, interrupted: 1 } })).toBe(true);
     expect(createdText({ media: 2, files: 1, objects: 1, relations: 2, unfinished: 1 })).toBe("2 Media records (1 with its file), 1 Object and 2 Relations");
+    // Zero counts are left out (design: Deleting a job)
+    expect(createdText({ media: 0, files: 0, objects: 1, relations: 0, unfinished: 0 })).toBe("1 Object");
+    expect(createdText({ media: 1, files: 0, objects: 0, relations: 0, groups: 1, unfinished: 1 })).toBe("1 Media record and the job's group");
   });
 });
 

@@ -38,6 +38,24 @@ describe("bulk rules (design: Bulk-change panel)", () => {
     expect(bulkCheck([failed], { restricted: true }, false).ok).toBe(true);
   });
 
+  it("doesn't lock a Failed row that created only an Object: everything but its handling can change", () => {
+    const objOnly = row({ n: 5, result: { state: "Failed", steps: { createObject: { s: "done", csid: "o1" }, media: { s: "failed", code: "x" } } } });
+    expect(applyAllTargets([row(), objOnly]).map((r) => r.n)).toEqual([1, 5]);
+    expect(bulkCheck([objOnly], { restricted: true, creator: "c" }, false).ok).toBe(true);
+    expect(bulkCheck([row(), objOnly], { restricted: true }, true).ok).toBe(true);
+    expect(bulkCheck([objOnly], { handling: "create" }, false).why).toContain("keeps its handling");
+  });
+
+  it("lets a Partial row take only what the rerun still needs (its group; its handling after object_exists)", () => {
+    const p = row({ n: 6, group: false, result: { state: "Partial", steps: { media: { s: "done", csid: "m" } } } });
+    expect(bulkCheck([p], { group: true }, false, new Set(["link"])).ok).toBe(true);
+    expect(bulkCheck([p], { handling: "create" }, false).why).toContain("already created its records");
+    const exists = row({ n: 7, handling: "create", result: { state: "Partial", steps: { media: { s: "done", csid: "m" },
+      createObject: { s: "failed", code: "object_exists" } } } });
+    expect(bulkCheck([exists], { handling: "link" }, false).ok).toBe(true);
+    expect(bulkCheck([exists], { handling: "link", restricted: true }, false).ok).toBe(false);
+  });
+
   it("Apply to all skips Done, Partial and disabled rows", () => {
     const rows = [row(), partial(2), row({ n: 3, include: false }), row({ n: 4, result: { state: "Done" } })];
     expect(applyAllTargets(rows).map((r) => r.n)).toEqual([1]);
@@ -46,7 +64,7 @@ describe("bulk rules (design: Bulk-change panel)", () => {
 });
 
 const tenant: TenantInfo = {
-  key: "pahma", name: "PAHMA", filenameHint: "hint", filenamePattern: "^(?P<obj>[A-Za-z0-9][A-Za-z0-9.-]*?)(?:_(?P<suffix>[A-Za-z0-9-]+))?$", mediaTypes: [{ value: "image", label: "image" }, { value: "slide", label: "slide" }], languageDefault: "", authorityFields: {},
+  key: "pahma", name: "PAHMA", filenameHint: "hint", filenamePattern: "^(?P<obj>[A-Za-z0-9][A-Za-z0-9.-]*)(?:_(?P<suffix>[A-Za-z0-9._-]+))?$", mediaTypes: [{ value: "image", label: "image" }, { value: "slide", label: "slide" }], languageDefault: "", authorityFields: {},
   publish: { field: "approvedForWeb", header: "Restricted", invert: true },
   handling: [{ id: "link", label: "Link to existing object", object: "existing", id_rule: "object" },
              { id: "create", label: "Create new object + link", object: "create", id_rule: "object" }],

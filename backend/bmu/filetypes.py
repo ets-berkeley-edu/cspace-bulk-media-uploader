@@ -10,6 +10,10 @@ from __future__ import annotations
 EXT_FAMILY = {"jpg": "JPEG", "jpeg": "JPEG", "png": "PNG", "tif": "TIFF", "tiff": "TIFF", "pdf": "PDF", "wav": "WAV",
               "mp3": "MP3", "aac": "AAC", "mp4": "MP4", "x3d": "X3D"}
 SUPPORTED_EXTENSIONS = tuple(EXT_FAMILY)
+# The content type each upload is signed for, from the extension (the browser's own guess isn't trusted)
+CONTENT_TYPE = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "tif": "image/tiff", "tiff": "image/tiff",
+                "pdf": "application/pdf", "wav": "audio/wav", "mp3": "audio/mpeg", "aac": "audio/aac", "mp4": "video/mp4",
+                "x3d": "model/x3d+xml"}
 SUPPORTED_HINT = "JPEG, TIFF, PNG, PDF, WAV, MP3, AAC, MP4 or X3D"
 HEAD_BYTES = 64
 
@@ -36,6 +40,24 @@ def detect(head: bytes) -> str | None:
     if text.startswith((b"<?xml", b"<x3d", b"<!doctype x3d")):
         return "X3D"
     return None
+
+
+def extension(name: str) -> str:
+    return name.rsplit(".", 1)[-1].lower() if "." in name else ""
+
+
+def content_type(name: str) -> str | None:
+    """The content type an accepted file is uploaded as, or None for a type the BMU doesn't accept."""
+    return CONTENT_TYPE.get(extension(name))
+
+
+def unsupported(names: list[str]) -> str | None:
+    """The refusal for files of types the BMU doesn't accept (design: Supported file types), or None."""
+    bad = [n for n in names if content_type(n) is None]
+    if not bad:
+        return None
+    shown = ", ".join(bad[:5]) + (f", and {len(bad) - 5} more" if len(bad) > 5 else "")
+    return f"The BMU doesn't accept these files: {shown}. It accepts {SUPPORTED_HINT}."
 
 
 def mismatch(filename: str, head: bytes) -> str | None:

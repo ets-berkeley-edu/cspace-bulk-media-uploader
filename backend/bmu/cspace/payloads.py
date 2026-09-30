@@ -63,7 +63,7 @@ def media_xml(tenant: Tenant, row: dict) -> bytes:
             for k, v in (parsed.get("group") or {}).items():
                 if k != "dateDisplayDate":
                     _add(grp, k, v)
-    langs = [x for x in _as_list(row.get("language")) if x] or [tenant.language_default]
+    langs = [x for x in _as_list(row.get("language")) if x]  # required: an empty Language blocks the row
     ll = SubElement(common, "languageList")
     for lang in langs:
         _add(ll, "language", lang)

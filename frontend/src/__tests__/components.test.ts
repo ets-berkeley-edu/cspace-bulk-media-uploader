@@ -28,6 +28,21 @@ describe("AuthorityInput", () => {
     expect(w.emitted("update:modelValue")?.[0]).toEqual([REF]);
   });
 
+  it("uses the tenant's find delay and minimum length (PAHMA: 1000 ms)", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ terms: [] }),
+      { status: 200, headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const w = mount(AuthorityInput, { props: { modelValue: "", field: "creator", label: "Creator", timing: { findDelayMs: 1000, minLength: 4 } } });
+    await w.find("input").setValue("fre");
+    expect(w.text()).toContain("4+ characters");
+    await w.find("input").setValue("freu");
+    await vi.advanceTimersByTimeAsync(900);
+    expect(fetchMock).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(150);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("shows only the display name of the stored refName, and never saves free text", async () => {
     vi.useFakeTimers();
     const w = mount(AuthorityInput, { props: { modelValue: REF, field: "creator", label: "Creator" } });
@@ -42,7 +57,7 @@ describe("AuthorityInput", () => {
 });
 
 const tenant: TenantInfo = {
-  key: "pahma", name: "PAHMA", filenameHint: "hint", filenamePattern: "^(?P<obj>[A-Za-z0-9][A-Za-z0-9.-]*?)(?:_(?P<suffix>[A-Za-z0-9-]+))?$", mediaTypes: [{ value: "image", label: "image" }, { value: "slide", label: "slide" }], languageDefault: "", authorityFields: {},
+  key: "pahma", name: "PAHMA", filenameHint: "hint", filenamePattern: "^(?P<obj>[A-Za-z0-9][A-Za-z0-9.-]*)(?:_(?P<suffix>[A-Za-z0-9._-]+))?$", mediaTypes: [{ value: "image", label: "image" }, { value: "slide", label: "slide" }], languageDefault: "", authorityFields: {},
   publish: { field: "approvedForWeb", header: "Restricted", invert: true },
   handling: [{ id: "link", label: "Link to existing object", object: "existing", id_rule: "object" },
              { id: "create", label: "Create new object + link", object: "create", id_rule: "object" }],
@@ -138,6 +153,14 @@ describe("DocumentRow checks", () => {
     const chosen = mountRow({ tenant: t, row: row({ language: [eng], touched: ["language"] }) });
     expect(chosen.text()).not.toContain("PRESET");
   });
+  it("warns that deleting the job's last document deletes the job", async () => {
+    const w = mountRow({ last: true });
+    await w.findAll("button").find((b) => b.text() === "Delete document")!.trigger("click");
+    expect(w.text()).toContain("This is the job's last document, so the job is deleted too.");
+    const other = mountRow({});
+    await other.findAll("button").find((b) => b.text() === "Delete document")!.trigger("click");
+    expect(other.text()).not.toContain("last document");
+  });
   it("offers Retry and Remove for a failed upload, or one this page isn't sending", async () => {
     const failed = mountRow({ row: row({ upload: { s: "failed" } }) });
     expect(failed.text()).toContain("Upload failed");
@@ -151,6 +174,14 @@ describe("DocumentRow checks", () => {
     expect(stalled.text()).toContain("Upload not finished");
     expect(stalled.findAll("button").some((b) => b.text() === "Retry")).toBe(true);
     expect(mountRow({ row: row({ upload: { s: "pending" } }), uploadingHere: true }).text()).toContain("Waiting to upload");
+  });
+  it("warns that removing a failed upload that is the job's last document deletes the job", async () => {
+    const last = mountRow({ row: row({ upload: { s: "failed" } }), last: true });
+    await last.findAll("button").find((b) => b.text() === "Remove")!.trigger("click");
+    expect(last.text()).toContain("Remove this document? This is the job's last document, so the job is deleted too.");
+    const other = mountRow({ row: row({ upload: { s: "failed" } }) });
+    await other.findAll("button").find((b) => b.text() === "Remove")!.trigger("click");
+    expect(other.text()).not.toContain("last document");
   });
 });
 

@@ -16,6 +16,7 @@ const props = defineProps<{
   row: Row; tenant: TenantInfo; perms: Perms; preview?: string; expanded: boolean; readonly: boolean; checking?: boolean;
   selected?: boolean; languages?: Option[]; otherNames?: string[]; uploadingHere?: boolean; groupOn?: boolean; jobId?: string | null;
   runView?: boolean; // the job is running: Status shows each document's run state
+  last?: boolean; // the job's only document: deleting it deletes the job
 }>();
 const emit = defineEmits<{ edit: [changes: Partial<Row>]; remove: []; toggle: []; select: [on: boolean]; replace: [file: File]; retry: [] }>();
 
@@ -128,7 +129,7 @@ function text(field: keyof Row, e: Event) {
       <div v-if="canRetry" class="retry-line">
         <template v-if="!confirmRemove"><button type="button" @click="emit('retry')">Retry</button>
           <button type="button" @click="confirmRemove = true">Remove</button></template>
-        <template v-else><span class="sub">Remove this document?</span> <button type="button" @click="confirmRemove = false; emit('remove')">Remove</button>
+        <template v-else><span class="sub">Remove this document?<template v-if="last"> This is the job's last document, so the job is deleted too.</template></span> <button type="button" @click="confirmRemove = false; emit('remove')">Remove</button>
           <button type="button" @click="confirmRemove = false">Cancel</button></template>
       </div>
     </td>
@@ -194,12 +195,12 @@ function text(field: keyof Row, e: Event) {
             <input type="text" :value="row.obj" :disabled="ro || objFixed" aria-label="Object number" @change="text('obj', $event)" /></label>
           <button v-if="objLabel.reset !== undefined && !ro && !objFixed" class="link field-note" type="button" @click="emit('edit', { obj: objLabel.reset })">Use parsed value</button>
         </div>
-        <DateInput :model-value="row.date" :parsed="row.lookups?.date" :disabled="ro" @update:model-value="emit('edit', { date: $event })" />
+        <DateInput :model-value="row.date" :parsed="row.lookups?.date" :exif="row.dateExif" :disabled="ro" @update:model-value="emit('edit', { date: $event })" />
         <RepeatingSelect label="Media type" word="type" :model-value="row.type" :options="tenant.mediaTypes" :disabled="ro"
                          @update:model-value="emit('edit', { type: $event })" />
-        <AuthorityInput field="creator" label="Creator" :model-value="row.creator" :disabled="ro" @update:model-value="emit('edit', { creator: $event })" />
-        <AuthorityInput field="contributor" label="Contributor" :model-value="row.contributor" :disabled="ro" @update:model-value="emit('edit', { contributor: $event })" />
-        <AuthorityInput field="rightsHolder" label="Rights holder" :model-value="row.rightsHolder" :disabled="ro" @update:model-value="emit('edit', { rightsHolder: $event })" />
+        <AuthorityInput :timing="tenant.autocomplete" field="creator" label="Creator" :model-value="row.creator" :disabled="ro" @update:model-value="emit('edit', { creator: $event })" />
+        <AuthorityInput :timing="tenant.autocomplete" field="contributor" label="Contributor" :model-value="row.contributor" :disabled="ro" @update:model-value="emit('edit', { contributor: $event })" />
+        <AuthorityInput :timing="tenant.autocomplete" field="rightsHolder" label="Rights holder" :model-value="row.rightsHolder" :disabled="ro" @update:model-value="emit('edit', { rightsHolder: $event })" />
         <label class="field wide"><span>Description</span>
           <textarea rows="2" :value="row.description" :disabled="ro" @change="text('description', $event)"></textarea></label>
         <label class="field"><span>Copyright statement</span>
@@ -213,10 +214,12 @@ function text(field: keyof Row, e: Event) {
       <div v-if="!readonly && row.include && !createdSomething(row)" style="margin-top:6px">
         <template v-if="!confirmRemove"><button class="link" @click="confirmRemove = true">Delete document</button>
           <span class="field-note" style="display:inline">Permanent, unlike Exclude. Only for documents that haven't created anything in CollectionSpace.</span></template>
-        <div v-else class="msg msg-warn">Delete “{{ row.file }}” from this job permanently? Its uploaded file is removed; nothing in CollectionSpace is touched.
+        <div v-else class="msg msg-warn">Delete “{{ row.file }}” from this job permanently? Its uploaded file is removed; nothing in CollectionSpace is touched.<template v-if="last">
+          This is the job's last document, so the job is deleted too.</template>
           <button @click="confirmRemove = false; emit('remove')">Delete document</button> <button @click="confirmRemove = false">Cancel</button></div></div>
-      <div v-else-if="!readonly && createdSomething(row) && !done" class="field-note" style="margin-top:6px">This document already created records in
-        CollectionSpace, so it can't be deleted from the job; check Exclude to have the BMU ignore it.</div>
+      <div v-else-if="!readonly && createdSomething(row) && !done" class="field-note" style="margin-top:6px">{{ row.result?.interrupted
+        ? "The last run stopped while working on this document, so it may have created a record in CollectionSpace that the BMU couldn't record. It can't be deleted from the job; check Exclude to have the BMU ignore it, or reschedule to finish it."
+        : "This document already created records in CollectionSpace, so it can't be deleted from the job; check Exclude to have the BMU ignore it." }}</div>
     </td>
   </tr>
 </template>
