@@ -264,3 +264,7 @@ table.inner td { background: var(--surface-2); }
   .run-spin.sm { border-color: currentColor; background: currentColor; }
 }
 .run-now .progress { margin-top: 3px; }
+
+/* Which environment this is (BMU_ENV_LABEL): on the sign-in page and in the header */
+.env-line { display: flex; justify-content: center; margin: 0 0 10px; }
+.env-badge { font-size: 12px; }

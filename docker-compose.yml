@@ -1,17 +1,21 @@
 # Local development stack: web API, worker, Vue dev server, DynamoDB Local, moto (S3) and a
 # simulated CollectionSpace. Start with:  cp .env.example .env  (fill in the keys)  &&  docker compose up --build
 # Then open http://localhost:5173 and sign in as admin/admin (simulated CollectionSpace).
+# To run several environments side by side (simulator, PAHMA QA), use ./bmu, which sets the variables below
+# (ports, label, cookie name) per environment; the defaults here are the simulator environment's.
 x-bmu-env: &bmu-env
   BMU_CSPACE_URL: ${BMU_CSPACE_URL:-http://fakecspace:8180}
   BMU_SESSION_KEY_B64: ${BMU_SESSION_KEY_B64:?set BMU_SESSION_KEY_B64 in .env}
   BMU_JOB_KEY_B64: ${BMU_JOB_KEY_B64:?set BMU_JOB_KEY_B64 in .env}
   BMU_DYNAMODB_ENDPOINT: http://dynamodb:8000
   BMU_S3_ENDPOINT: http://s3:9000
-  BMU_S3_PUBLIC_ENDPOINT: http://localhost:9000   # the browser uploads here
+  BMU_S3_PUBLIC_ENDPOINT: http://localhost:${BMU_S3_PORT:-9000}   # the browser uploads here
   BMU_CREATE_TABLES: "true"
   BMU_COOKIE_SECURE: "false"                       # local http only
   BMU_ALWAYS_RUN_TIME: ${BMU_ALWAYS_RUN_TIME:-false} # true: every moment is run time (queued jobs start at once)
   BMU_DEMO: ${BMU_DEMO:-true}                      # Demo tools pane's endpoints (local stack only; never in production)
+  BMU_ENV_LABEL: ${BMU_ENV_LABEL:-Local · simulated CollectionSpace}   # shown on the sign-in page and in the header
+  BMU_COOKIE_NAME: ${BMU_COOKIE_NAME:-bmu_session} # differs per environment, so two on localhost keep separate sign-ins
   AWS_ACCESS_KEY_ID: local                        # moto accepts any credentials
   AWS_SECRET_ACCESS_KEY: local
   AWS_DEFAULT_REGION: us-west-2
@@ -20,25 +24,25 @@ services:
   dynamodb:
     image: amazon/dynamodb-local:latest
     command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"]
-    ports: ["8001:8000"]
+    ports: ["${BMU_DYNAMODB_PORT:-8001}:8000"]
 
   # S3 stand-in (moto, the same library the tests use). MinIO's images are no longer on Docker Hub.
   # In-memory; the browser uploads here with presigned POSTs. See its state at http://localhost:9000/moto-api/
   s3:
     image: motoserver/moto:latest
     command: ["-p", "9000"]
-    ports: ["9000:9000"]
+    ports: ["${BMU_S3_PORT:-9000}:9000"]
 
   fakecspace:
     build: ./backend
     command: ["uvicorn", "fakecspace.app:app", "--host", "0.0.0.0", "--port", "8180"]
-    ports: ["8180:8180"]
+    ports: ["${BMU_SIM_PORT:-8180}:8180"]
 
   web:
     build: ./backend
     environment: *bmu-env
     depends_on: [dynamodb, s3, fakecspace]
-    ports: ["8000:8000"]
+    ports: ["${BMU_API_PORT:-8000}:8000"]
 
   worker:
     build: ./backend
@@ -54,5 +58,5 @@ services:
     environment:
       VITE_API_TARGET: http://web:8000
     volumes: ["./frontend:/app", "/app/node_modules"]
-    ports: ["5173:5173"]
+    ports: ["${BMU_UI_PORT:-5173}:5173"]
     depends_on: [web]

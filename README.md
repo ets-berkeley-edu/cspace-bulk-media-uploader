@@ -185,8 +185,31 @@ curl -X DELETE localhost:8180/_fake/fail  # clear them
 `objectCreate`, `relation`, `mediaSearch`, `group`, `termRead`. Add `client=any` to make a rule apply to the
 editor's checks as well.
 
-To use the Lyrasis QA tenant instead, set `BMU_CSPACE_URL=https://pahma.qa.collectionspace.org` in `.env`
-and sign in with a QA account. Records created there stay (the BMU never deletes).
+To use the Lyrasis QA tenant instead, start `./bmu up qa` (see Several environments below), or set
+`BMU_CSPACE_URL=https://pahma.qa.collectionspace.org` in `.env`, and sign in with a QA account. Records created there
+stay (the BMU never deletes).
+
+## Several environments: simulator, PAHMA QA, AWS, and the UI mockup
+
+`./bmu` starts, stops and opens each environment. The two local ones can run at the same time: each is its own Docker
+Compose project with its own ports, data, session cookie and label, shown on the sign-in page, in the header and in
+the browser tab's title (orange when the CollectionSpace is a real server).
+
+| Command | What | Address |
+| --- | --- | --- |
+| `./bmu up sim` | Local, simulated CollectionSpace, Demo tools on (sign in as `admin` / `admin`) | http://localhost:5173 |
+| `./bmu up qa` | Local, against the PAHMA QA tenant, with your own QA account. **Jobs create real records, which stay.** Demo tools off | http://localhost:5273 |
+| `./bmu open aws` | The AWS dev deployment, once it exists (set `BMU_AWS_DEV_URL`) | — |
+| `./bmu open mockup` | The UI mockup, from this repo (`docs/mockup/bmu-mockup.html`); `./bmu open mockup-hosted` opens the hosted copy | — |
+| `./bmu open home` | A start page linking all of them (`docs/start.html`) | — |
+
+Also `./bmu status`, `./bmu logs sim|qa [service]`, `./bmu down sim|qa|all` and `./bmu urls`. Both local environments
+use the keys in `.env`; neither stores a password (`BMU_QA_CSPACE_URL` points the QA one at another server).
+Plain `docker compose up` still starts the simulator environment as before; the ports, label and cookie name are
+variables in `docker-compose.yml` (`BMU_UI_PORT`, `BMU_API_PORT`, `BMU_S3_PORT`, `BMU_DYNAMODB_PORT`, `BMU_SIM_PORT`,
+`BMU_ENV_LABEL`, `BMU_COOKIE_NAME`) with the simulator's values as defaults.
+
+The UI mockup in `docs/mockup/` is kept the same as the hosted copy: every change to one is made to the other.
 
 ## Development without Docker
 

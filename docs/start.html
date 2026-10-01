@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Which BMU?</title>
+<style>
+  :root { color-scheme: light dark; --bg: #f6f5f1; --card: #fff; --text: #2c2c2a; --sub: #5f5e5a; --muted: #888780;
+    --border: #dddcd5; --accent: #0b4a7a; --warn-bg: #fbf0d9; --warn: #7a5200; --code: #efeee8; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #1b1b19; --card: #2d2d2a; --text: #ecebe6; --sub: #b9b8b1; --muted: #8d8c85;
+    --border: #3a3a37; --accent: #8cc4f0; --warn-bg: #3d2e13; --warn: #f0c983; --code: #252523; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 32px 16px 48px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .lead { color: var(--sub); margin: 0 0 24px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 14px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+  .card h2 { font-size: 15px; margin: 0; }
+  .card p { margin: 0; color: var(--sub); font-size: 13px; }
+  .links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: auto; padding-top: 6px; }
+  a.btn { display: inline-block; padding: 6px 12px; border-radius: 6px; background: var(--accent); color: var(--card); text-decoration: none; font-weight: 600; font-size: 13px; }
+  a.btn.secondary { background: none; color: var(--accent); border: 1px solid var(--border); }
+  code { background: var(--code); border-radius: 4px; padding: 1px 5px; font-size: 12px; }
+  .tag { align-self: flex-start; font-size: 11px; font-weight: 600; border-radius: 10px; padding: 1px 8px; background: var(--code); color: var(--sub); }
+  .tag.warn { background: var(--warn-bg); color: var(--warn); }
+  .off { color: var(--muted); font-size: 13px; }
+  footer { margin-top: 28px; color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Which BMU?</h1>
+  <p class="lead">The new Bulk Media Uploader in each of its forms. The app's header names the environment you're in.
+    Open this page with <code>./bmu open home</code>.</p>
+  <div class="grid">
+    <section class="card">
+      <span class="tag">Design</span>
+      <h2>UI mockup</h2>
+      <p>All five tenants, simulated in one page; nothing is uploaded or sent anywhere.</p>
+      <div class="links">
+        <a class="btn" href="mockup/bmu-mockup.html">Open (this repo)</a>
+        <a class="btn secondary" href="https://claude.ai/artifact/6zGCrZhzu2uZzu8s16rLWc">Hosted copy</a>
+      </div>
+    </section>
+    <section class="card">
+      <span class="tag">Local · simulator</span>
+      <h2>Prototype with the simulated CollectionSpace</h2>
+      <p>PAHMA, with Demo tools. Sign in as admin/admin. Start it with <code>./bmu up sim</code>.</p>
+      <div class="links"><a class="btn" href="http://localhost:5173">Open localhost:5173</a></div>
+    </section>
+    <section class="card">
+      <span class="tag warn">Local · real records</span>
+      <h2>Prototype against PAHMA QA</h2>
+      <p>Your own QA account; jobs create real records on the QA tenant, and they stay. Start it with <code>./bmu up qa</code>.</p>
+      <div class="links"><a class="btn" href="http://localhost:5273">Open localhost:5273</a></div>
+    </section>
+    <section class="card">
+      <span class="tag warn">AWS</span>
+      <h2>AWS dev deployment</h2>
+      <p>The same app, deployed to AWS.</p>
+      <p class="off">Not deployed yet. Its address goes here, and in <code>./bmu</code> (<code>BMU_AWS_DEV_URL</code>).</p>
+    </section>
+  </div>
+  <footer><code>./bmu status</code> shows which local environments are running; <code>./bmu down all</code> stops them. Both can run at once.</footer>
+</main>
+</body>
+</html>

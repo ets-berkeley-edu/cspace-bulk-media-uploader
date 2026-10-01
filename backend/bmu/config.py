@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     protected_staged_days: int = 7  # a protected file's staged upload is removed this long after its job stopped
     credential_hours: float = 72.0
     cookie_secure: bool = True
+    # The session cookie's name. Environments that share a host name (two local stacks on different ports) need
+    # different names: browsers send a host's cookies to every port, so one would otherwise sign the other out.
+    cookie_name: str = "bmu_session"
+    # Which environment this is, shown on the sign-in page and in the header (e.g. "Local · PAHMA QA"); empty: none.
+    env_label: str = ""
     max_file_bytes: int = 2 * 1024**3
     max_rows: int = 1000
 

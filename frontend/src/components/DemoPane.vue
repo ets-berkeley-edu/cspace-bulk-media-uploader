@@ -139,12 +139,12 @@ onBeforeUnmount(() => clearInterval(timer));
       </button>
       <strong>Demo tools</strong>
       <span class="badge b-accent" title="Only in demo builds (npm run dev, npm run build:demo) with BMU_DEMO=true on the server; never in production">Demo build only</span>
-      <span v-if="!open" class="demo-summary">{{ off ? "Server demo mode is off" : summary }}</span>
+      <span v-if="!open" class="demo-summary">{{ off ? "Off in this environment; commands only" : summary }}</span>
     </div>
 
     <div v-show="open" id="demoBody" class="demo-body">
-      <div v-if="off" class="msg msg-warn">The server's demo mode is off, so these tools can't be used. Start the web app with
-        <code>BMU_DEMO=true</code> (development and demos only). The commands below still work.</div>
+      <div v-if="off" class="msg msg-info">Demo tools are off in this environment: they need the simulated CollectionSpace and
+        <code>BMU_DEMO=true</code>, as in <code>./bmu up sim</code>. The check-script commands below work everywhere.</div>
       <template v-else-if="st">
         <p class="sub demo-intro">For demos and testing with the simulated CollectionSpace ({{ st.cspaceUrl }}). None of this is
           part of the BMU; production builds leave it out.<template v-if="st.alwaysRunTime"> Every moment is a run time

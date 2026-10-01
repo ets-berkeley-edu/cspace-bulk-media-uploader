@@ -48,7 +48,7 @@ describe("Demo tools", () => {
     stub(() => ({ status: 404, body: { detail: "Not Found" } }));
     const w = mount(DemoPane);
     await flushPromises();
-    expect(w.text()).toContain("The server's demo mode is off");
+    expect(w.text()).toContain("Demo tools are off in this environment");
     expect(w.text()).toContain("Check scripts and other commands");
   });
 
