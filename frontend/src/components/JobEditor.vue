@@ -2,7 +2,8 @@
 import ChevronIcon from "./ChevronIcon.vue";
 import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { api, ApiError } from "../api";
-import { canPreview, formatTime, makeThumbnail, mapLimit, skippedText, splitSupported, uploadToS3 } from "../lib/files";
+import { canPreview, fileTooLargeText, formatTime, formIsOld, makeThumbnail, mapLimit, skippedText, splitSize, splitSupported,
+  tooLargeText, uploadToS3 } from "../lib/files";
 import { readImageInfo } from "../lib/imageinfo";
 import { jobCounts, worstLevel } from "../lib/status";
 import { failureOf, loadFailures, OUTCOME } from "../lib/results";
@@ -276,8 +277,14 @@ async function addFiles(list: FileList | File[] | null) {
   if (!chosen.length || !editable.value) return;
   message.value = null;
   // Design (Supported file types): files of other types are skipped here and never uploaded.
-  const { ok: files, skipped } = splitSupported(chosen, props.me.tenant.fileTypes);
-  if (skipped.length) message.value = { cls: "msg-warn", text: skippedText(skipped.map((f) => f.name), props.me.tenant.fileTypesHint) };
+  const { ok: supported, skipped } = splitSupported(chosen, props.me.tenant.fileTypes);
+  // Design (Browser uploads): so are files over the size limit; the server refuses them too.
+  const { ok: files, tooLarge } = splitSize(supported, props.me.maxFileBytes);
+  const notes = [
+    ...(skipped.length ? [skippedText(skipped.map((f) => f.name), props.me.tenant.fileTypesHint)] : []),
+    ...(tooLarge.length ? [tooLargeText(tooLarge.map((f) => f.name), props.me.maxFileBytes!)] : []),
+  ];
+  if (notes.length) message.value = { cls: "msg-warn", text: notes.join(" ") };
   if (!files.length) return;
   try {
     const j = await ensureJob();
@@ -286,6 +293,7 @@ async function addFiles(list: FileList | File[] | null) {
     const info = await mapLimit(files, 8, readImageInfo);
     const { rows: created } = await api.addFiles(j.id, files.map((f, i) => ({
       name: f.name, size: f.size, type: f.type, exifDate: info[i].date, orientation: info[i].orientation })));
+    const signedAt = Date.now(); // when these forms were received: a file still waiting long after gets a fresh one
     const queue = created.map((row, i) => ({ row, file: files[i] }));
     for (const { row, file } of queue) {
       row.upload = { s: "pending" };
@@ -297,7 +305,7 @@ async function addFiles(list: FileList | File[] | null) {
     // Design: each row is checked as soon as its file is chosen, in one batch for the new rows.
     const checks = runChecks(created.map((r) => r.n));
     const worker = async () => {
-      for (let next = queue.shift(); next; next = queue.shift()) await uploadOne(j.id, next.row, next.file);
+      for (let next = queue.shift(); next; next = queue.shift()) await uploadOne(j.id, next.row, next.file, signedAt);
     };
     await Promise.all([worker(), worker(), worker(), checks]);
   } catch (e) {
@@ -312,6 +320,7 @@ async function replaceFile(row: Row, file: File) {
     message.value = { cls: "msg-warn", text: skippedText([file.name], props.me.tenant.fileTypesHint) };
     return;
   }
+  if (tooLargeFor(file)) return;
   try {
     const r = await api.replaceFile(job.value.id, row.n, { name: file.name, size: file.size, type: file.type });
     replace(r.row);
@@ -324,14 +333,22 @@ async function replaceFile(row: Row, file: File) {
   }
 }
 
-async function uploadOne(jobId: string, row: Row, file: File) {
+/** A file over the size limit is not sent (design: Browser uploads): say so, and return true. */
+function tooLargeFor(file: File): boolean {
+  if (!splitSize([file], props.me.maxFileBytes).tooLarge.length) return false;
+  message.value = { cls: "msg-warn", text: fileTooLargeText(file.name, props.me.maxFileBytes!) };
+  return true;
+}
+
+/** Send one document's file. signedAt: when its upload form was received (now, unless it waited its turn). */
+async function uploadOne(jobId: string, row: Row, file: File, signedAt = Date.now()) {
   // A document deleted while its upload waited for its turn: nothing is sent
   if (job.value?.id !== jobId || !rows.value.some((r) => r.n === row.n)) return;
   const stop = new AbortController();
   inFlight.set(row.n, stop);
   uploadingHere.add(row.n);
   try {
-    await sendFile(jobId, row, file, stop.signal);
+    await sendFile(jobId, row, file, signedAt, stop.signal);
   } finally {
     uploadingHere.delete(row.n);
     if (inFlight.get(row.n) === stop) inFlight.delete(row.n);
@@ -347,6 +364,7 @@ async function retry(row: Row, picked?: File) {
     retryInput.value?.click();
     return;
   }
+  if (tooLargeFor(file)) return;
   try {
     const r = await api.retryUpload(job.value.id, row.n, { name: file.name, size: file.size, type: file.type });
     localFiles.set(row.n, file);
@@ -365,12 +383,19 @@ function retryPicked(e: Event) {
   retryRow = null;
 }
 
-async function sendFile(jobId: string, row: Row, file: File, signal?: AbortSignal) {
+/** Upload a document's file to S3 and confirm it. A form that got old while the file waited its turn is replaced by a
+ *  fresh one first (design: Browser uploads, "Sign": forms expire after about 15 minutes). */
+async function sendFile(jobId: string, row: Row, file: File, signedAt: number, signal?: AbortSignal) {
   const live = () => rows.value.find((r) => r.n === row.n);
   const set = (u: Row["upload"]) => { const r = live(); if (r) r.upload = u; };
   set({ s: "uploading", pct: 0 });
   try {
-    await uploadToS3(row.uploadForm!, file, (pct) => set({ s: "uploading", pct }), signal);
+    let form = row.uploadForm!;
+    if (formIsOld(signedAt)) {
+      form = (await api.uploadForm(jobId, row.n, file.size)).uploadForm;
+      if (signal?.aborted || !live()) return; // deleted while the new form was on its way: nothing is sent
+    }
+    await uploadToS3(form, file, (pct) => set({ s: "uploading", pct }), signal);
     if (signal?.aborted) return; // deleted just as the upload finished: the server removed the file with the row
     set({ s: "verifying" });
     const confirmed = await api.uploaded(jobId, row.n);
@@ -565,13 +590,13 @@ function toggle(n: number) {
       <input v-model="name" type="text" placeholder="e.g. 2026 spring accession batch" :disabled="!editable" @change="rename" /></label>
 
     <div class="group-box">
-      <label class="check-line"><input type="checkbox" :checked="!!job?.groupOn" aria-label="Create a group for this job"
+      <label class="check-line"><input type="checkbox" :checked="!!job?.groupOn" aria-label="Create a group of this job's objects"
           :disabled="!editable || groupMade || (!me.perms.groups && !job?.groupOn)"
           :title="!me.perms.groups ? 'You don\'t have permission to create groups' : groupMade ? 'The group already exists in CollectionSpace' : ''"
           @change="setGroup({ groupOn: ($event.target as HTMLInputElement).checked })" />
-        <span><strong>Create a group for this job</strong></span></label>
-      <div class="group-title"><span>Object group title</span>
-        <input v-model="groupTitle" type="text" :disabled="!editable || !job?.groupOn || groupMade" aria-label="Object group title"
+        <span><strong>Create a group of this job's objects</strong></span></label>
+      <div class="group-title"><span>Group title</span>
+        <input v-model="groupTitle" type="text" :disabled="!editable || !job?.groupOn || groupMade" aria-label="Group title"
                :placeholder="job?.groupOn ? 'Required' : 'Turn on “Create a group” first'" @change="setGroup({ groupTitle })" />
         <template v-if="editable && job?.groupOn && !groupMade">
           <button type="button" :disabled="!name.trim()" :title="name.trim() ? 'Fill the title with the job name, as typed' : 'Enter a job name first'"

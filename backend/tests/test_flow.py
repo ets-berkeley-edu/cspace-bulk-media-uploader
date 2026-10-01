@@ -334,6 +334,18 @@ def test_unsupported_file_types_are_refused_and_the_row_check_is_a_backstop(api,
     assert any("doesn't accept .docx" in t for t in _checks(chk, "block"))
 
 
+def test_the_file_size_limit_is_shown_to_the_browser_and_the_server_still_refuses_larger_files(api, login, services):
+    """Design (Browser uploads): the page skips files over the limit before asking; the server refuses them as a backstop."""
+    limit = services.settings.max_file_bytes
+    assert login()["maxFileBytes"] == limit == 2 * 1024 ** 3
+    assert api.get("/api/me").json()["maxFileBytes"] == limit
+    job = new_job(api)
+    r = api.post(f"/api/jobs/{job}/files", json={"files": [{"name": "15-1234_big.tif", "size": limit + 1, "type": "image/tiff"},
+                                                           {"name": "15-1234_ok.tif", "size": limit, "type": "image/tiff"}]})
+    assert r.status_code == 413 and "15-1234_big.tif" in r.json()["detail"]
+    assert services.storage.get_rows(job) == []  # nothing added, nothing signed
+
+
 def test_pdf_documents_are_accepted_for_every_tenant(api, login, add_uploaded):
     from bmu.filetypes import SUPPORTED_EXTENSIONS
     assert "pdf" in SUPPORTED_EXTENSIONS
@@ -801,6 +813,48 @@ def test_retry_a_failed_upload_with_the_same_file(api, login, services):
     assert done["upload"]["s"] == "done"
     # nothing to retry once it's uploaded
     assert api.post(f"/api/jobs/{job}/rows/{row['n']}/retry-upload", json={"name": "15-1234_r.jpg", "size": 6, "type": "image/jpeg"}).status_code == 409
+
+
+def test_a_file_waiting_its_turn_gets_a_fresh_upload_form(api, login, services):
+    """Design (Browser uploads, "Sign"): each form expires after about 15 minutes, so the page asks for a new one for a
+    file whose form got old while it waited. Same key, size and type; the row isn't changed."""
+    login()
+    job = new_job(api)
+    row = api.post(f"/api/jobs/{job}/files", json={"files": [{"name": "15-1234_w.jpg", "size": 5, "type": "image/jpeg"}]}).json()["rows"][0]
+    before = services.storage.get_row(job, row["n"])
+    r = api.post(f"/api/jobs/{job}/rows/{row['n']}/upload-form", json={"size": 5})
+    assert r.status_code == 200, r.text
+    form = r.json()["uploadForm"]
+    assert form["fields"]["key"] == row["s3Key"] and form["fields"]["Content-Type"] == "image/jpeg"
+    assert services.storage.get_row(job, row["n"]) == before
+    # the new form works: the file arrives at the row's key and is verified as usual
+    services.storage.s3.put_object(Bucket=services.settings.s3_bucket, Key=row["s3Key"], Body=b"fivee")
+    assert api.post(f"/api/jobs/{job}/rows/{row['n']}/uploaded").json()["row"]["upload"]["s"] == "done"
+
+
+def test_a_fresh_upload_form_is_refused_for_done_uploads_other_files_and_jobs_that_cant_be_changed(api, login, add_uploaded, services):
+    login()
+    job = new_job(api)
+    done = add_uploaded(job, ["15-1234_d.jpg"])[0]
+    r = api.post(f"/api/jobs/{job}/rows/{done['n']}/upload-form", json={"size": done["size"]})
+    assert r.status_code == 409 and r.json()["detail"] == "This document's file is already uploaded."
+    waiting = api.post(f"/api/jobs/{job}/files", json={"files": [{"name": "15-1234_e.jpg", "size": 5, "type": "image/jpeg"}]}).json()["rows"][0]
+    other = api.post(f"/api/jobs/{job}/rows/{waiting['n']}/upload-form", json={"size": 6})
+    assert other.status_code == 422 and "the size is different" in other.json()["detail"]
+    assert api.post(f"/api/jobs/{job}/rows/{waiting['n']}/upload-form", json={"size": 0}).status_code == 422
+    assert api.post(f"/api/jobs/{job}/rows/999/upload-form", json={"size": 5}).status_code == 404
+    # a draft someone else is editing now, and a job that isn't a draft
+    other_user = _second_user(services, "admin")
+    since = api.get(f"/api/jobs/{job}").json()["job"]["editingSince"]
+    assert other_user.post(f"/api/jobs/{job}/open", json={"takeOverSince": since}).status_code == 200
+    taken = api.post(f"/api/jobs/{job}/rows/{waiting['n']}/upload-form", json={"size": 5})
+    assert taken.status_code == 409 and taken.json()["detail"]["code"] == "not_editing"
+    queued = new_job(api)
+    n = add_uploaded(queued, ["12-5678_q.jpg"])[0]["n"]
+    services.storage.put_row(queued, {**services.storage.get_row(queued, n), "upload": {"s": "pending"}})
+    services.storage.update_job(queued, {"status": "Queued"})
+    refused = api.post(f"/api/jobs/{queued}/rows/{n}/upload-form", json={"size": 5})
+    assert refused.status_code == 409 and "only jobs being prepared can be changed" in refused.json()["detail"]
 
 
 def test_uploads_are_signed_for_one_staging_key_type_and_15_minutes(api, login, services):

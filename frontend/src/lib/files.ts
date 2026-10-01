@@ -23,10 +23,22 @@ export class UploadCancelled extends Error {
   }
 }
 
+/** A presigned POST: where to send the file, and the signed fields that go with it (design: Browser uploads, "Sign"). */
+export type UploadForm = { url: string; fields: Record<string, string> };
+
+/** Each form expires about 15 minutes after it is signed. A file whose form is older than this when its turn comes
+ *  (it waited behind other files) gets a fresh one first, leaving ample time for the upload itself to start. */
+export const FORM_MAX_AGE_MS = 5 * 60 * 1000;
+
+/** Whether a form received at receivedAt (ms) is too old to start an upload with now. */
+export function formIsOld(receivedAt: number, now = Date.now()): boolean {
+  return now - receivedAt > FORM_MAX_AGE_MS;
+}
+
 /** Upload one file with a presigned POST, reporting progress (0–100). An abort signal stops it at once: S3 keeps
  * nothing of a POST that didn't finish, and the promise rejects with UploadCancelled. */
 export function uploadToS3(
-  form: { url: string; fields: Record<string, string> },
+  form: UploadForm,
   file: File,
   onProgress: (pct: number) => void,
   signal?: AbortSignal,
@@ -53,7 +65,7 @@ export function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 ** 2) return `${(n / 1024).toFixed(0)} KB`;
   if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
-  return `${(n / 1024 ** 3).toFixed(2)} GB`;
+  return `${(n / 1024 ** 3).toFixed(2).replace(/\.00$/, "")} GB`; // a whole number of GB, like the 2 GB limit, without ".00"
 }
 
 export function formatTime(epochSeconds?: number): string {
@@ -108,4 +120,22 @@ export function splitSupported<T extends { name: string }>(files: T[], types: st
 export function skippedText(names: string[], hint: string | undefined): string {
   const shown = names.slice(0, 5).join(", ") + (names.length > 5 ? `, and ${names.length - 5} more` : "");
   return `${names.length} file${names.length === 1 ? "" : "s"} skipped: ${shown}. The BMU accepts ${hint || "only supported file types"}.`;
+}
+
+/** Split chosen files into the ones within the per-file size limit and the ones over it (design: Browser uploads).
+ *  Files over it are never sent; the server refuses them too. No limit means accept all. */
+export function splitSize<T extends { size: number }>(files: T[], limit: number | undefined): { ok: T[]; tooLarge: T[] } {
+  if (!limit) return { ok: files, tooLarge: [] };
+  return { ok: files.filter((f) => f.size <= limit), tooLarge: files.filter((f) => f.size > limit) };
+}
+
+/** The message for files skipped because they are over the size limit. */
+export function tooLargeText(names: string[], limit: number): string {
+  const shown = names.slice(0, 5).join(", ") + (names.length > 5 ? `, and ${names.length - 5} more` : "");
+  return `Skipped ${names.length} file${names.length === 1 ? "" : "s"} over the ${formatBytes(limit)} limit: ${shown}.`;
+}
+
+/** The message for a replacement or retried file over the size limit (it is not sent). */
+export function fileTooLargeText(name: string, limit: number): string {
+  return `“${name}” is over the ${formatBytes(limit)} limit, so it can't be uploaded. Choose a smaller version of the file.`;
 }

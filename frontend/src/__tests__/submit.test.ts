@@ -121,7 +121,7 @@ describe("the job's Group title (user decision: never derived from the job name)
     try {
       const w = mount(JobEditor, { props: { me, jobId: "j1" }, global: { stubs: { ThumbCell: true } } });
       await flushPromises();
-      const title = w.find('input[aria-label="Object group title"]');
+      const title = w.find('input[aria-label="Group title"]');
       const btn = (t: string) => w.findAll("button").find((b) => b.text() === t)!;
       expect((title.element as HTMLInputElement).value).toBe("");
       expect(btn("Submit job").attributes("title")).toBe("Enter a group title, or turn off the job's group");

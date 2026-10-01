@@ -25,7 +25,7 @@ deployment.
   the selected documents or to all. Handling options can carry presets (PAHMA has none configured). Documents can
   be excluded from a job, or deleted if they created nothing in CollectionSpace. Large jobs are paged, sorted and
   filtered.
-- **Groups:** "Create a group for this job" creates one CollectionSpace Group and adds every linked Object to it.
+- **Groups:** "Create a group of this job's objects" creates one CollectionSpace Group, with the Group title you give it, and adds every linked Object to it.
   Its title is typed, or filled with **Use the job name** or **Use a timestamp** (`bmu-YYYY-MM-DD-HH-MM-SS`).
 - **Checks while editing:** each document is checked against CollectionSpace when its file is added and whenever
   it changes, with the results on the row as "Must fix", "Warning" or information: the object found and not
@@ -55,7 +55,7 @@ deployment.
   View results shows every document's steps and CSIDs, and every failure in plain language (title, explanation,
   what to do, technical detail) from the failure catalog in `backend/bmu/failures.yaml`. **Fix and reschedule**
   (or **Reschedule**, when every failure only needs another run) moves the job to Drafts; a fix that isn't
-  submitted within 30 days is reverted. Jobs that need attention or failed can be deleted from the BMU (never from
+  submitted within 30 days (7 if a document is a protected file) is reverted. Jobs that need attention or failed can be deleted from the BMU (never from
   CollectionSpace: the BMU only creates records). Completed jobs are removed 30 days after they finish.
 - **Credentials:** the password is encrypted at rest (a session key while you're signed in, a separate job key
   while a job waits or runs) and deleted when the run ends, whatever the outcome.

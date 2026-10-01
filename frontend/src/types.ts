@@ -50,6 +50,8 @@ export interface Me {
   perms: Perms;
   /** Has the tenant's BMU_Scheduler role: may change the schedule and the job queue (design: Job scheduling). */
   scheduler?: boolean;
+  /** The largest file the BMU accepts, in bytes; the page skips larger files before adding them (design: Browser uploads). */
+  maxFileBytes?: number;
 }
 
 /** A tenant's run times (design: Job scheduling). days: ISO weekdays (1 = Mon … 7 = Sun); times "HH:MM", Pacific. */

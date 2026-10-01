@@ -82,6 +82,10 @@ export const api = {
   addFiles: (id: string, files: { name: string; size: number; type: string; exifDate?: string; orientation?: string }[]) =>
     request<{ rows: Row[] }>("POST", `/api/jobs/${id}/files`, { files }),
   uploaded: (id: string, n: number) => request<RowChange>("POST", `/api/jobs/${id}/rows/${n}/uploaded`),
+  /** A fresh presigned POST for a document's file that hasn't been sent yet (its first form may have expired while it
+   *  waited its turn); size is the file's, which must be the document's. The row isn't changed. */
+  uploadForm: (id: string, n: number, size: number) =>
+    request<{ uploadForm: { url: string; fields: Record<string, string> } }>("POST", `/api/jobs/${id}/rows/${n}/upload-form`, { size }),
   uploadFailed: (id: string, n: number) => request<RowChange>("POST", `/api/jobs/${id}/rows/${n}/upload-failed`),
   editRow: (id: string, n: number, changes: Partial<Row>) => request<RowChange>("PATCH", `/api/jobs/${id}/rows/${n}`, changes),
   /** The bulk-change panel: the same changes to many rows, never applied partially. */

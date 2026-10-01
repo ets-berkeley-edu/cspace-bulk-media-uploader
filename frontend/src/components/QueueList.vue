@@ -46,9 +46,15 @@ const canReorder = computed(() => !!props.scheduler);
 const running = computed(() => jobs.value.filter((j) => j.status === "Running"));
 const queued = computed(() => jobs.value.filter((j) => j.status === "Queued")
   .sort((a, b) => (a.queuePos ?? 0) - (b.queuePos ?? 0) || (a.queuedAt ?? 0) - (b.queuedAt ?? 0)));
-const sortedView = computed(() => !!table.sort);
+// Sorted by Order ascending is the queue order itself, so it counts as not sorted: jobs can still be moved (design:
+// User interface, Large jobs; UI mockup renderQueue).
+const sortedView = computed(() => !!table.sort && !(table.sort === "order" && table.dir === 1));
 const movable = computed(() => canReorder.value && !sortedView.value);
 const runsOf = (j: Job) => runsAt(j, running.value.length > 0);
+/** The Status column's order (design: User interface, every table is sortable; UI mockup renderQueue): Running before
+ *  Queued, as in the mockup; among queued jobs, those waiting their turn, then those waiting for the paused queue to be
+ *  resumed, then held ones, the same order as Runs at. Ties keep queue order. Running jobs are always listed first. */
+const statusRank = (j: Job) => (j.status === "Running" ? 0 : j.held || j.plan?.kind === "held" ? 3 : j.plan?.kind === "paused" ? 2 : 1);
 const shownQueued = computed(() => tableView(queued.value, table, {
   order: (j) => queued.value.indexOf(j),
   name: (j) => j.name || "Untitled job",
@@ -56,6 +62,7 @@ const shownQueued = computed(() => tableView(queued.value, table, {
   checks: (j) => { const c = checks.get(j.id); return c ? -(c.block * 100000 + c.warn) : 1; },
   scheduled: (j) => j.queuedAt ?? 0,
   runs: (j) => runsOf(j).key,
+  status: statusRank,
 }, undefined, false).shown);
 function toggle(j: Job) {
   if (expanded.has(j.id)) expanded.delete(j.id);
@@ -267,7 +274,7 @@ const pct = (j: Job, k: "done" | "failed") => (j.progress?.total ? (100 * (j.pro
         <thead><tr><th style="width:40px"></th><SortTh :state="table" sort-key="order" label="Order" style="width:96px" /><SortTh :state="table" sort-key="name" label="Job" />
           <SortTh :state="table" sort-key="docs" label="Docs" style="width:64px" /><SortTh :state="table" sort-key="checks" label="Checks now" style="width:170px" />
           <SortTh :state="table" sort-key="scheduled" label="Submitted" style="width:150px" /><SortTh :state="table" sort-key="runs" label="Runs at" style="width:190px" />
-          <th style="width:190px">Status</th><th style="width:250px"></th></tr></thead>
+          <SortTh :state="table" sort-key="status" label="Status" style="width:190px" /><th style="width:250px"></th></tr></thead>
         <tbody>
           <tr v-if="!jobs.length"><td colspan="9" class="muted" style="text-align:center;padding:18px">No jobs in the queue. Create one in Create / edit job and submit it.</td></tr>
           <template v-for="j in running" :key="j.id">

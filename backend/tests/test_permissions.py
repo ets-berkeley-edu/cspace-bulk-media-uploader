@@ -60,6 +60,7 @@ def test_an_account_without_create_and_update_on_media_can_view_jobs_but_not_cre
         reader.post(f"/api/jobs/{draft}/files", json={"files": [file]}),
         reader.post(f"/api/jobs/{draft}/rows/{n}/uploaded"),
         reader.post(f"/api/jobs/{draft}/rows/{n}/upload-failed"),
+        reader.post(f"/api/jobs/{draft}/rows/{n}/upload-form", json={"size": 3}),
         reader.post(f"/api/jobs/{draft}/rows/{n}/thumbnail", content=b"x"),
         reader.post(f"/api/jobs/{draft}/rows/{n}/retry-upload", json=file),
         reader.post(f"/api/jobs/{failed}/rows/1/replace-file", json=file),
