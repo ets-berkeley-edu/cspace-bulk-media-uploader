@@ -74,6 +74,8 @@ def test_browser_uploads_go_through_the_web_app_at_the_set_speed(api, login, dem
     row = api.post(f"/api/jobs/{job}/files", json={"files": [{"name": "15-1234_1.jpg", "size": 300_000, "type": "image/jpeg"}]}).json()["rows"][0]
     form = row["uploadForm"]
     assert form["url"] == "/api/_demo/s3upload" and form["fields"]["key"] == row["s3Key"]  # the same signed fields
+    fresh = api.post(f"/api/jobs/{job}/rows/{row['n']}/upload-form", json={"size": 300_000}).json()["uploadForm"]
+    assert fresh["url"] == "/api/_demo/s3upload" and fresh["fields"]["key"] == row["s3Key"]  # a fresh form goes the same way
 
     seen, waits = {}, []
 

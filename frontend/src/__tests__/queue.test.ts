@@ -85,6 +85,47 @@ describe("Job queue (design: The job queue)", () => {
     expect(rowOf(w, "second queued").find('button[aria-label="Move second queued up"]').attributes("disabled")).toBeUndefined();
     w.unmount();
   });
+
+  it("sorted by Order ascending is the queue order, so jobs can still be moved; descending turns moving off", async () => {
+    mockApi();
+    const w = mount(QueueList, { props: scheduler });
+    await flushPromises();
+    const orderBtn = () => w.findAll(".sort-btn").find((b) => b.text().startsWith("Order"))!;
+    const up = () => rowOf(w, "second queued").find('button[aria-label="Move second queued up"]');
+    await orderBtn().trigger("click"); // ascending
+    expect(w.text()).not.toContain("Sorted view");
+    expect(up().attributes("disabled")).toBeUndefined();
+    await orderBtn().trigger("click"); // descending
+    expect(w.text()).toContain("Sorted view. The queue still runs in its own order");
+    expect(up().attributes("disabled")).toBeDefined();
+    w.unmount();
+  });
+});
+
+describe("Job queue: sorting by Status (design: User interface, every table is sortable)", () => {
+  const queuedJob = (id: string, pos: number, kind: string, held = false) => ({ id, name: `job ${id}`, status: "Queued", rowCount: 1,
+    scheduledBy: "admin", queuedAt: now - 100 + pos, queuePos: pos, credentialExpires: now + 60 * 3600, checksAtSchedule: { block: 0, warn: 0 },
+    ...(held ? { held: { by: "mkim", at: now - 5 } } : {}), plan: { kind, at: null, ahead: 0, signInExpiresFirst: false } });
+  const list = [jobs[0], queuedJob("a", 1, "schedule"), queuedJob("h", 2, "held", true), queuedJob("b", 3, "runNow"), queuedJob("p", 4, "paused")];
+  const order = (w: ReturnType<typeof mount>) => w.findAll("tbody tr").map((r) => r.text().match(/running one|job \w/)?.[0]);
+
+  it("the Status heading sorts Running, then queued jobs waiting their turn, then paused, then held; again to reverse, then queue order", async () => {
+    mockApi({}, (url) => (url.endsWith("/api/jobs") ? { status: 200, body: { jobs: list } } : undefined));
+    const w = mount(QueueList, { props: scheduler });
+    await flushPromises();
+    expect(order(w)).toEqual(["running one", "job a", "job h", "job b", "job p"]);
+    const status = () => w.findAll(".sort-btn").find((b) => b.text().startsWith("Status"))!;
+    await status().trigger("click");
+    expect(order(w)).toEqual(["running one", "job a", "job b", "job p", "job h"]); // ties keep queue order
+    expect(w.text()).toContain("Sorted view. The queue still runs in its own order");
+    expect(rowOf(w, "job b").find('button[aria-label="Move job b up"]').attributes("disabled")).toBeDefined();
+    await status().trigger("click");
+    expect(order(w)).toEqual(["running one", "job h", "job p", "job a", "job b"]); // running jobs stay first
+    await status().trigger("click");
+    expect(order(w)).toEqual(["running one", "job a", "job h", "job b", "job p"]);
+    expect(w.text()).not.toContain("Sorted view");
+    w.unmount();
+  });
 });
 
 describe("Job queue: scheduling (design: Job scheduling; UI mockup scheduleBannerHtml, runsAtCell)", () => {

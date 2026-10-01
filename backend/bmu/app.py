@@ -338,6 +338,13 @@ def _upload_form(s: "Services", key: str, size: int, content_type: str) -> dict:
     return demo.route_upload(s, form)
 
 
+def _me(s: "Services", user: str, perms: dict, scheduler: bool) -> dict:
+    """What the browser needs about the signed-in user and the app: the tenant's settings, the user's permissions,
+    and the per-file size limit, so the page skips files over it before asking to add them (design: Browser uploads)."""
+    return {"user": user, "tenant": s.tenant.public_summary(), "perms": perms, "scheduler": scheduler,
+            "maxFileBytes": s.settings.max_file_bytes}
+
+
 def _delete_job(s: "Services", sess: "Session", job: dict, rows: list[dict],
                 statuses: tuple[str, ...] = ("Draft", "Queued", *FIXABLE)) -> None:
     """Delete a job and its staged files. Records its runs created stay in CollectionSpace; the audit entry
@@ -412,7 +419,7 @@ class NewJob(BaseModel):
 
 class JobPatch(BaseModel):
     name: str | None = Field(default=None, max_length=200)
-    groupOn: bool | None = None  # "Create a group for this job"
+    groupOn: bool | None = None  # "Create a group of this job's objects"
     groupTitle: str | None = Field(default=None, max_length=200)
 
 
@@ -427,6 +434,10 @@ class FileSpec(BaseModel):
 
 class AddFiles(BaseModel):
     files: list[FileSpec] = Field(min_length=1)
+
+
+class FormRequest(BaseModel):
+    size: int = Field(ge=1)  # the size of the file the browser is about to send
 
 
 class BulkEdit(BaseModel):
@@ -503,7 +514,7 @@ def _routes(app: FastAPI) -> None:
         })
         response.set_cookie(COOKIE, token, httponly=True, secure=s.settings.cookie_secure, samesite="strict",
                             max_age=int(s.settings.session_hours * 3600), path="/")
-        return {"user": body.username, "tenant": s.tenant.public_summary(), "perms": perms.summary, "scheduler": scheduler}
+        return _me(s, body.username, perms.summary, scheduler)
 
     @app.post("/api/logout")
     def logout(response: Response, request: Request, s: Services = Depends(svc)):
@@ -526,7 +537,7 @@ def _routes(app: FastAPI) -> None:
 
     @app.get("/api/me")
     def me(sess: Session = Depends(current_session), s: Services = Depends(svc)):
-        return {"user": sess.user, "tenant": s.tenant.public_summary(), "perms": sess.perms, "scheduler": sess.scheduler}
+        return _me(s, sess.user, sess.perms, sess.scheduler)
 
     # ---- authority autocomplete (existing terms only) ------------------------------------
     @app.get("/api/authorities")
@@ -778,6 +789,23 @@ def _routes(app: FastAPI) -> None:
         rows = s.storage.add_rows(job_id, new)
         return {"rows": [{**r, "uploadForm": _upload_form(s, r["s3Key"], f.size, r["contentType"])}
                          for r, f in zip(rows, body.files)]}
+
+    @app.post("/api/jobs/{job_id}/rows/{n}/upload-form")
+    def upload_form(job_id: str, n: int, body: FormRequest, sess: Session = Depends(editor_session), s: Services = Depends(svc)):
+        """A new presigned POST for a document whose file hasn't been sent yet (design: Browser uploads, "Sign"). Each
+        form expires after about 15 minutes, so the page asks for a fresh one just before sending a file whose form
+        got old while it waited its turn. Same staged key, size and type; the row isn't changed."""
+        job = _job_or_404(s, sess, job_id)
+        _editable(job, sess)
+        row = s.storage.get_row(job_id, n) or _404()
+        if (row.get("upload") or {}).get("s") == "done":
+            raise HTTPException(409, "This document's file is already uploaded.")
+        if not row.get("s3Key"):
+            raise HTTPException(409, "This document has no file waiting to be uploaded.")
+        if body.size != row["size"]:
+            raise HTTPException(422, f"This isn't the file this document was added with ({row.get('fileOriginal') or row['file']}): "
+                                     "the size is different. Use Retry to choose it again.")
+        return {"uploadForm": _upload_form(s, row["s3Key"], row["size"], row["contentType"])}
 
     @app.post("/api/jobs/{job_id}/rows/{n}/uploaded")
     def uploaded(job_id: str, n: int, background: BackgroundTasks, sess: Session = Depends(editor_session), s: Services = Depends(svc)):
