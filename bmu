@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# ./bmu — start, stop and open the BMU's environments, side by side.
+#
+#   ./bmu up sim        local stack with the simulated CollectionSpace and Demo tools  → http://localhost:5173
+#   ./bmu up qa         local stack against the PAHMA QA tenant (real records!)        → http://localhost:5273
+#   ./bmu down sim|qa|all
+#   ./bmu status        which environments are running, and their addresses
+#   ./bmu logs sim|qa [service]     follow the logs (services: web, worker, frontend, fakecspace, s3, dynamodb)
+#   ./bmu open sim|qa|aws|mockup|mockup-hosted|home
+#   ./bmu urls          every address, including the UI mockup and AWS
+#
+# Each local environment is its own Docker Compose project (bmu-sim, bmu-qa) with its own ports, data, environment
+# label (shown in the app's header) and session cookie, so both can run at once without signing each other out.
+# Both need .env with BMU_SESSION_KEY_B64 and BMU_JOB_KEY_B64 (see README, Run it locally). Nothing here holds a
+# password: in the QA environment you sign in with your own QA account, in the browser.
+set -euo pipefail
+cd "$(dirname "$0")"
+
+# ---- the environments ------------------------------------------------------------------------------------------
+QA_CSPACE_URL="${BMU_QA_CSPACE_URL:-https://pahma.qa.collectionspace.org}"
+AWS_DEV_URL="${BMU_AWS_DEV_URL:-}"   # set once the AWS dev environment exists (or export BMU_AWS_DEV_URL)
+MOCKUP_FILE="docs/mockup/bmu-mockup.html"
+MOCKUP_HOSTED_URL="https://claude.ai/artifact/6zGCrZhzu2uZzu8s16rLWc"   # private until shared from its Share menu
+
+# Sets the variables docker-compose.yml reads, for one local environment.
+env_settings() {
+  case "$1" in
+    sim)
+      export BMU_UI_PORT=5173 BMU_API_PORT=8000 BMU_S3_PORT=9000 BMU_DYNAMODB_PORT=8001 BMU_SIM_PORT=8180
+      export BMU_CSPACE_URL="http://fakecspace:8180" BMU_DEMO=true BMU_COOKIE_NAME=bmu_session
+      export BMU_ENV_LABEL="Local · simulated CollectionSpace"
+      export BMU_ALWAYS_RUN_TIME="${BMU_ALWAYS_RUN_TIME:-false}" ;;
+    qa)
+      export BMU_UI_PORT=5273 BMU_API_PORT=8100 BMU_S3_PORT=9100 BMU_DYNAMODB_PORT=8101 BMU_SIM_PORT=8280
+      export BMU_CSPACE_URL="$QA_CSPACE_URL" BMU_DEMO=false BMU_COOKIE_NAME=bmu_session_qa
+      export BMU_ENV_LABEL="Local · PAHMA QA"
+      export BMU_ALWAYS_RUN_TIME="${BMU_ALWAYS_RUN_TIME:-false}" ;;
+    *) echo "Unknown environment '$1': use sim or qa." >&2; exit 2 ;;
+  esac
+}
+ui_port() { case "$1" in sim) echo 5173 ;; qa) echo 5273 ;; esac; }
+
+compose() {  # compose <env> <args...>
+  local env="$1"; shift
+  env_settings "$env"
+  docker compose -p "bmu-$env" "$@"
+}
+
+open_url() {
+  if command -v open >/dev/null 2>&1; then open "$1"
+  elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$1" >/dev/null 2>&1 &
+  else echo "$1"; fi
+}
+
+running() { [ -n "$(docker compose -p "bmu-$1" ps -q 2>/dev/null)" ]; }
+
+# ---- commands ----------------------------------------------------------------------------------------------------
+cmd="${1:-help}"; shift || true
+case "$cmd" in
+  up)
+    env="${1:-sim}"
+    env_settings "$env"
+    [ -f .env ] || { echo "No .env yet: cp .env.example .env and put in the two keys (see README, Run it locally)." >&2; exit 1; }
+    compose "$env" up -d --build
+    port="$(ui_port "$env")"
+    printf 'Waiting for http://localhost:%s ' "$port"
+    for _ in $(seq 1 90); do
+      if curl -fs -o /dev/null "http://localhost:$port/"; then echo; break; fi
+      printf '.'; sleep 2
+    done
+    echo "$BMU_ENV_LABEL is up: http://localhost:$port   (./bmu open $env)"
+    [ "$env" = qa ] && echo "Careful: jobs run here create real records in $QA_CSPACE_URL, and they stay."
+    exit 0 ;;
+  down)
+    env="${1:-}"
+    case "$env" in
+      sim|qa) compose "$env" down ;;
+      all) for e in sim qa; do running "$e" && compose "$e" down; done; true ;;
+      *) echo "Usage: ./bmu down sim|qa|all" >&2; exit 2 ;;
+    esac ;;
+  status)
+    for e in sim qa; do
+      if running "$e"; then echo "$e: running  http://localhost:$(ui_port "$e")"; else echo "$e: stopped  (./bmu up $e)"; fi
+    done
+    if [ -n "$AWS_DEV_URL" ]; then echo "aws: $AWS_DEV_URL"; else echo "aws: not deployed yet"; fi ;;
+  logs)
+    env="${1:-sim}"; shift || true
+    compose "$env" logs -f --tail 100 "$@" ;;
+  open)
+    case "${1:-home}" in
+      sim|qa) open_url "http://localhost:$(ui_port "$1")" ;;
+      aws) if [ -n "$AWS_DEV_URL" ]; then open_url "$AWS_DEV_URL"; else echo "The AWS dev environment isn't deployed yet (set BMU_AWS_DEV_URL)." >&2; exit 1; fi ;;
+      mockup) open_url "$PWD/$MOCKUP_FILE" ;;
+      mockup-hosted) open_url "$MOCKUP_HOSTED_URL" ;;
+      home) open_url "$PWD/docs/start.html" ;;
+      *) echo "Usage: ./bmu open sim|qa|aws|mockup|mockup-hosted|home" >&2; exit 2 ;;
+    esac ;;
+  urls)
+    echo "UI mockup (this repo):  $PWD/$MOCKUP_FILE"
+    echo "UI mockup (hosted):     $MOCKUP_HOSTED_URL"
+    echo "Local · simulator:      http://localhost:5173   (./bmu up sim)"
+    echo "Local · PAHMA QA:       http://localhost:5273   (./bmu up qa)"
+    echo "AWS dev:                ${AWS_DEV_URL:-not deployed yet}"
+    echo "Start page:             $PWD/docs/start.html   (./bmu open home)" ;;
+  help|-h|--help)
+    sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *) echo "Unknown command '$cmd'. ./bmu help lists them." >&2; exit 2 ;;
+esac

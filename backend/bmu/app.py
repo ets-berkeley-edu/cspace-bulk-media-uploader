@@ -30,7 +30,6 @@ from .tenant import Tenant, load_tenant
 
 log = logging.getLogger("bmu.app")
 
-COOKIE = "bmu_session"
 CSRF_HEADER = "x-bmu"
 # Only drafts are scheduled. A job that needs attention or failed goes to Drafts first (Fix and reschedule).
 RESCHEDULABLE = ("Draft",)
@@ -144,7 +143,7 @@ def current_session(request: Request, s: Services = Depends(svc)) -> Session:
     """The signed-in session. Design (Login and session): an idle timeout (30 minutes) and an absolute one
     (8 hours) bound how long a password sits in the session store. Background refreshes (X-BMU-Poll) don't count
     as activity, so an open tab left alone still signs out."""
-    token = request.cookies.get(COOKIE)
+    token = request.cookies.get(s.settings.cookie_name)
     item = s.storage.get_session(_hash(token)) if token else None
     if not item:
         raise HTTPException(401, "Please sign in with your CollectionSpace account.")
@@ -331,6 +330,15 @@ def _after_rows_deleted(s: "Services", sess: "Session", job: dict, rows: list[di
     return {"others": _recheck(s, sess, job_id, targets=set())["changed"]}
 
 
+SIMULATORS = {"localhost", "127.0.0.1", "fakecspace", "fake"}
+
+
+def real_cspace(url: str) -> bool:
+    """Whether the BMU talks to a real CollectionSpace server, not the local simulator (backend/fakecspace)."""
+    from urllib.parse import urlparse
+    return (urlparse(url).hostname or "") not in SIMULATORS
+
+
 def _upload_form(s: "Services", key: str, size: int, content_type: str) -> dict:
     """The presigned POST the browser sends a file with (design: Browser uploads). In a demo with a browser upload
     speed set (Demo tools), it goes through the web app instead, which passes it on to S3 at that speed."""
@@ -487,6 +495,12 @@ def _routes(app: FastAPI) -> None:
     def health():
         return {"ok": True}
 
+    @app.get("/api/env")
+    def environment(s: Services = Depends(svc)):
+        """Which environment this is, for the sign-in page and the header (no sign-in needed): its label, and
+        whether it talks to a real CollectionSpace (records created there stay), so the page can say so."""
+        return {"label": s.settings.env_label, "realCollectionSpace": real_cspace(s.settings.cspace_url)}
+
     # ---- sign-in (Basic Auth checked against CollectionSpace) ----------------------------
     @app.post("/api/login")
     def login(body: LoginBody, response: Response, s: Services = Depends(svc)):
@@ -512,13 +526,13 @@ def _routes(app: FastAPI) -> None:
             "expires": int(expires), "lastSeen": now(),
             "password": s.crypto.encrypt("session", body.password, {"user": body.username, "session": key}),
         })
-        response.set_cookie(COOKIE, token, httponly=True, secure=s.settings.cookie_secure, samesite="strict",
+        response.set_cookie(s.settings.cookie_name, token, httponly=True, secure=s.settings.cookie_secure, samesite="strict",
                             max_age=int(s.settings.session_hours * 3600), path="/")
         return _me(s, body.username, perms.summary, scheduler)
 
     @app.post("/api/logout")
     def logout(response: Response, request: Request, s: Services = Depends(svc)):
-        token = request.cookies.get(COOKIE)
+        token = request.cookies.get(s.settings.cookie_name)
         if token:
             key = _hash(token)
             item = s.storage.get_session(key)
@@ -527,7 +541,7 @@ def _routes(app: FastAPI) -> None:
                     if j.get("editingSession") == key:
                         s.storage.close_draft(j["id"], key)
             s.storage.delete_session(key)
-        response.delete_cookie(COOKIE, path="/")
+        response.delete_cookie(s.settings.cookie_name, path="/")
         return {"ok": True}
 
     @app.get("/api/failures")

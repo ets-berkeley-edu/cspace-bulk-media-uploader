@@ -39,7 +39,18 @@ if (typeof window !== "undefined") {
   });
 }
 
+// Which environment this is (local with the simulator, local against PAHMA QA, AWS): shown on the sign-in page and
+// in the header, and in the browser tab's title, so it's always clear which one you're using.
+const env = ref<{ label: string; realCollectionSpace: boolean } | null>(null);
+const envTitle = computed(() => (env.value?.realCollectionSpace
+  ? "Records you create here are created in a real CollectionSpace, and stay there"
+  : "Uses the simulated CollectionSpace: nothing reaches a real server"));
 onMounted(async () => {
+  api.env().then((e) => {
+    env.value = e;
+    if (e.label && typeof document !== "undefined") document.title = `BMU · ${e.label}`;
+  }).catch(() => undefined);
+
   try {
     me.value = await api.me();
   } catch (e) {
@@ -110,6 +121,8 @@ async function scheduled(j: Job) {
   <div class="page">
     <p v-if="loading" class="muted">Loading…</p>
     <template v-else-if="!me">
+      <div v-if="env?.label" class="env-line"><span class="badge env-badge" :class="env.realCollectionSpace ? 'b-warn' : 'b-muted'"
+        :title="envTitle">{{ env.label }}</span></div>
       <div v-if="notice" class="msg msg-warn login-notice" role="status">{{ notice }}</div>
       <LoginForm @signed-in="me = $event; notice = ''" />
     </template>
@@ -118,6 +131,7 @@ async function scheduled(j: Job) {
       <p class="subtitle">Prototype · creates Media records, files, Objects and Relations in CollectionSpace using your own account.</p>
       <div class="bar">
         <strong>{{ me.tenant.name }}</strong>
+        <span v-if="env?.label" class="badge env-badge" :class="env.realCollectionSpace ? 'b-warn' : 'b-muted'" :title="envTitle">{{ env.label }}</span>
         <span class="muted">Signed in as {{ me.user }}</span>
         <span v-if="editWhy" class="badge b-warn" :title="editWhy">View only: your account can't create and update Media records</span>
         <span class="spacer"></span>
