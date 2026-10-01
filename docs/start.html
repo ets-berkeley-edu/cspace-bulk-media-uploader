@@ -58,8 +58,10 @@
     <section class="card">
       <span class="tag warn">AWS</span>
       <h2>AWS dev deployment</h2>
-      <p>The same app, deployed to AWS.</p>
-      <p class="off">Not deployed yet. Its address goes here, and in <code>./bmu</code> (<code>BMU_AWS_DEV_URL</code>).</p>
+      <p>The same app, deployed to AWS, against the PAHMA QA tenant (real records). Deploy it with <code>./bmu aws deploy</code>;
+        it's open only to listed addresses.</p>
+      <p class="off">Its address is new with each environment, so it isn't linked here: <code>./bmu open aws</code> opens it,
+        and <code>./bmu aws url</code> prints it.</p>
     </section>
   </div>
   <footer><code>./bmu status</code> shows which local environments are running; <code>./bmu down all</code> stops them. Both can run at once.</footer>

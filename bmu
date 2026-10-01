@@ -8,6 +8,7 @@
 #   ./bmu logs sim|qa [service]     follow the logs (services: web, worker, frontend, fakecspace, s3, dynamodb)
 #   ./bmu open sim|qa|aws|mockup|mockup-hosted|home
 #   ./bmu urls          every address, including the UI mockup and AWS
+#   ./bmu aws ...       deploy to AWS and look after it: ./bmu aws help (deploy/README.md)
 #
 # Each local environment is its own Docker Compose project (bmu-sim, bmu-qa) with its own ports, data, environment
 # label (shown in the app's header) and session cookie, so both can run at once without signing each other out.
@@ -18,7 +19,9 @@ cd "$(dirname "$0")"
 
 # ---- the environments ------------------------------------------------------------------------------------------
 QA_CSPACE_URL="${BMU_QA_CSPACE_URL:-https://pahma.qa.collectionspace.org}"
-AWS_DEV_URL="${BMU_AWS_DEV_URL:-}"   # set once the AWS dev environment exists (or export BMU_AWS_DEV_URL)
+# The AWS environment's address: saved by ./bmu aws deploy (BMU_AWS_ENV picks the environment; BMU_AWS_DEV_URL overrides)
+AWS_ENV="${BMU_AWS_ENV:-personal-dev}"
+AWS_DEV_URL="${BMU_AWS_DEV_URL:-$(cat "deploy/environments/$AWS_ENV.url" 2>/dev/null || true)}"
 MOCKUP_FILE="docs/mockup/bmu-mockup.html"
 MOCKUP_HOSTED_URL="https://claude.ai/artifact/6zGCrZhzu2uZzu8s16rLWc"   # private until shared from its Share menu
 
@@ -82,14 +85,14 @@ case "$cmd" in
     for e in sim qa; do
       if running "$e"; then echo "$e: running  http://localhost:$(ui_port "$e")"; else echo "$e: stopped  (./bmu up $e)"; fi
     done
-    if [ -n "$AWS_DEV_URL" ]; then echo "aws: $AWS_DEV_URL"; else echo "aws: not deployed yet"; fi ;;
+    if [ -n "$AWS_DEV_URL" ]; then echo "aws ($AWS_ENV): $AWS_DEV_URL   (./bmu aws status checks it)"; else echo "aws ($AWS_ENV): not deployed yet (./bmu aws deploy)"; fi ;;
   logs)
     env="${1:-sim}"; shift || true
     compose "$env" logs -f --tail 100 "$@" ;;
   open)
     case "${1:-home}" in
       sim|qa) open_url "http://localhost:$(ui_port "$1")" ;;
-      aws) if [ -n "$AWS_DEV_URL" ]; then open_url "$AWS_DEV_URL"; else echo "The AWS dev environment isn't deployed yet (set BMU_AWS_DEV_URL)." >&2; exit 1; fi ;;
+      aws) if [ -n "$AWS_DEV_URL" ]; then open_url "$AWS_DEV_URL"; else echo "The AWS environment '$AWS_ENV' isn't deployed from this computer yet (./bmu aws deploy)." >&2; exit 1; fi ;;
       mockup) open_url "$PWD/$MOCKUP_FILE" ;;
       mockup-hosted) open_url "$MOCKUP_HOSTED_URL" ;;
       home) open_url "$PWD/docs/start.html" ;;
@@ -100,9 +103,11 @@ case "$cmd" in
     echo "UI mockup (hosted):     $MOCKUP_HOSTED_URL"
     echo "Local · simulator:      http://localhost:5173   (./bmu up sim)"
     echo "Local · PAHMA QA:       http://localhost:5273   (./bmu up qa)"
-    echo "AWS dev:                ${AWS_DEV_URL:-not deployed yet}"
+    printf "%-24s%s\n" "AWS ($AWS_ENV):" "${AWS_DEV_URL:-not deployed yet (./bmu aws deploy)}"
     echo "Start page:             $PWD/docs/start.html   (./bmu open home)" ;;
+  aws)
+    exec deploy/aws.sh "$@" ;;
   help|-h|--help)
-    sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//' ;;
   *) echo "Unknown command '$cmd'. ./bmu help lists them." >&2; exit 2 ;;
 esac

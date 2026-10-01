@@ -9,3 +9,6 @@ venv/
 node_modules/
 frontend/dist/
 .DS_Store
+# ./bmu aws: per-environment account number and allowed addresses, and the deployed address
+deploy/environments/*.local.conf
+deploy/environments/*.url

@@ -1,0 +1,14 @@
+# What docker build never sends (deploy/Dockerfile builds from the repository root). Keep keys and local state out.
+.git
+**/.env
+**/.env.*
+**/*.env
+**/node_modules
+**/__pycache__
+**/.pytest_cache
+**/*.egg-info
+frontend/dist
+deploy/environments/*.local.conf
+deploy/environments/*.url
+docs
+.DS_Store

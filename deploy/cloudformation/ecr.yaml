@@ -1,0 +1,31 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  BMU container image repository (stack bmu-<env>-ecr). Its own stack, so the image can be pushed before the main
+  stack (bmu-<env>) starts tasks that run it. Deployed by ./bmu aws deploy.
+
+Parameters:
+  EnvName:
+    Type: String
+    Description: Environment name within the account, used in every resource name (bmu-<env>-...).
+    AllowedPattern: "^[a-z][a-z0-9-]{1,15}$"
+
+Resources:
+  Repository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub bmu-${EnvName}
+      ImageTagMutability: IMMUTABLE          # every deploy pushes a new tag (commit and time)
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      EmptyOnDelete: true                    # ./bmu aws destroy removes the images with the repository
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {"rules": [{"rulePriority": 1, "description": "Keep the 10 newest images",
+                      "selection": {"tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 10},
+                      "action": {"type": "expire"}}]}
+
+Outputs:
+  RepositoryUri:
+    Value: !GetAtt Repository.RepositoryUri
