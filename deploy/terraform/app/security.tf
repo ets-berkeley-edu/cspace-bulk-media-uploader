@@ -1,15 +1,23 @@
+# CloudFront reaches the load balancer through its VPC origin, but the connections keep CloudFront's own source
+# addresses, so a rule for the VPC's range doesn't match them. AWS publishes those addresses as a managed prefix list.
+data "aws_ec2_managed_prefix_list" "cloudfront_origin_facing" {
+  name = "com.amazonaws.global.cloudfront.origin-facing"
+}
+
 resource "aws_security_group" "alb" {
   name        = "${local.name}-alb"
-  description = "BMU load balancer. The CloudFront VPC origin connects from inside the VPC."
+  description = "BMU load balancer. Only CloudFront connects, through its VPC origin."
   vpc_id      = aws_vpc.main.id
 
   tags = { Name = "${local.name}-alb" }
 }
 
-resource "aws_vpc_security_group_ingress_rule" "alb_from_vpc" {
+# The prefix list counts as about 55 rules toward the security group's limit of 60, so this group has room for
+# little else.
+resource "aws_vpc_security_group_ingress_rule" "alb_from_cloudfront" {
   security_group_id = aws_security_group.alb.id
-  description       = "CloudFront VPC origin"
-  cidr_ipv4         = var.vpc_cidr
+  description       = "CloudFront (origin-facing addresses)"
+  prefix_list_id    = data.aws_ec2_managed_prefix_list.cloudfront_origin_facing.id
   ip_protocol       = "tcp"
   from_port         = 80
   to_port           = 80
