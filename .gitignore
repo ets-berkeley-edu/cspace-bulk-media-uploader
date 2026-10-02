@@ -12,3 +12,8 @@ frontend/dist/
 # ./bmu aws: per-environment account number and allowed addresses, and the deployed address
 deploy/environments/*.local.conf
 deploy/environments/*.url
+# Terraform: downloaded providers, state and saved plans (state lives in S3; see deploy/README.md)
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan

@@ -12,3 +12,5 @@ deploy/environments/*.local.conf
 deploy/environments/*.url
 docs
 .DS_Store
+**/.terraform
+**/*.tfstate*
