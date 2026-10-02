@@ -5,8 +5,10 @@ data "aws_ec2_managed_prefix_list" "cloudfront_origin_facing" {
 }
 
 resource "aws_security_group" "alb" {
-  name        = "${local.name}-alb"
-  description = "BMU load balancer. Only CloudFront connects, through its VPC origin."
+  name = "${local.name}-alb"
+  # AWS can't change a security group's description: a new description means a new group, and this one can't be
+  # deleted while the load balancer uses it. So the text stays as first deployed, though only CloudFront connects.
+  description = "BMU load balancer. The CloudFront VPC origin connects from inside the VPC."
   vpc_id      = aws_vpc.main.id
 
   tags = { Name = "${local.name}-alb" }
