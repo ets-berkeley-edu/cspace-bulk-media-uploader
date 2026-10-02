@@ -22,6 +22,7 @@ dependencies = [
 dev = [
   "pytest>=8",
   "moto[server,dynamodb,s3,kms]>=5",
+  "python-hcl2>=7",  # reads deploy/terraform in tests/test_deploy.py
 ]
 
 [build-system]

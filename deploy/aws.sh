@@ -1,23 +1,26 @@
 #!/usr/bin/env bash
 # ./bmu aws — deploy the BMU to AWS and look after it. Run through ./bmu (./bmu aws help).
 #
-#   ./bmu aws deploy        build the image, push it and create or update the stacks; prints the address
-#   ./bmu aws status        the stacks, the services' tasks and the image they run
+#   ./bmu aws deploy        build the image, push it, then show Terraform's plan and apply it; prints the address
+#   ./bmu aws plan          show what a deploy of the running image would change, without changing anything
+#   ./bmu aws status        the services' tasks, the image they run and the allowed addresses
 #   ./bmu aws url           the address
 #   ./bmu aws logs web|worker   follow a service's logs (the last 30 minutes first)
 #   ./bmu aws pause         stop both services to save money (the data stays); ./bmu aws resume starts them
 #   ./bmu aws allow-my-ip   add this computer's current address to the allowlist
 #   ./bmu aws destroy       delete everything in AWS for this environment, data included (asks first)
+#   ./bmu aws init          point Terraform at this environment's state, to run terraform commands yourself
 #
 # Which environment: --env NAME or BMU_AWS_ENV (default personal-dev). Its settings are in
 # deploy/environments/NAME.conf; NAME.local.conf (not committed) holds the account number and allowed addresses.
 # Sign in first with: aws sso login --profile <the environment's AWS_PROFILE>. Nothing here handles a password or key.
-# Works with the macOS bash (3.2).
+# Terraform (deploy/terraform) creates everything; its state is in an S3 bucket in the same account, which the first
+# deploy creates. BMU_AWS_YES=1 skips Terraform's "yes" prompt. Works with the macOS bash (3.2).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 ENV_DIR=deploy/environments
-CFN_DIR=deploy/cloudformation
+TF_DIR=deploy/terraform
 
 die() { echo "$*" >&2; exit 1; }
 
@@ -46,9 +49,11 @@ load_env() {
   # shellcheck disable=SC1090
   [ -f "$LOCAL" ] && . "$LOCAL"
   : "${AWS_PROFILE:?set AWS_PROFILE in $CONF}" "${AWS_REGION:?set AWS_REGION in $CONF}" "${BMU_ENV_NAME:?set BMU_ENV_NAME in $CONF}"
-  STACK="bmu-$BMU_ENV_NAME"
-  ECR_STACK="bmu-$BMU_ENV_NAME-ecr"
-  export AWS_PAGER=""
+  NAME="bmu-$BMU_ENV_NAME"   # the cluster's name and the prefix of every resource
+  export AWS_PAGER="" AWS_PROFILE AWS_REGION   # Terraform signs in with the same profile
+  # Keys in the shell would win over the profile in Terraform (though not in "aws --profile"): never use them here.
+  unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+  export TF_IN_AUTOMATION=1
 }
 
 aws_() { aws --profile "$AWS_PROFILE" --region "$AWS_REGION" "$@"; }
@@ -73,6 +78,7 @@ check_account() {
   elif [ "$who" != "$ACCOUNT_ID" ]; then
     die "Profile $AWS_PROFILE is signed in to account $who, but '$ENV' is account $ACCOUNT_ID ($LOCAL). Stopped."
   fi
+  STATE_BUCKET="bmu-tfstate-$ACCOUNT_ID-$AWS_REGION"
 }
 
 my_ip() {
@@ -90,110 +96,149 @@ ensure_allowlist() {
   save_local ALLOWED_CIDRS "$ip/32"; ALLOWED_CIDRS="$ip/32"
 }
 
-stack_status() { aws_ cloudformation describe-stacks --stack-name "$1" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo NONE; }
-output() { aws_ cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text; }
+# ---- Terraform ----------------------------------------------------------------------------------------------------
+need_terraform() {
+  command -v terraform >/dev/null || die "Terraform isn't installed. On a Mac: brew tap hashicorp/tap && brew install hashicorp/tap/terraform"
+}
 
-# Change some of the stack's parameters, keeping the template and every other value as deployed.
-update_params() {  # update_params Key=Value ...
-  local keys params=() k found kv json out
-  [ "$(stack_status "$STACK")" != NONE ] || die "'$ENV' isn't deployed (./bmu aws deploy)."
-  keys="$(aws_ cloudformation describe-stacks --stack-name "$STACK" --query 'Stacks[0].Parameters[].ParameterKey' --output text)"
-  for k in $keys; do
-    found=""
-    for kv in "$@"; do [ "${kv%%=*}" = "$k" ] && found="${kv#*=}"; done
-    # JSON, since values can hold commas (AllowedCidrs) that the CLI's shorthand syntax would split
-    if [ -n "$found" ]; then
-      found="$(printf '%s' "$found" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-      params+=("{\"ParameterKey\":\"$k\",\"ParameterValue\":\"$found\"}")
+# One state bucket per account and region, shared by the account's BMU environments (one key each). Versioned, so an
+# earlier state can be recovered; private; encrypted. Terraform can't create the bucket its own state lives in.
+ensure_state_bucket() {
+  if ! aws_ s3api head-bucket --bucket "$STATE_BUCKET" >/dev/null 2>&1; then
+    echo "Creating the Terraform state bucket s3://$STATE_BUCKET (once per account)"
+    if [ "$AWS_REGION" = us-east-1 ]; then
+      aws_ s3api create-bucket --bucket "$STATE_BUCKET" >/dev/null
     else
-      params+=("{\"ParameterKey\":\"$k\",\"UsePreviousValue\":true}")
+      aws_ s3api create-bucket --bucket "$STATE_BUCKET" --create-bucket-configuration "LocationConstraint=$AWS_REGION" >/dev/null
     fi
-  done
-  json="[$(IFS=,; echo "${params[*]}")]"
-  if ! out="$(aws_ cloudformation update-stack --stack-name "$STACK" --use-previous-template \
-                --capabilities CAPABILITY_NAMED_IAM --parameters "$json" 2>&1)"; then
-    case "$out" in *"No updates are to be performed"*) echo "Nothing to change."; return 0 ;; *) die "$out" ;; esac
   fi
-  echo "Updating stack $STACK ..."
-  aws_ cloudformation wait stack-update-complete --stack-name "$STACK" || die "The update didn't finish; see the stack's Events in the CloudFormation console."
+  # Set every time (they change nothing when already set), so an interrupted first run is completed by the next.
+  aws_ s3api put-public-access-block --bucket "$STATE_BUCKET" \
+    --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+  aws_ s3api put-bucket-versioning --bucket "$STATE_BUCKET" --versioning-configuration Status=Enabled
+  aws_ s3api put-bucket-tagging --bucket "$STATE_BUCKET" --tagging 'TagSet=[{Key=project,Value=bmu}]'
 }
 
-# A stack whose first creation failed can't be updated, only deleted; nothing of it is left but the record. Other
-# failed states need a person: say so instead of passing on CloudFormation's error.
-clear_failed_create() {
-  local st; st="$(stack_status "$1")"
-  case "$st" in
-    ROLLBACK_COMPLETE|ROLLBACK_FAILED)
-      echo "The last attempt to create $1 failed ($st); removing what's left of it first."
-      aws_ cloudformation delete-stack --stack-name "$1"
-      aws_ cloudformation wait stack-delete-complete --stack-name "$1" || die "Couldn't remove $1; see its Events in the CloudFormation console." ;;
-    *_IN_PROGRESS)
-      die "Stack $1 is busy ($st). Wait for it to finish (CloudFormation console, or ./bmu aws status), then try again." ;;
-    UPDATE_ROLLBACK_FAILED|DELETE_FAILED)
-      die "Stack $1 is stuck ($st). See its Events in the CloudFormation console: an update rollback can be continued there (Stack actions, Continue update rollback); a failed deletion is finished with ./bmu aws destroy." ;;
-  esac
+tf() {  # tf registry|app <terraform arguments>
+  local part="$1"; shift
+  terraform -chdir="$TF_DIR/$part" "$@"
 }
 
-wait_services() {
-  echo "Waiting for the web app and the worker to be running ..."
-  aws_ ecs wait services-stable --cluster "$STACK" --services web worker ||
-    die "The services didn't settle. See ./bmu aws status and ./bmu aws logs web|worker."
+tf_init() {  # tf_init registry|app: point Terraform at this environment's state (the lock is a file beside it)
+  tf "$1" init -input=false -reconfigure \
+    -backend-config="bucket=$STATE_BUCKET" -backend-config="key=bmu/$BMU_ENV_NAME/$1.tfstate" \
+    -backend-config="region=$AWS_REGION" -backend-config="use_lockfile=true" >/dev/null ||
+    die "terraform init failed for $1. Run it again without '>/dev/null' to see why: ./bmu aws init"
+}
+
+cidr_list() {  # "a/32,b/24" -> ["a/32","b/24"]
+  printf '["%s"]' "$(printf '%s' "$ALLOWED_CIDRS" | sed 's/ //g; s/,/","/g')"
+}
+
+# The app configuration's variables. app_vars IMAGE RUNNING fills the array TF_VARS.
+app_vars() {
+  TF_VARS=(
+    -var "account_id=$ACCOUNT_ID" -var "region=$AWS_REGION" -var "env_name=$BMU_ENV_NAME" -var "image_uri=$1" -var "running=$2"
+    -var "allowed_cidrs=$(cidr_list)" -var "cspace_url=$CSPACE_URL" -var "tenant=$TENANT"
+    -var "env_label=$ENV_LABEL" -var "always_run_time=$ALWAYS_RUN_TIME" -var "protect_data=${PROTECT_DATA:-false}"
+  )
+}
+
+approve() { [ "${BMU_AWS_YES:-}" = 1 ] && echo "-auto-approve" || true; }
+
+deployed_image() {  # the image the services run now; empty if the app was never applied
+  tf app output -raw image_uri 2>/dev/null || true
+}
+
+need_deployed() {
+  IMAGE="$(deployed_image)"
+  case "$IMAGE" in ""|*"No outputs"*|*Warning*) die "'$ENV' isn't deployed (./bmu aws deploy)." ;; esac
 }
 
 # ---- commands -----------------------------------------------------------------------------------------------------
+prepare() { load_env; check_account; need_terraform; ensure_state_bucket; }
+
+# For commands that only look: no state bucket means nothing was ever deployed, and nothing is created.
+look() {
+  load_env; check_account; need_terraform
+  aws_ s3api head-bucket --bucket "$STATE_BUCKET" >/dev/null 2>&1 || { echo "'$ENV' isn't deployed (./bmu aws deploy)."; exit 0; }
+  tf_init app
+}
+
+app_url() {  # empty while a first deploy hasn't finished
+  tf app output -raw url 2>/dev/null || true
+}
+
 deploy() {
-  load_env; check_account; ensure_allowlist
+  load_env; check_account; ensure_allowlist; need_terraform
   command -v docker >/dev/null || die "Docker isn't installed or isn't on the PATH."
   docker info >/dev/null 2>&1 || die "Docker isn't running. Start Docker Desktop and try again."
-  local tag repo registry image url
+  ensure_state_bucket
+  local tag repo registry image url code
   tag="$(git rev-parse --short HEAD 2>/dev/null || echo nogit)"
   [ -z "$(git status --porcelain 2>/dev/null)" ] || tag="$tag-dirty"
   tag="$tag-$(date -u +%Y%m%d%H%M%S)"
 
-  echo "== 1/4 Image repository (stack $ECR_STACK)"
-  clear_failed_create "$ECR_STACK"
-  aws_ cloudformation deploy --stack-name "$ECR_STACK" --template-file "$CFN_DIR/ecr.yaml" \
-    --parameter-overrides "EnvName=$BMU_ENV_NAME" --tags project=bmu "environment=$BMU_ENV_NAME" --no-fail-on-empty-changeset
-  repo="$(aws_ cloudformation describe-stacks --stack-name "$ECR_STACK" --query "Stacks[0].Outputs[?OutputKey=='RepositoryUri'].OutputValue" --output text)"
+  echo "== 1/3 Image repository"
+  tf_init registry
+  tf registry apply -input=false -auto-approve -var "account_id=$ACCOUNT_ID" -var "region=$AWS_REGION" -var "env_name=$BMU_ENV_NAME"
+  repo="$(tf registry output -raw repository_url)"
   registry="${repo%%/*}"
   image="$repo:$tag"
 
-  echo "== 2/4 Image $image (linux/arm64)"
+  echo "== 2/3 Image $image (linux/arm64)"
   docker build --platform linux/arm64 -f deploy/Dockerfile -t "$image" .
   # The registry's short-lived token goes straight from the AWS CLI to Docker; it is never shown or saved here.
   aws_ ecr get-login-password | docker login --username AWS --password-stdin "$registry" >/dev/null
   docker push "$image"
 
-  echo "== 3/4 The BMU (stack $STACK). The first time takes about 15-25 minutes (CloudFront)."
-  clear_failed_create "$STACK"
-  aws_ cloudformation deploy --stack-name "$STACK" --template-file "$CFN_DIR/bmu.yaml" \
-    --capabilities CAPABILITY_NAMED_IAM --no-fail-on-empty-changeset \
-    --tags project=bmu "environment=$BMU_ENV_NAME" \
-    --parameter-overrides "EnvName=$BMU_ENV_NAME" "ImageUri=$image" "AllowedCidrs=$ALLOWED_CIDRS" \
-      "CSpaceUrl=$CSPACE_URL" "Tenant=$TENANT" "EnvLabel=$ENV_LABEL" "AlwaysRunTime=$ALWAYS_RUN_TIME" "Running=true"
+  echo "== 3/3 The BMU. Terraform shows its plan and asks before changing anything."
+  echo "   The first time takes about 15-25 minutes (CloudFront); it finishes when the web app and worker are running."
+  echo "   If a task can't start, Terraform waits up to 20 minutes before saying so: ./bmu aws logs web shows why sooner."
+  tf_init app
+  app_vars "$image" true
+  # shellcheck disable=SC2046
+  tf app apply -input=false $(approve) "${TF_VARS[@]}"
 
-  echo "== 4/4 Starting"
-  wait_services
-  url="$(output Url)"
+  url="$(app_url)"
   echo "$url" > "$URL_FILE"
-  local code; code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$url/api/health" || true)"
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$url/api/health" || true)"
   echo
   echo "$ENV_LABEL is up: $url   (./bmu open aws)"
   [ "$code" = 200 ] || echo "Note: $url/api/health answered $code. A new CloudFront address can take a few minutes to work everywhere."
   echo "Careful: jobs run here create real records in $CSPACE_URL, and they stay."
 }
 
+was_running() {  # true unless the environment is paused
+  [ "$(tf app output -raw running 2>/dev/null || true)" = false ] && echo false || echo true
+}
+
+plan() {
+  look; need_deployed
+  app_vars "$IMAGE" "$(was_running)"
+  tf app plan -input=false "${TF_VARS[@]}"
+}
+
+# Apply again with the running image: for a changed setting (pause, resume, the allowlist).
+reapply() {  # reapply RUNNING
+  prepare; tf_init app; need_deployed
+  app_vars "$IMAGE" "$1"
+  # shellcheck disable=SC2046
+  tf app apply -input=false $(approve) "${TF_VARS[@]}"
+}
+
 status() {
-  load_env; check_account
-  echo "Environment: $ENV (account $ACCOUNT_ID, $AWS_REGION)"
-  echo "Stacks: $ECR_STACK $(stack_status "$ECR_STACK"), $STACK $(stack_status "$STACK")"
-  [ "$(stack_status "$STACK")" != NONE ] || return 0
-  echo "Address: $(output Url)"
-  aws_ ecs describe-services --cluster "$STACK" --services web worker \
-    --query "services[].[serviceName, join('', ['running ', to_string(runningCount), ' of ', to_string(desiredCount)]), taskDefinition]" --output text |
-  while IFS="$(printf '\t')" read -r name counts td; do
-    echo "  $name: $counts  image $(aws_ ecs describe-task-definition --task-definition "$td" --query 'taskDefinition.containerDefinitions[0].image' --output text | sed 's#.*:##')"
-  done
+  look
+  local url
+  echo "Environment: $ENV (account $ACCOUNT_ID, $AWS_REGION); Terraform state in s3://$STATE_BUCKET/bmu/$BMU_ENV_NAME/"
+  IMAGE="$(deployed_image)"
+  case "$IMAGE" in ""|*"No outputs"*|*Warning*) echo "Not deployed (./bmu aws deploy)."; return 0 ;; esac
+  url="$(app_url)"
+  case "$url" in https://*) echo "Address: $url" ;; *) echo "Address: none yet. The last deploy didn't finish; run ./bmu aws deploy again." ;; esac
+  echo "Image:   ${IMAGE##*:}"
+  { aws_ ecs describe-services --cluster "$NAME" --services web worker \
+      --query "services[].[serviceName, join('', ['running ', to_string(runningCount), ' of ', to_string(desiredCount)])]" --output text 2>/dev/null || true; } |
+  while IFS="$(printf '\t')" read -r name counts; do echo "  $name: $counts"; done
   echo "Allowed addresses: $ALLOWED_CIDRS"
 }
 
@@ -204,65 +249,52 @@ logs() {
   aws_ logs tail "/bmu/$BMU_ENV_NAME/$svc" --follow --since 30m
 }
 
-empty_bucket() {  # every object version and delete marker; the stack can't delete a bucket that has any
-  local bucket="$1" batch
-  aws_ s3api head-bucket --bucket "$bucket" >/dev/null 2>&1 || return 0
-  echo "Emptying s3://$bucket ..."
-  while :; do
-    batch="$(aws_ s3api list-object-versions --bucket "$bucket" --max-items 1000 --output json \
-      --query '{Objects: ([Versions, DeleteMarkers][][].{Key: Key, VersionId: VersionId})[:1000], Quiet: `true`}')"
-    case "$batch" in *'"Key"'*) ;; *) break ;; esac
-    aws_ s3api delete-objects --bucket "$bucket" --delete "$batch" >/dev/null
-  done
-}
-
 destroy() {
-  load_env; check_account
+  prepare
   echo "This deletes the '$ENV' BMU in AWS account $ACCOUNT_ID: its jobs, staged files, audit entries, logs and images."
   echo "Records it created in CollectionSpace stay. The KMS keys are deleted after a 7-day waiting period."
   read -r -p "Type the environment's name ($ENV) to go ahead: " ok
   [ "$ok" = "$ENV" ] || die "Stopped; nothing was deleted."
-  if [ "$(stack_status "$STACK")" != NONE ]; then
-    local staging logs try
-    staging="$(output StagingBucket)"; logs="$(output LogsBucket)"
-    echo "Deleting stack $STACK (about 15-20 minutes: CloudFront is disabled first) ..."
-    for try in 1 2 3; do
-      # S3 delivers access logs late, so the logs bucket can fill again while the stack is being deleted: empty
-      # both and try again if the deletion stopped on a bucket that wasn't empty.
-      empty_bucket "$staging"; empty_bucket "$logs"
-      aws_ cloudformation delete-stack --stack-name "$STACK"
-      if aws_ cloudformation wait stack-delete-complete --stack-name "$STACK"; then break; fi
-      [ "$try" = 3 ] && die "The deletion didn't finish; see the stack's Events in the CloudFormation console, then run ./bmu aws destroy again."
-      # CloudFront removes its VPC origin's network interfaces in the background, which can briefly hold the VPC.
-      echo "Not finished yet (try $try of 3); waiting a few minutes, then emptying the buckets and trying again ..."
-      sleep 240
-    done
-  fi
-  if [ "$(stack_status "$ECR_STACK")" != NONE ]; then
-    echo "Deleting stack $ECR_STACK ..."
-    aws_ cloudformation delete-stack --stack-name "$ECR_STACK"
-    aws_ cloudformation wait stack-delete-complete --stack-name "$ECR_STACK"
-  fi
+  tf_init app
+  IMAGE="$(deployed_image)"
+  case "$IMAGE" in ""|*"No outputs"*|*Warning*) IMAGE=none ;; esac
+  [ -n "$ALLOWED_CIDRS" ] || ALLOWED_CIDRS="127.0.0.1/32"   # the variable must be set, even to destroy
+  app_vars "$IMAGE" false
+  echo "Destroying the BMU (about 15-20 minutes: CloudFront is disabled first) ..."
+  # CloudFront removes its VPC origin's network interfaces in the background, which can briefly hold the VPC.
+  tf app destroy -input=false -auto-approve "${TF_VARS[@]}" ||
+    die "The destroy didn't finish. Wait a few minutes and run ./bmu aws destroy again; Terraform continues where it stopped."
+  tf_init registry
+  tf registry destroy -input=false -auto-approve -var "account_id=$ACCOUNT_ID" -var "region=$AWS_REGION" -var "env_name=$BMU_ENV_NAME"
   rm -f "$URL_FILE"
   echo "Done. '$ENV' is gone from AWS (./bmu aws deploy creates it again)."
+  echo "The Terraform state bucket s3://$STATE_BUCKET is kept; it holds the (now empty) state and its history."
 }
 
 case "$CMD" in
   deploy) deploy ;;
+  plan) plan ;;
   status) status ;;
-  url) load_env; if [ -f "$URL_FILE" ]; then cat "$URL_FILE"; else check_account; output Url; fi ;;
+  url) load_env
+       if [ -f "$URL_FILE" ]; then cat "$URL_FILE"; else
+         look; u="$(app_url)"
+         case "$u" in https://*) echo "$u" ;; *) echo "'$ENV' isn't deployed (./bmu aws deploy)." ;; esac
+       fi ;;
   logs) logs "${1:-}" ;;
-  pause) load_env; check_account; update_params Running=false; echo "Paused: no tasks run (./bmu aws resume)." ;;
-  resume) load_env; check_account; update_params Running=true; wait_services; echo "Running: $(output Url)" ;;
+  pause) reapply false; echo "Paused: no tasks run (./bmu aws resume)." ;;
+  resume) reapply true; echo "Running: $(app_url)" ;;
   allow-my-ip)
-    load_env; check_account
+    load_env
     ip="$(my_ip)/32"
     case ",$ALLOWED_CIDRS," in *",$ip,"*) echo "$ip is already allowed." ; exit 0 ;; esac
     new="${ALLOWED_CIDRS:+$ALLOWED_CIDRS,}$ip"
-    save_local ALLOWED_CIDRS "$new"
-    if [ "$(stack_status "$STACK")" != NONE ]; then update_params "AllowedCidrs=$new"; fi
-    echo "Allowed: $new" ;;
+    save_local ALLOWED_CIDRS "$new"; ALLOWED_CIDRS="$new"
+    echo "Allowed: $new"
+    prepare; tf_init app
+    case "$(deployed_image)" in ""|*"No outputs"*|*Warning*) echo "Saved; it applies at the first deploy." ;; *) reapply "$(was_running)" ;; esac ;;
+  init) prepare; tf registry init -reconfigure -backend-config="bucket=$STATE_BUCKET" -backend-config="key=bmu/$BMU_ENV_NAME/registry.tfstate" -backend-config="region=$AWS_REGION" -backend-config="use_lockfile=true"
+        tf app init -reconfigure -backend-config="bucket=$STATE_BUCKET" -backend-config="key=bmu/$BMU_ENV_NAME/app.tfstate" -backend-config="region=$AWS_REGION" -backend-config="use_lockfile=true" ;;
   destroy) destroy ;;
-  help|-h|--help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//' ;;
+  help|-h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//' ;;
   *) die "Unknown command '$CMD'. ./bmu aws help lists them." ;;
 esac

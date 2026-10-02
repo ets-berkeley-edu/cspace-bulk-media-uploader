@@ -6,8 +6,8 @@ prototype: the image is built from this repository and runs on ECS Fargate. Demo
 - **One environment per account.** Each environment has a settings file in `deploy/environments/`.
   - `personal-dev.conf` is Richard's personal account and the default.
   - `ucb-dev.conf` is the UC Berkeley account. It is ready to fill in but not set up yet.
-- **Infrastructure as code.** Everything is created by two CloudFormation stacks, so nothing has to be clicked
-  together in the console, and the whole environment can be deleted and created again.
+- **Infrastructure as code.** Everything is created by Terraform (`deploy/terraform/`), so nothing has to be
+  clicked together in the console, and the whole environment can be deleted and created again.
 - **No keys or passwords in files.** You sign in with IAM Identity Center (`aws sso login`). The app's own
   secrets are KMS keys that never leave AWS.
 
@@ -15,21 +15,25 @@ prototype: the image is built from this repository and runs on ECS Fargate. Demo
 
 | Command | What it does |
 | --- | --- |
-| `./bmu aws deploy` | Builds the image, pushes it, creates or updates the stacks and waits until the app is up. Prints the address and saves it for `./bmu open aws`. |
-| `./bmu aws status` | Shows the stacks, the running tasks, the deployed image and the allowed addresses. |
+| `./bmu aws deploy` | Builds the image and pushes it, then shows Terraform's plan and, after you type `yes`, applies it and waits until the app is up. Prints the address and saves it for `./bmu open aws`. |
+| `./bmu aws plan` | Shows what a deploy of the running image would change, without changing anything. |
+| `./bmu aws status` | Shows the address, the running tasks, the deployed image and the allowed addresses. |
 | `./bmu aws url` | Prints the address. |
 | `./bmu aws logs web` / `worker` | Follows a service's logs, starting with the last 30 minutes. |
-| `./bmu aws pause` / `resume` | Stops or starts both services to save money. The data stays. |
-| `./bmu aws allow-my-ip` | Adds this computer's current address to the allowlist. |
+| `./bmu aws pause` / `resume` | Stops or starts both services to save money. The data stays. Terraform shows the change and asks first. |
+| `./bmu aws allow-my-ip` | Adds this computer's current address to the allowlist, and applies it. |
 | `./bmu aws destroy` | Deletes everything in AWS for the environment, data included. It asks for the environment's name first. |
 
 **Picking the environment.** Add `--env NAME`, or set `BMU_AWS_ENV`. The default is `personal-dev`.
+
+**Skipping the question.** `BMU_AWS_YES=1` applies without Terraform's `yes` prompt.
 
 ## First deploy
 
 **What you need on the Mac**
 - Docker Desktop, running.
 - AWS CLI v2.
+- Terraform 1.10 or later: `brew tap hashicorp/tap && brew install hashicorp/tap/terraform`.
 - A signed-in profile: `aws sso login --profile bmu-personal`. The sign-in lasts 8 hours.
 
 **Then run** `./bmu aws deploy`.
@@ -39,24 +43,26 @@ prototype: the image is built from this repository and runs on ECS Fargate. Demo
    then on refuses to deploy to any other account.
 2. **Allowlist.** It adds this computer's public address to the allowlist, in the same file. Everyone else gets
    a 403 from CloudFront.
-3. **Image repository.** It creates the image repository: stack `bmu-dev-ecr`, which takes about a minute.
-4. **Image.** It builds the image for ARM (Graviton) and pushes it. The Docker login token goes straight from
+3. **State bucket.** It creates the bucket that holds Terraform's state, once per account (see Terraform
+   below).
+4. **Image repository.** It creates the image repository, which takes about a minute.
+5. **Image.** It builds the image for ARM (Graviton) and pushes it. The Docker login token goes straight from
    the AWS CLI to Docker.
-5. **The BMU.** It creates stack `bmu-dev`. The first time takes about **15–25 minutes**, mostly CloudFront.
-6. **Wait.** It waits for the web app and the worker, then prints the address
-   (`https://<something>.cloudfront.net`).
+6. **The BMU.** Terraform lists the 66 resources it will create and asks; type `yes`. The first time takes
+   about **15–25 minutes**, mostly CloudFront. It finishes when the web app and the worker are running, then
+   prints the address (`https://<something>.cloudfront.net`).
 
 **Signing in.** Sign in with your PAHMA QA account. Jobs create real records on the QA tenant, and they stay.
 
-**Later deploys.** Run the same command. Only what changed is updated, which takes about 3–5 minutes. Each
+**Later deploys.** Run the same command. Terraform shows only what changed, which takes about 3–5 minutes. Each
 deploy pushes a new image tag (commit and time), so `./bmu aws status` shows which code is running.
 
 ## What it creates
 
-**Stack `bmu-<env>-ecr`**
+**`deploy/terraform/registry`**
 - The image repository. It keeps the 10 newest images, scanned on push.
 
-**Stack `bmu-<env>`, all in one region**
+**`deploy/terraform/app`, all in one region**
 
 | Piece | Details |
 | --- | --- |
@@ -79,12 +85,31 @@ deploy pushes a new image tag (commit and time), so `./bmu aws status` shows whi
 - The session key: `GenerateDataKey` and `Decrypt` for the web role.
 - The job key: `GenerateDataKey` for the web role and `Decrypt` for the worker role.
 - Both are limited to the matching `purpose` in the encryption context.
-- The account can manage these two keys and delete them with the stack, but can't use them or grant their use.
+- The account can manage these two keys and delete them, but can't use them or grant their use.
   An administrator can't decrypt a saved password without first changing the key policy, which CloudTrail
   records.
 
 **Tags.** Every resource is tagged `project=bmu` and `environment=<env>`, so Cost Explorer can show the BMU's
 costs.
+
+## Terraform
+
+- **Two configurations.** `registry` (the image repository) and `app` (everything else). The image has to be
+  pushed between them, so they are applied in turn.
+- **Versions.** Terraform 1.10 or later and the AWS provider 6.x. `.terraform.lock.hcl` in each folder pins the
+  exact provider version (6.67.0 now) for Macs and Linux.
+- **State.** Terraform's record of what it created lives in S3, in the same account:
+  `s3://bmu-tfstate-<account>-<region>/bmu/<env>/registry.tfstate` and `app.tfstate`. The bucket is versioned
+  and private, and a lock file beside the state stops two applies at once. `./bmu aws` creates the bucket and
+  passes these settings to `terraform init`, so nothing account-specific is in the code.
+- **One account only.** Each configuration is told the environment's account number and refuses to run against
+  any other. `./bmu aws` also ignores access keys left in the shell, so only the profile's sign-in is used.
+- **Settings.** `./bmu aws` passes the environment's settings (`deploy/environments/`) as variables;
+  `app/variables.tf` lists them. `protect_data = true` (set `PROTECT_DATA=true` in the settings file) is for an
+  environment whose data matters: tables can't be deleted, and `destroy` won't empty the buckets.
+- **Running Terraform yourself.** `./bmu aws init` initializes both folders against the environment's state.
+  After that, `terraform -chdir=deploy/terraform/app state list` and other read-only commands work as usual,
+  with `AWS_PROFILE` set. For changes, use `./bmu aws deploy`, which supplies the variables.
 
 ## Cost
 
@@ -101,26 +126,32 @@ if a month heads past it. Pause or destroy the environment between test sessions
 
 ## Moving to another account (UC Berkeley)
 
-Nothing in the templates names an account.
+Nothing in the Terraform code names an account.
 
 1. **Sign-in.** Set up an IAM Identity Center sign-in for the new account (`aws configure sso`) with the profile
    name in `ucb-dev.conf`.
 2. **Settings.** Check the region and the label in `ucb-dev.conf`.
-3. **Deploy.** Run `./bmu aws deploy --env ucb-dev`. Everything is created fresh there: new keys, new tables
-   and a new address.
+3. **Deploy.** Run `./bmu aws deploy --env ucb-dev`. Everything is created fresh there: its own state bucket,
+   new keys, new tables and a new address. No state is moved between accounts.
 
 The personal environment is unaffected; `./bmu aws destroy --env personal-dev` removes it when you're done with
 it.
 
-If the UCB account requires a custom domain, a different network layout or existing VPCs, those become
-parameters of `bmu.yaml`.
+If the UCB account requires a custom domain, a different network layout, existing VPCs or a shared state
+bucket, those become variables in `app/variables.tf` or settings in `deploy/aws.sh`.
 
-## Checking the templates
+## Checking the Terraform code
 
-- **Template checks.** `pip install cfn-lint && cfn-lint deploy/cloudformation/*.yaml` checks both templates
-  against AWS's resource specifications.
-- **App checks.** `backend/tests/test_deploy.py` checks that the template matches the app: tables, settings,
-  Demo tools off, key policies, and the production build in the image.
+Neither of the first two needs an AWS sign-in.
+
+- **`terraform validate`.** In each folder: `terraform init -backend=false && terraform validate`. It checks
+  every resource and argument against the provider.
+- **`terraform test`.** In `deploy/terraform/app`. It plans against a simulated AWS provider and checks names,
+  the paused state, the allowlist, data protection and that bad input is refused
+  (`tests/app.tftest.hcl`).
+- **App checks.** `backend/tests/test_deploy.py` checks that the Terraform code matches the app: tables,
+  settings, Demo tools off, key policies, and the production build in the image.
+- **`./bmu aws plan`.** Against the real account: what a deploy would change.
 
 ## Not in this first round (design: Prototype plan)
 
@@ -137,15 +168,17 @@ parameters of `bmu.yaml`.
 ## If something goes wrong
 
 - **"Not signed in to AWS".** Run `aws sso login --profile <profile>`.
-- **The first creation fails.** CloudFormation rolls back and deletes what it made. The stack's **Events** tab
-  in the CloudFormation console names the resource and the reason.
-  - Running `./bmu aws deploy` again removes the failed stack first.
+- **The first creation fails.** Terraform stops at the resource that failed, says why, and keeps what it
+  already created.
+  - Running `./bmu aws deploy` again continues from there.
   - Brand-new accounts sometimes fail once while AWS creates the ECS or load-balancer service roles; the
     second try works.
   - CloudFront can also refuse new distributions until AWS has verified a new account. AWS Support resolves
     that.
 - **403 "open only to listed addresses".** Your address changed: run `./bmu aws allow-my-ip`.
 - **`destroy` stops at the VPC.** CloudFront removes its VPC origin's network interfaces in the background, and
-  the VPC can't be deleted until they're gone. `destroy` waits and tries again; if it still stops, run it again
-  a little later.
+  the VPC can't be deleted until they're gone. Run `./bmu aws destroy` again a few minutes later; Terraform
+  continues where it stopped.
+- **"Error acquiring the state lock".** An earlier run was interrupted. Check that no other deploy is running,
+  then `terraform -chdir=deploy/terraform/app force-unlock <the lock ID in the message>`.
 - **The app doesn't come up.** Run `./bmu aws logs web` or `./bmu aws logs worker`, and `./bmu aws status`.

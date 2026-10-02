@@ -1,0 +1,30 @@
+// Generated from the allowed_cidrs variable; the distribution is IPv4-only, so the viewer's address is IPv4.
+var ALLOWED = "${allowed}";
+function ip4(s) {
+  var p = s.split(".");
+  if (p.length !== 4) return -1;
+  var n = 0;
+  for (var i = 0; i < 4; i++) {
+    var v = parseInt(p[i], 10);
+    if (isNaN(v) || v < 0 || v > 255) return -1;
+    n = n * 256 + v;
+  }
+  return n;
+}
+var RANGES = ALLOWED.split(",").map(function (c) {
+  var a = c.trim().split("/");
+  var bits = a.length > 1 ? parseInt(a[1], 10) : 32;
+  var base = ip4(a[0]);
+  var size = Math.pow(2, 32 - bits);
+  var lo = base - (base % size);
+  return { lo: lo, hi: lo + size - 1, ok: base >= 0 && bits >= 0 && bits <= 32 };
+}).filter(function (r) { return r.ok; });
+function handler(event) {
+  var ip = ip4(event.viewer.ip);
+  for (var i = 0; i < RANGES.length; i++) {
+    if (ip >= RANGES[i].lo && ip <= RANGES[i].hi) return event.request;
+  }
+  return { statusCode: 403, statusDescription: "Forbidden",
+           headers: { "content-type": { value: "text/plain; charset=utf-8" }, "cache-control": { value: "no-store" } },
+           body: { encoding: "text", data: "This BMU environment is open only to listed addresses. Yours is " + event.viewer.ip + ".\n" } };
+}

@@ -74,7 +74,7 @@ deployment.
 | `scripts/find_csid.py` | Finds which BMU job created a CollectionSpace record |
 | `docker-compose.yml` | Local stack: web, worker, Vue dev server, DynamoDB Local, moto (S3), simulated CollectionSpace |
 | `bmu` | Starts, stops and opens the environments (below), and deploys to AWS (`./bmu aws`) |
-| `deploy/` | The AWS deployment: production image (`Dockerfile`), CloudFormation (`cloudformation/`), per-account settings (`environments/`) and `aws.sh`; see [deploy/README.md](deploy/README.md) |
+| `deploy/` | The AWS deployment: production image (`Dockerfile`), Terraform (`terraform/`), per-account settings (`environments/`) and `aws.sh`; see [deploy/README.md](deploy/README.md) |
 
 ## Run it locally
 
@@ -244,7 +244,7 @@ python scripts/check_cspace.py --create                          # also creates 
   and state-changing API calls also require an `X-BMU: 1` header.
 - In AWS, set `BMU_CRYPTO_MODE=kms` with separate KMS keys for sessions and jobs
   (`BMU_KMS_SESSION_KEY_ID`, `BMU_KMS_JOB_KEY_ID`); the local mode uses keys from the environment. The
-  CloudFormation stack (`deploy/`) sets these, with key policies that let only the web app use the session key and
+  Terraform code (`deploy/terraform/`) sets these, with key policies that let only the web app use the session key and
   only the worker decrypt with the job key.
 - File uploads go directly from the browser to S3 with a write-only presigned POST for one key
   (`staging/<tenant>/<job>/<row>/<random>`), the file's size (at most 2 GB for now) and content type, for
