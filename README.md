@@ -73,6 +73,8 @@ deployment.
 | `scripts/check_cspace.py` | Checks the BMU's calls against a real CollectionSpace server |
 | `scripts/find_csid.py` | Finds which BMU job created a CollectionSpace record |
 | `docker-compose.yml` | Local stack: web, worker, Vue dev server, DynamoDB Local, moto (S3), simulated CollectionSpace |
+| `bmu` | Starts, stops and opens the environments (below), and deploys to AWS (`./bmu aws`) |
+| `deploy/` | The AWS deployment: production image (`Dockerfile`), CloudFormation (`cloudformation/`), per-account settings (`environments/`) and `aws.sh`; see [deploy/README.md](deploy/README.md) |
 
 ## Run it locally
 
@@ -199,7 +201,8 @@ the browser tab's title (orange when the CollectionSpace is a real server).
 | --- | --- | --- |
 | `./bmu up sim` | Local, simulated CollectionSpace, Demo tools on (sign in as `admin` / `admin`) | http://localhost:5173 |
 | `./bmu up qa` | Local, against the PAHMA QA tenant, with your own QA account. **Jobs create real records, which stay.** Demo tools off | http://localhost:5273 |
-| `./bmu open aws` | The AWS dev deployment, once it exists (set `BMU_AWS_DEV_URL`) | — |
+| `./bmu aws deploy` | Deploys to AWS (default: Richard's personal account, against the PAHMA QA tenant; real records). See [deploy/README.md](deploy/README.md) | `https://….cloudfront.net` |
+| `./bmu open aws` | The AWS deployment, at the address `./bmu aws deploy` saved (or `BMU_AWS_DEV_URL`) | — |
 | `./bmu open mockup` | The UI mockup, from this repo (`docs/mockup/bmu-mockup.html`); `./bmu open mockup-hosted` opens the hosted copy | — |
 | `./bmu open home` | A start page linking all of them (`docs/start.html`) | — |
 
@@ -240,7 +243,9 @@ python scripts/check_cspace.py --create                          # also creates 
 - Passwords are never stored in plain text or logged. The session cookie is httpOnly and SameSite=Strict,
   and state-changing API calls also require an `X-BMU: 1` header.
 - In AWS, set `BMU_CRYPTO_MODE=kms` with separate KMS keys for sessions and jobs
-  (`BMU_KMS_SESSION_KEY_ID`, `BMU_KMS_JOB_KEY_ID`); the local mode uses keys from the environment.
+  (`BMU_KMS_SESSION_KEY_ID`, `BMU_KMS_JOB_KEY_ID`); the local mode uses keys from the environment. The
+  CloudFormation stack (`deploy/`) sets these, with key policies that let only the web app use the session key and
+  only the worker decrypt with the job key.
 - File uploads go directly from the browser to S3 with a write-only presigned POST for one key
   (`staging/<tenant>/<job>/<row>/<random>`), the file's size (at most 2 GB for now) and content type, for
   15 minutes; set `BMU_S3_KMS_KEY_ID` in AWS to require SSE-KMS. The worker checks each file's real type from its

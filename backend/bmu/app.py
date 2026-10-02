@@ -94,7 +94,9 @@ def create_app(services: Services | None = None) -> FastAPI:
             if request.headers.get(CSRF_HEADER) != "1":
                 return JSONResponse({"detail": "Missing X-BMU header"}, status_code=403)
         resp = await call_next(request)
-        resp.headers.setdefault("Cache-Control", "no-store")
+        # The built app's files have content hashes in their names, so they never change; everything else is fresh.
+        immutable = request.url.path.startswith("/assets/") and resp.status_code == 200
+        resp.headers.setdefault("Cache-Control", "public, max-age=31536000, immutable" if immutable else "no-store")
         return resp
 
     @app.exception_handler(RowChanged)
@@ -109,10 +111,16 @@ def create_app(services: Services | None = None) -> FastAPI:
     if static and Path(static).is_dir():
         app.mount("/assets", StaticFiles(directory=Path(static) / "assets"), name="assets")
 
+        root = Path(static).resolve()
+
         @app.get("/{path:path}", include_in_schema=False)
         def spa(path: str):
-            f = Path(static) / path
-            return FileResponse(f if path and f.is_file() else Path(static) / "index.html")
+            # A file of the built app (favicon and the like), else the app itself, which routes in the browser. Only
+            # files inside the build: the path arrives decoded, so "..%2f" or "%2fetc" must not reach other files.
+            if path == "api" or path.startswith("api/"):
+                raise HTTPException(404, "Not found")
+            f = (root / path).resolve()
+            return FileResponse(f if path and f.is_relative_to(root) and f.is_file() else root / "index.html")
 
     return app
 
