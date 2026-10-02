@@ -10,7 +10,7 @@ import type { Job } from "../types";
 const props = defineProps<{ job: Job }>();
 /** What the worker is doing now, short enough for the queue's Status column (the steps of lib/results STEP_LABEL). */
 const DOING: Record<string, string> = {
-  values: "checking values", media: "creating the Media record", findObject: "finding the object",
+  values: "checking the document", media: "creating the Media record", findObject: "finding the object",
   createObject: "creating the object", findOrCreateObject: "finding or creating the object", upload: "uploading the file",
   relMediaObject: "relating Media and object", relObjectMedia: "relating Media and object", addToGroup: "adding to the group",
 };

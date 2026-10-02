@@ -220,8 +220,9 @@ def test_failed_upload_still_relates_and_rerun_reuses_media(api, login, add_uplo
     assert len(fake.relations) == 2  # not recreated
 
 
-def test_object_not_found_still_uploads_and_skips_relations(api, login, add_uploaded, worker, services, fake):
-    """Design: "Object not found: the file is still uploaded; Relations are skipped" (e.g. deleted after checks)."""
+def test_object_deleted_after_scheduling_fails_the_document_before_anything_is_created(api, login, add_uploaded, worker, services, fake):
+    """Design (Job execution): the document is checked again just before its records are created, so an Object
+    deleted after the job was submitted fails it with no Media record, file or Relation."""
     login()
     job = new_job(api)
     rows = add_uploaded(job, ["15-1234_g.jpg"])
@@ -231,11 +232,9 @@ def test_object_not_found_still_uploads_and_skips_relations(api, login, add_uplo
             o["deleted"] = True
     worker.tick()
     st = api.get(f"/api/jobs/{job}").json()["rows"][0]["result"]
-    assert st["state"] == "Partial" and st["error"]["code"] == "object_gone"
-    assert st["steps"]["upload"]["s"] == "done"
-    assert st["steps"]["relMediaObject"] == {"s": "skipped", "after": "findObject"}
-    assert st["steps"]["findObject"]["obj"] == "15-1234"
-    assert len(fake.relations) == 0
+    assert st["state"] == "Failed" and st["error"]["code"] == "object_gone" and st["error"]["step"] == "values"
+    assert st["steps"]["media"] == {"s": "skipped", "after": "values"} and st["steps"]["upload"]["s"] == "skipped"
+    assert len(fake.relations) == 0 and not fake.blobs
 
 
 def test_media_failure_skips_upload_and_relations(api, login, add_uploaded, worker, fake, fail_on):

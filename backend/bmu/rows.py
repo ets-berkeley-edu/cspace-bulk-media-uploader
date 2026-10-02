@@ -513,21 +513,7 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
         if ext not in SUPPORTED_EXTENSIONS:
             out.append({"level": "block", "text": f"The BMU doesn't accept .{ext or '(no extension)'} files. "
                                                   f"Supported types: {SUPPORTED_HINT}."})
-        if not perms.get("mediaUpdate", True):
-            out.append({"level": "block", "text": "Your account can't update Media records, which attaching the file needs "
-                                                  "(update on media). Ask a CollectionSpace administrator for the permission."})
-        if h.object != "none" and not perms.get("readObjects", True):
-            out.append({"level": "block", "text": "Your account can't read Object records, so the BMU can't find this document's "
-                                                  "object. Choose a media-only handling, or ask for read on objects."})
-        if h.object != "none" and not perms.get("relations"):
-            out.append({"level": "block", "text": "Your account can't create relations, so it can't link to objects. Choose a media-only handling."})
-        if h.object == "create" and not perms.get("objects"):
-            out.append({"level": "block", "text": "Your account can't create Object records. Choose another handling."})
-        # "either" needs create on objects only when its object doesn't exist yet: checked after the lookup below
-        # Design (Groups): create on groups only while the job's Group doesn't exist yet; relating the Object to an
-        # existing Group needs create on relations, checked above for every handling that links to an object.
-        if group_on and r.get("group", True) and h.object != "none" and not group_exists and not perms.get("groups"):
-            out.append({"level": "block", "text": "Your account can't create groups. Turn off the job's group, or untick this document's Group."})
+        out += permission_checks(tenant, r, perms, group_on, group_exists)
         obj_csid: str | None = ""  # the linked Object: "" none, None not known yet
         if h.object != "none" and object_step_ran(r):
             obj_csid = next(_steps(r)[k]["csid"] for k in OBJ_STEPS if (_steps(r).get(k) or {}).get("s") == "done")
@@ -598,6 +584,31 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
             out.append({"level": "info", "text": f"Orientation: {r['orientation']}."})
         r["checks"] = out
     return incomplete
+
+
+def permission_checks(tenant: Tenant, r: dict, perms: dict[str, bool], group_on: bool = False,
+                      group_exists: bool = False) -> list[dict]:
+    """What the row's handling needs the account to be allowed to do, whatever its lookups find (design: Dynamic
+    permission checks). Used by the editor's checks and by the worker's check before a document's records are
+    created, so both say the same thing."""
+    h = tenant.handling_by_id(r["handling"])
+    out: list[dict] = []
+    if not perms.get("mediaUpdate", True):
+        out.append({"level": "block", "text": "Your account can't update Media records, which attaching the file needs "
+                                              "(update on media). Ask a CollectionSpace administrator for the permission."})
+    if h.object != "none" and not perms.get("readObjects", True):
+        out.append({"level": "block", "text": "Your account can't read Object records, so the BMU can't find this document's "
+                                              "object. Choose a media-only handling, or ask for read on objects."})
+    if h.object != "none" and not perms.get("relations"):
+        out.append({"level": "block", "text": "Your account can't create relations, so it can't link to objects. Choose a media-only handling."})
+    if h.object == "create" and not perms.get("objects"):
+        out.append({"level": "block", "text": "Your account can't create Object records. Choose another handling."})
+    # "either" needs create on objects only when its object doesn't exist yet: checked after the lookup (object_checks)
+    # Design (Groups): create on groups only while the job's Group doesn't exist yet; relating the Object to an
+    # existing Group needs create on relations, checked above for every handling that links to an object.
+    if group_on and r.get("group", True) and h.object != "none" and not group_exists and not perms.get("groups"):
+        out.append({"level": "block", "text": "Your account can't create groups. Turn off the job's group, or untick this document's Group."})
+    return out
 
 
 AUTHORITY_LABEL = {"creator": "Creator", "contributor": "Contributor", "rightsHolder": "Rights holder"}
@@ -844,7 +855,7 @@ def _rerun_checks(tenant: Tenant, r: dict, perms: dict[str, bool], lookup, clien
     return out
 
 
-STEP_TEXT = {"values": "check its values in CollectionSpace", "media": "create the Media record", "findObject": "find the object", "createObject": "create the object",
+STEP_TEXT = {"values": "check the document in CollectionSpace", "media": "create the Media record", "findObject": "find the object", "createObject": "create the object",
              "findOrCreateObject": "find or create the object",
              "upload": "upload the file", "relMediaObject": "link it to its object", "relObjectMedia": "link it to its object",
              "addToGroup": "add its object to the job's group"}

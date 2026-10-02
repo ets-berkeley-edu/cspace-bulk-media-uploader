@@ -21,6 +21,13 @@ def by_file(j):
     return {r["file"]: r for r in j["rows"]}
 
 
+def past_the_check(worker, monkeypatch):
+    """Rows whose Media record exists while their Object step still has to search: the Object changed in the moment
+    after the document's check, or the Media record was created before that check existed. Made here by leaving the
+    Object out of the check, so the Object step finds the change itself."""
+    monkeypatch.setattr(worker, "_check_object", lambda client, row: None)
+
+
 # ---- the failure catalog ------------------------------------------------------------------------
 def test_catalog_has_every_code_the_worker_records():
     codes = {"upload_too_large", "file_type_rejected", "file_missing", "media_rejected", "object_gone", "object_ambiguous",
@@ -115,9 +122,166 @@ def test_upload_too_large_then_replace_file_and_rerun(api, login, add_uploaded, 
     assert services.storage.fix_originals(job) == []
 
 
-# ---- object not found at run time: correct the number or stop linking --------------------------
-def test_object_gone_then_stop_linking(api, login, add_uploaded, worker, fake, fail_on):
+# ---- the check before a document's records are created (design: Job execution) -----------------
+def nothing_created(row, fake, media_before):
+    st = row["result"]["steps"]
+    return (row["result"]["state"] == "Failed" and st["values"]["s"] == "failed" and len(fake.media) == media_before
+            and all(st[k]["s"] == "skipped" for k in st if k != "values") and st["media"] == {"s": "skipped", "after": "values"}
+            and not fake.blobs and not fake.relations)
+
+
+def test_an_object_that_went_missing_since_submitting_fails_the_document_with_nothing_created(api, login, add_uploaded, worker, fake, fail_on):
     login()
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_1.jpg"])
+    fail_on("objectSearch", effect="none", match="15-1234")
+    media_before = len(fake.media)
+    j = run_once(api, job, worker)
+    row = j["rows"][0]
+    assert row["result"]["error"] == {"code": "object_gone", "step": "values",
+                                      "detail": 'GET collectionobjects?as=objectNumber = "15-1234" found 0 objects'}
+    assert nothing_created(row, fake, media_before) and j["job"]["status"] == "NeedsAttention"
+    assert j["created"] == {"media": 0, "files": 0, "objects": 0, "relations": 0, "groups": 0, "unfinished": 0}
+    # nothing exists, so the document is as free to change as a draft's: another number, another handling, or deleting it
+    api.post(f"/api/jobs/{job}/fix")
+    assert api.patch(f"/api/jobs/{job}/rows/1", json={"handling": "mediaonly"}).status_code == 200
+    assert api.patch(f"/api/jobs/{job}/rows/1", json={"handling": "link", "obj": "12-5678"}).status_code == 200
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    worker.tick()
+    j = api.get(f"/api/jobs/{job}").json()
+    assert j["job"]["status"] == "Completed" and j["rows"][0]["result"]["steps"]["values"]["s"] == "done"
+    assert fake.objects[j["rows"][0]["result"]["steps"]["findObject"]["csid"]]["objectNumber"] == "12-5678"
+
+
+def test_an_object_that_appeared_since_submitting_fails_a_create_only_document_with_nothing_created(api, login, add_uploaded, worker, fake):
+    """The case that prompted the full check: "Create new object + link", and the Object was created in
+    CollectionSpace between submitting and the run. No Media record is left without its Object."""
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["20-0901.jpg"])
+    api.patch(f"/api/jobs/{job}/rows/1", json={"handling": "create"})
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    fake.objects["late"] = {"objectNumber": "20-0901", "deleted": False}
+    media_before, objects_before = len(fake.media), len(fake.objects)
+    worker.tick()
+    j = api.get(f"/api/jobs/{job}").json()
+    row = j["rows"][0]
+    assert row["result"]["error"]["code"] == "object_exists" and row["result"]["error"]["step"] == "values"
+    assert "found 1 object" in row["result"]["error"]["detail"]
+    assert nothing_created(row, fake, media_before) and len(fake.objects) == objects_before
+    api.post(f"/api/jobs/{job}/fix")
+    checks = api.post(f"/api/jobs/{job}/check").json()["rows"][0]["checks"]
+    assert any(c["level"] == "block" and "already exists" in c["text"] for c in checks), checks  # the editor says the same
+    assert api.patch(f"/api/jobs/{job}/rows/1", json={"handling": "link"}).status_code == 200
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    worker.tick()
+    j = api.get(f"/api/jobs/{job}").json()
+    assert j["job"]["status"] == "Completed" and j["rows"][0]["result"]["steps"]["findObject"]["csid"] == "late"
+    assert len(fake.media) == media_before + 1 and j["created"]["objects"] == 0
+
+
+def test_an_object_number_that_now_matches_several_fails_the_document_with_nothing_created(api, login, add_uploaded, worker, fake, fail_on):
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_1.jpg"])
+    fail_on("objectSearch", effect="many", match="15-1234")
+    media_before = len(fake.media)
+    row = run_once(api, job, worker)["rows"][0]
+    assert row["result"]["error"]["code"] == "object_ambiguous" and nothing_created(row, fake, media_before)
+
+
+def test_a_permission_lost_since_submitting_fails_the_document_with_nothing_created(api, login, add_uploaded, worker, fake):
+    """The account's permissions are read once per run; a document whose handling needs one it no longer has is
+    failed by its check, in the editor's words."""
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_1.jpg", "9-9999.jpg"])
+    api.patch(f"/api/jobs/{job}/rows/2", json={"handling": "mediaonly"})
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    fake.perm_overrides["admin"] = {"relations": "RL"}
+    media_before = len(fake.media)
+    worker.tick()
+    j = api.get(f"/api/jobs/{job}").json()
+    linked, media_only = j["rows"]
+    assert linked["result"]["error"]["code"] == "no_permission" and linked["result"]["error"]["step"] == "values"
+    assert "can't create relations" in linked["result"]["error"]["detail"]
+    assert linked["result"]["state"] == "Failed" and linked["result"]["steps"]["media"] == {"s": "skipped", "after": "values"}
+    assert media_only["result"]["state"] == "Done" and len(fake.media) == media_before + 1  # it needs no relations
+
+
+def test_link_or_create_without_create_on_objects_fails_only_when_the_object_is_missing(api, login, add_uploaded, worker, fake):
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_1.jpg", "20-0955.jpg"])
+    for n in (1, 2):
+        api.patch(f"/api/jobs/{job}/rows/{n}", json={"handling": "linkorcreate"})
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    fake.perm_overrides["admin"] = {"collectionobjects": "RL"}
+    media_before = len(fake.media)
+    worker.tick()
+    exists, missing = api.get(f"/api/jobs/{job}").json()["rows"]
+    assert exists["result"]["state"] == "Done" and exists["result"]["steps"]["findOrCreateObject"]["found"]
+    assert missing["result"]["error"]["code"] == "no_permission" and "found 0 objects" in missing["result"]["error"]["detail"]
+    assert missing["result"]["state"] == "Failed" and len(fake.media) == media_before + 1
+
+
+def test_a_staged_file_that_is_gone_fails_the_document_with_nothing_created(api, login, add_uploaded, worker, fake, services):
+    login()
+    job = new_job(api)
+    rows = add_uploaded(job, ["15-1234_1.jpg"])
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    s3, bucket = services.storage.s3, services.settings.s3_bucket
+    for v in s3.list_object_versions(Bucket=bucket, Prefix=rows[0]["s3Key"])["Versions"]:  # every version: the bucket keeps them
+        s3.delete_object(Bucket=bucket, Key=v["Key"], VersionId=v["VersionId"])
+    media_before = len(fake.media)
+    worker.tick()
+    row = api.get(f"/api/jobs/{job}").json()["rows"][0]
+    assert row["result"]["error"]["code"] == "file_missing" and nothing_created(row, fake, media_before)
+
+
+def test_the_check_searches_for_the_object_once_and_the_object_step_reuses_it(api, login, add_uploaded, worker, monkeypatch):
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_1.jpg"])
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    searches, real = [], worker.client_factory
+
+    def counting(u, p):
+        c = real(u, p)
+        find = c.find_objects
+        c.find_objects = lambda num: (searches.append(num), find(num))[1]
+        return c
+    worker.client_factory = counting
+    worker.tick()
+    j = api.get(f"/api/jobs/{job}").json()
+    assert j["job"]["status"] == "Completed" and searches == ["15-1234"]
+    assert j["rows"][0]["result"]["steps"]["findObject"]["found"]
+
+
+def test_if_permissions_cannot_be_read_the_run_goes_on_and_a_refusal_shows_at_its_step(api, login, add_uploaded, worker, fake):
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_1.jpg"])
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    real = worker.client_factory
+
+    def unreadable(u, p):
+        from bmu.cspace import CSpaceError
+        c = real(u, p)
+
+        def boom():
+            raise CSpaceError("server_error", "GET accounts/0/accountperms returned 500", status=500)
+        c.account_permissions = boom
+        return c
+    worker.client_factory = unreadable
+    worker.tick()
+    assert api.get(f"/api/jobs/{job}").json()["job"]["status"] == "Completed"
+
+
+# ---- past the check: correct the number or stop linking ----------------------------------------
+def test_object_gone_then_stop_linking(api, login, add_uploaded, worker, fake, fail_on, monkeypatch):
+    login()
+    past_the_check(worker, monkeypatch)
     job = new_job(api)
     add_uploaded(job, ["15-1234_1.jpg"])
     fail_on("objectSearch", effect="none", match="15-1234")
@@ -143,8 +307,9 @@ def test_object_gone_then_stop_linking(api, login, add_uploaded, worker, fake, f
     assert len(fake.relations) == 0
 
 
-def test_object_ambiguous_at_run_and_correcting_the_number(api, login, add_uploaded, worker, fake, fail_on):
+def test_object_ambiguous_at_run_and_correcting_the_number(api, login, add_uploaded, worker, fake, fail_on, monkeypatch):
     login()
+    past_the_check(worker, monkeypatch)
     job = new_job(api)
     add_uploaded(job, ["15-1234_1.jpg"])
     fail_on("objectSearch", effect="many", match="15-1234")
@@ -194,10 +359,12 @@ def test_media_rejected_row_is_editable_except_its_object(api, login, add_upload
     assert j["job"]["status"] == "Completed" and j["created"]["objects"] == 1
 
 
-def test_create_fails_when_the_object_appeared_since_scheduling_and_the_row_can_switch_to_linking(api, login, add_uploaded, worker, fake):
+def test_create_fails_when_the_object_appeared_after_the_check_and_the_row_can_switch_to_linking(api, login, add_uploaded, worker, fake, monkeypatch):
     """Design: "Create new object + link" creates a new object only; one that already exists fails the row
-    (object_exists). The fix may switch the handling to one that links to that object (and only that)."""
+    (object_exists). Past the check the Media record exists, so the fix may switch the handling to one that links to
+    that object (and only that)."""
     login()
+    past_the_check(worker, monkeypatch)
     job = new_job(api)
     add_uploaded(job, ["20-0901.jpg"])
     api.patch(f"/api/jobs/{job}/rows/1", json={"handling": "create"})
@@ -272,18 +439,20 @@ def test_sign_in_failure_fails_the_job_and_reschedule_continues(api, login, add_
 
 def test_five_failed_requests_in_a_row_stop_the_job(api, login, add_uploaded, worker, fail_on):
     """Design: five consecutive 5xx or network failures stop the job as "unavailable". They are counted per
-    request: here each document makes three failing requests (Media ID search, create Media, Object search)."""
+    request: here each media-only document makes two failing requests (Media ID search, create Media)."""
     login()
     job = new_job(api)
-    add_uploaded(job, [f"15-1234_{i}.jpg" for i in range(1, 5)])
-    for step in ("media", "mediaSearch", "objectSearch"):
+    add_uploaded(job, [f"15-1234_{i}.jpg" for i in range(1, 6)])
+    for n in range(1, 6):
+        api.patch(f"/api/jobs/{job}/rows/{n}", json={"handling": "mediaonly"})
+    for step in ("media", "mediaSearch"):
         fail_on(step, status=503, count=0)
     j = run_once(api, job, worker)
     assert j["job"]["status"] == "Failed" and j["job"]["code"] == "unavailable"
-    assert j["job"]["counts"]["failed"] == 2 and j["job"]["counts"]["notStarted"] == 2
-    assert j["job"]["codeDetail"] == ("5 requests in a row to CollectionSpace failed, the last: POST media returned 503 "
-                                      "Service Unavailable; stopped at document 2, step findObject")
-    assert [(r["result"] or {}).get("state", "Not started") for r in j["rows"]][:2] == ["Failed", "Failed"]
+    assert j["job"]["counts"]["failed"] == 3 and j["job"]["counts"]["notStarted"] == 2
+    assert j["job"]["codeDetail"].startswith("5 requests in a row to CollectionSpace failed, the last: GET media")
+    assert "stopped at document 3, step media" in j["job"]["codeDetail"]
+    assert [(r["result"] or {}).get("state", "Not started") for r in j["rows"]][:3] == ["Failed", "Failed", "Failed"]
 
 
 def test_failures_between_successful_requests_do_not_stop_the_job(api, login, add_uploaded, worker, fail_on):
@@ -505,10 +674,11 @@ def test_a_file_whose_content_does_not_match_its_name_is_rejected_before_upload(
     login()
     job = new_job(api)
     add_uploaded(job, ["15-1234_1.tif"], content=b"\xff\xd8\xff\xe0 really a JPEG")
+    media_before = len(fake.media)
     row = run_once(api, job, worker)["rows"][0]
-    st = row["result"]["steps"]["upload"]
+    st = row["result"]["steps"]["values"]  # the document's check, before its Media record is created
     assert st["code"] == "file_type_rejected" and "content is JPEG" in st["detail"]
-    assert row["result"]["state"] == "Partial" and not fake.blobs  # nothing was sent to CollectionSpace
+    assert row["result"]["state"] == "Failed" and not fake.blobs and len(fake.media) == media_before  # nothing was sent
 
 
 def test_the_audit_log_keeps_per_row_detail_and_a_csid_index(api, login, add_uploaded, worker, services, fail_on, monkeypatch):
@@ -733,13 +903,13 @@ def test_no_request_is_sent_after_the_fifth_failure_in_a_row(api, login, add_upl
 
     def four_failed_already(u, p):
         c = real(u, p)
-        vocabulary_items = c.vocabulary_items
+        find_objects = c.find_objects
 
-        def then_four_failures(name):  # the value check before the run reads the language list: then four failures
-            out = vocabulary_items(name)
+        def then_four_failures(num):  # the document's check finds its object: then four failures
+            out = find_objects(num)
             c.failures_in_a_row = 4
             return out
-        c.vocabulary_items = then_four_failures
+        c.find_objects = then_four_failures
         return c
     worker.client_factory = four_failed_already
     media_before = len(fake.media)

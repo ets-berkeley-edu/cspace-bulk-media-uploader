@@ -98,9 +98,9 @@ describe("results helpers (design: Finished jobs and error messages)", () => {
 
 describe("a value that no longer exists when the job ran (value_missing)", () => {
   it("lists the value check first and names it in the skipped steps", () => {
-    expect(stepList(valueMissing).map((s) => s.label)).toEqual(["Check values in CollectionSpace", "Create Media record", "Find object",
+    expect(stepList(valueMissing).map((s) => s.label)).toEqual(["Check the document in CollectionSpace", "Create Media record", "Find object",
       "Upload file (creates the Blob)", "Relate Media → Object", "Relate Object → Media"]);
-    expect(stepNote("media", valueMissing.result!.steps!.media!)).toBe("skipped: needs check values in CollectionSpace");
+    expect(stepNote("media", valueMissing.result!.steps!.media!)).toBe("skipped: needs check the document in CollectionSpace");
     expect(stepNote("upload", valueMissing.result!.steps!.upload!)).toBe("skipped: needs create Media record");
   });
 
@@ -118,7 +118,7 @@ describe("a value that no longer exists when the job ran (value_missing)", () =>
     const job = { id: "j", name: "batch", status: "NeedsAttention", run: 1, code: "" } as Job;
     const w = mount(JobResults, { props: { job, rows: [valueMissing, renamed], runs: [], tenant } });
     const [bad, good] = w.findAll("tbody tr").map((r) => r.text());
-    expect(bad).toContain("✗ Check values in CollectionSpace");
+    expect(bad).toContain("✗ Check the document in CollectionSpace");
     expect(bad).toContain("A value no longer exists in CollectionSpace.");
     expect(good).toContain("A name changed in CollectionSpace.");
   });

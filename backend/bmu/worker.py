@@ -25,8 +25,8 @@ from .cspace.client import display_name
 from .cspace.payloads import group_xml, media_xml, object_xml, relation_xml
 from .failures import JOB_LEVEL, classify
 from .filetypes import HEAD_BYTES, mismatch
-from .rows import (AUTHORITY_FIELDS, AUTHORITY_LABEL, created_records, describe_deletion, language_map, media_created,
-                   use_current, value_findings)
+from .rows import (AUTHORITY_FIELDS, AUTHORITY_LABEL, authority_read_checks, created_records, describe_deletion,
+                   language_map, media_created, object_step_ran, permission_checks, use_current, value_findings)
 from .storage import Storage, draft_expiry, expiry_of, now
 from .tenant import AUTHORITY_REF, OBJECT_STEPS, Tenant, load_tenant
 
@@ -65,17 +65,18 @@ def _step(row: dict, name: str) -> dict:
 def plan_steps(tenant: Tenant, row: dict, job: dict | None = None) -> list[tuple[str, list[str]]]:
     """A row's steps in order, each with the steps it depends on (design: "Steps within a row").
 
-    Check values in CollectionSpace (only while the Media record doesn't exist; run again every run)  depends on nothing
-    Create Media record      depends on the value check
-    Find, create, or find or create the Object (per the handling)       depends on the value check
+    Check the document (only while the Media record doesn't exist; run again every run)  depends on nothing
+      its values, its Object (per the handling), the account's permissions and its staged file: Worker._check_row
+    Create Media record      depends on the check
+    Find, create, or find or create the Object (per the handling)       depends on the check
     Upload file (PUT media/{csid}/blob, which creates the Blob record)   depends on Media
     Create Relations, both directions                                    depend on Media and Object
     Add the Object to the job's Group (if the job creates one and the row is in it)  depends on the Relations
     """
     h = tenant.handling_by_id(row["handling"])
     obj = h.object_step
-    # Design (Job execution): nothing is created for a row whose values weren't checked just before. A row whose
-    # Media record exists sent its fields already, so it isn't checked again.
+    # Design (Job execution): nothing is created for a row that wasn't checked just before. A row whose Media record
+    # exists is past that point: its remaining steps make their own checks. The step keeps its first name, "values".
     check = [] if media_created(row) else ["values"]
     steps: list[tuple[str, list[str]]] = [("values", [])] if check else []
     steps.append(("media", check))
@@ -155,6 +156,8 @@ class Worker:
         self._last_sweep = 0.0
         self._last_abandoned_sweep = 0.0
         self._job_media: set[str] = set()  # Media records the running job has created
+        self._perms: dict[str, bool] | None = None  # the running job's account permissions; None: couldn't be read
+        self._object_found: dict[int, list[str]] = {}  # the check's Object search, per row, for its Object step
         self._job_name = ""
         self._where = ""  # where the running job is, for the detail of an unexpected error
 
@@ -588,6 +591,9 @@ class Worker:
         self._values = _ValueLookups(self.tenant, client, self.lookup_clock)
         self._where = "while checking values before the first document"
         self._check_all_values(client, rows)
+        self._where = "while reading the account's permissions before the first document"
+        self._perms = self._read_permissions(client)
+        self._object_found = {}
         for row in self.storage.get_rows(job_id):
             if not row.get("include") or (row.get("result") or {}).get("state") == "Done":
                 continue
@@ -657,7 +663,7 @@ class Worker:
             self.storage.update_job(job_id, {"currentStep": name, "currentUpload": None})
             try:
                 if name == "values":
-                    self._check_values(row)
+                    self._check_row(client, job, row)
                     st.clear()
                     st.update(s="done", run=run_no)
                     continue
@@ -817,8 +823,77 @@ class Worker:
                 if code in JOB_LEVEL:
                     raise JobStop(code, f"Checking values before the first document: {detail}") from e
 
+    def _read_permissions(self, client: CSpaceClient) -> dict[str, bool] | None:
+        """The account's permissions, read once per run (they can change between submitting and running). If they
+        can't be read, the per-document permission check is skipped and a refusal shows up at the step it hits; a
+        refused sign-in or five failures in a row stop the job at once."""
+        try:
+            return client.account_permissions().summary
+        except CSpaceUnavailable as e:
+            raise JobStop("unavailable", _unavailable_before(client)) from e
+        except CSpaceError as e:
+            code, detail = classify("values", e)
+            if code in JOB_LEVEL:
+                raise JobStop(code, f"Reading the account's permissions before the first document: {detail}") from e
+            return None
+
+    def _check_row(self, client: CSpaceClient, job: dict, row: dict) -> None:
+        """The "values" step (design: Job execution, Steps within a row): the document is checked again just before
+        its records are created, as the editor checks it, so that a change in CollectionSpace since the job was
+        submitted fails the document with nothing created, not part way. In turn: its values, the account's
+        permissions, its Object (per the handling), its staged file. The first problem fails the step; what the
+        check can't know (a create CollectionSpace refuses, a failed upload) still fails at its own step."""
+        self._check_values(row)
+        self._check_permissions(job, row)
+        self._check_object(client, row)
+        self._check_file(row)
+
+    def _check_permissions(self, job: dict, row: dict) -> None:
+        """The handling's permissions and read on the authorities of its terms (rows.permission_checks,
+        rows.authority_read_checks: the editor's rules and wording)."""
+        if self._perms is None:
+            return
+        group_exists = (job.get("groupStep") or {}).get("s") == "done"
+        blocks = (permission_checks(self.tenant, row, self._perms, bool(job.get("groupOn")), group_exists)
+                  + authority_read_checks(row, self._perms))
+        if not self._perms.get("media"):
+            blocks.insert(0, {"level": "block", "text": "Your account can't create Media records (create on media)."})
+        if blocks:
+            raise _RowError("no_permission", " ".join(b["text"] for b in blocks))
+
+    def _check_object(self, client: CSpaceClient, row: dict) -> None:
+        """The Object as the handling needs it, before the Media record is created: "Link to existing object" needs
+        exactly one, "Create new object + link" none, "Link to object (create if missing)" at most one, and create
+        on objects when there is none. The search is kept for the Object step, which doesn't repeat it."""
+        h = self.tenant.handling_by_id(row["handling"])
+        if h.object == "none" or row.get("skipLink") or object_step_ran(row):
+            return
+        num = row.get("obj") or ""
+        found = client.find_objects(num)
+        row.setdefault("lookups", {})["object"] = {"value": num, "csids": list(found), "at": int(now())}
+        search = f"GET collectionobjects?as=objectNumber = \"{num}\" found {len(found)} object{'' if len(found) == 1 else 's'}"
+        if h.object == "create" and found:
+            raise _RowError("object_exists", search)
+        if h.object != "create" and len(found) > 1:
+            raise _RowError("object_ambiguous", search)
+        if h.object == "existing" and not found:
+            raise _RowError("object_gone", search)
+        if h.object == "either" and not found and self._perms is not None and not self._perms.get("objects"):
+            raise _RowError("no_permission", f"{search}, and your account can't create Object records (create on collectionobjects).")
+        self._object_found[row["n"]] = list(found)
+
+    def _check_file(self, row: dict) -> None:
+        """The staged file is still there and is what its name says (the upload step checks again when it runs)."""
+        version = (row.get("upload") or {}).get("version") or None
+        try:
+            wrong = mismatch(row["file"], self.storage.read_head(row["s3Key"], version, HEAD_BYTES))
+        except ClientError as e:
+            raise _RowError("file_missing", f"S3 GetObject {e.response['Error'].get('Code', '')}: the staged file is gone") from e
+        if wrong:
+            raise _RowError("file_type_rejected", f"Content check before creating the Media record: {wrong}")
+
     def _check_values(self, row: dict) -> None:
-        """The "values" step: check the row's values again just before its records are created (rows.value_findings,
+        """The values part of the check: the row's values again just before its records are created (rows.value_findings,
         as the editor checks them, from lookups at most VALUE_CHECK_SECONDS old). A renamed term or language: the
         row takes its current refName (saved with the step; the Media record is sent with it) and gets a
         term_renamed notice. A value that no longer exists fails the step (value_missing), so nothing is created
@@ -872,7 +947,11 @@ class Worker:
             # Design (Handling per document): "Find object" needs exactly one existing object; "Create object"
             # needs none to exist (an object added since the job was checked fails the row, object_exists);
             # "Find or create object" links to the one it finds and creates it only when there is none.
-            found = client.find_objects(row["obj"])
+            # The check just before (Worker._check_object) made this search for a row whose Media record didn't exist
+            # yet; a rerun of a row that is past the check searches here.
+            found = self._object_found.pop(row["n"], None)
+            if found is None:
+                found = client.find_objects(row["obj"])
             # the editor's checks reuse this search, so a fix sees what the run saw
             row.setdefault("lookups", {})["object"] = {"value": row["obj"], "csids": list(found), "at": int(now())}
             search = f"GET collectionobjects?as=objectNumber = \"{row['obj']}\" found {len(found)} object{'' if len(found) == 1 else 's'}"

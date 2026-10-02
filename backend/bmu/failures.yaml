@@ -20,7 +20,7 @@ file_type_rejected:
   level: row
   needs_fix: true
   explain: CollectionSpace refused the file's type, or the file's content doesn't match its name (for example a .tif that is really a JPEG).
-  fix: Replace the file with a supported format, then choose Fix and reschedule. The Media record already exists, so the rerun only uploads the file.
+  fix: Replace the file with a supported format, then choose Fix and reschedule. If the document's check found this, nothing was created for it. If CollectionSpace refused the file, the Media record already exists and the rerun only uploads the file.
 
 file_missing:
   title: The uploaded file is no longer available
@@ -40,7 +40,7 @@ object_gone:
   title: Object not found when the job ran
   level: row
   needs_fix: true
-  explain: The object was found when the job was checked, but not when it ran. It may have been renumbered or deleted in the meantime. The Media record and its file were still created; the links to the object were skipped.
+  explain: The object was found when the job was checked, but not when it ran. It may have been renumbered or deleted in the meantime. The document's check usually finds this before anything is created, so no Media record was made. If the object went missing after that check, the Media record and its file exist and only the links were skipped; the document's steps show which.
   fix: Correct the object number, or stop linking the document to an object, then choose Fix and reschedule.
 
 object_ambiguous:
@@ -48,13 +48,13 @@ object_ambiguous:
   level: row
   needs_fix: true
   explain: When the job ran, more than one object had this object number, so the BMU couldn't tell which one to link. Another object with the same number was probably added after the job was submitted.
-  fix: Correct the object number, or have the duplicate object resolved in CollectionSpace, then choose Fix and reschedule. The Media record and its file already exist.
+  fix: Correct the object number, or have the duplicate object resolved in CollectionSpace, then choose Fix and reschedule. The document's steps show whether a Media record was created before this was found; usually none was.
 
 object_exists:
   title: Object already exists
   level: row
   needs_fix: true
-  explain: The document's handling, "Create new object + link", creates a new object, but when the job ran an object with this number already existed in CollectionSpace. It was probably added after the job was checked. No object was created and the links were skipped; the Media record and its file are unaffected.
+  explain: The document's handling, "Create new object + link", creates a new object, but when the job ran an object with this number already existed in CollectionSpace. It was probably added after the job was checked. No object was created. The document's check usually finds this before anything is created, so no Media record was made; the document's steps show whether one was.
   fix: To link to the existing object, change the document's handling to "Link to existing object" or "Link to object (create if missing)". Or correct the object number. Then choose Fix and reschedule.
 
 object_rejected:
@@ -68,7 +68,7 @@ no_permission:
   title: Permission denied
   level: row
   needs_fix: true
-  explain: The account that ran the job isn't allowed to create this kind of record in CollectionSpace.
+  explain: The account that ran the job isn't allowed to do something this document needs in CollectionSpace (the technical details name it). The document's check usually finds this before anything is created.
   fix: Ask a CollectionSpace administrator for the permission, or have someone who has it use Fix and reschedule.
 
 server_error:
