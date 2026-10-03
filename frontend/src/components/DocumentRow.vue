@@ -224,6 +224,12 @@ function text(field: keyof Row, e: Event) {
       <template v-else>
       <ErrorBox v-if="row.result?.error" :code="row.result.error.code" :detail="row.result.error.detail" />
       <div v-if="row.result?.state === 'Not started' && row.result?.run" class="msg msg-info">Not reached in the last run; it runs on the rerun.</div>
+      <div v-if="replaceable" class="field wide replace-line">
+        <span class="field-note" style="font-size:12px">{{ row.replacedFor === row.result?.run ? `Replacement file: ${row.file}` : `File: ${row.file}` }}</span>
+        <button type="button" @click="replaceInput?.click()">{{ row.replacedFor === row.result?.run ? "Choose another file…" : "Replace file…" }}</button>
+        <span class="field-note">Nothing was created for this document; the rerun checks it again with this file.</span>
+        <input ref="replaceInput" type="file" hidden @change="pickReplacement" />
+      </div>
       <div class="grid">
         <div class="field wide" :class="{ edited: renamed }">
           <label><span>Filename <em class="num-state">{{ renamed ? `(renamed — original ${original})` : "(original)" }}</em></span>

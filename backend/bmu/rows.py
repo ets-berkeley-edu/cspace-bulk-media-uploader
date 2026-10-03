@@ -198,10 +198,22 @@ def fix_fields(row: dict) -> set[str]:
 RELINK_OBJECT = ("existing", "either")  # what a row whose Media record exists may switch to after object_exists
 
 
+FILE_CHECK_CODES = ("file_missing", "file_type_rejected")
+
+
+def file_check_failed(row: dict) -> bool:
+    """The row's check found its staged file gone, or not what its name says, before anything was created."""
+    check = _steps(row).get("values") or {}
+    return not media_created(row) and check.get("s") == "failed" and check.get("code") in FILE_CHECK_CODES
+
+
 def can_replace_file(row: dict) -> bool:
-    """A replacement file is for a row whose Media record exists and whose upload hasn't succeeded (for
-    example rejected as too large, or the staged file was lost). The rerun uploads it to that Media record."""
-    return media_created(row) and bool(open_steps(row, ("upload",))) and row.get("include", True)
+    """A replacement file is for a row whose file didn't reach CollectionSpace: its Media record exists and its
+    upload hasn't succeeded (rejected as too large, or the staged file was lost; the rerun uploads it to that
+    Media record), or its check failed on the file before anything was created (the rerun checks it again)."""
+    if not row.get("include", True):
+        return False
+    return (media_created(row) and bool(open_steps(row, ("upload",)))) or file_check_failed(row)
 
 
 def apply_edit(tenant: Tenant, row: dict, changes: dict[str, Any], other_names: list[str] | None = None) -> dict:
@@ -509,6 +521,11 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
         elif up != "done":
             out.append({"level": "block", "text": "The file hasn't finished uploading. If it isn't uploading in your browser now "
                                                   "(for example the page was closed), Retry it, or remove the document."})
+        elif file_check_failed(r) and r.get("replacedFor") != (r.get("result") or {}).get("run"):
+            gone = _steps(r)["values"].get("code") == "file_missing"
+            out.append({"level": "block", "text": ("The file the BMU was holding for this document is gone."
+                                                   if gone else "This file's content doesn't match its name.")
+                                                  + " Choose Replace file to add another, or remove the document."})
         ext = r["file"].rsplit(".", 1)[-1].lower() if "." in r["file"] else ""
         if ext not in SUPPORTED_EXTENSIONS:
             out.append({"level": "block", "text": f"The BMU doesn't accept .{ext or '(no extension)'} files. "

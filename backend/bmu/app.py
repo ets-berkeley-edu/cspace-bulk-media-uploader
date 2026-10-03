@@ -889,14 +889,15 @@ def _routes(app: FastAPI) -> None:
 
     @app.post("/api/jobs/{job_id}/rows/{n}/replace-file")
     def replace_file(job_id: str, n: int, body: FileSpec, sess: Session = Depends(editor_session), s: Services = Depends(svc)):
-        """A replacement file for a document whose Media record exists but whose file didn't reach CollectionSpace
-        (rejected, or lost). The browser uploads it like any file; the rerun uploads it to the existing Media record."""
+        """A replacement file for a document whose file didn't reach CollectionSpace: rejected or lost after its Media
+        record was created (the rerun uploads it to that Media record), or found gone or of the wrong type by the
+        document's check, before anything was created. The browser uploads it like any file."""
         job = _job_or_404(s, sess, job_id)
         _editable(job, sess)
         row = s.storage.get_row(job_id, n) or _404()
         if not can_replace_file(row):
-            raise HTTPException(409, "Only a document whose Media record exists and whose file didn't reach CollectionSpace "
-                                     "takes a replacement file.")
+            raise HTTPException(409, "Only a document whose file didn't reach CollectionSpace in the last run takes a "
+                                     "replacement file.")
         if body.size > s.settings.max_file_bytes:
             raise HTTPException(413, f"Too large: {body.name}")
         if (refused := unsupported([body.name])):
