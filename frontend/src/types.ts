@@ -267,3 +267,9 @@ export interface Term {
   displayName: string;
   source: string;
 }
+
+/** A message for screen reader users, shown in the page's live region (lib/utils.ts alertScreenReader). */
+export interface ScreenReaderAlert {
+  message: string;
+  politeness?: "polite" | "assertive";
+}

@@ -72,7 +72,7 @@ deployment is built (`deploy/README.md`); what it leaves for later is listed the
 | `backend/bmu/failures.yaml` | The failure catalog: every failure code with its title, explanation and what to do |
 | `backend/fakecspace/` | A simulated CollectionSpace API for development and tests (not CollectionSpace) |
 | `backend/tests/` | pytest: unit tests and the full run path with moto (AWS) and the simulated CollectionSpace |
-| `frontend/` | Vue 3 + TypeScript app (Vite, Vitest) |
+| `frontend/` | Vue 3 + TypeScript app (Vite, Vitest), being converted to Vuetify following BOA: see Frontend, below |
 | `scripts/check_cspace.py` | Checks the BMU's calls against a real CollectionSpace server |
 | `scripts/find_csid.py` | Finds which BMU job created a CollectionSpace record |
 | `docker-compose.yml` | Local stack: web, worker, Vue dev server, DynamoDB Local, moto (S3), simulated CollectionSpace |
@@ -223,8 +223,29 @@ hosted copy is republished from the file in this repo.
 
 ```sh
 cd backend && python3 -m venv .venv && . .venv/bin/activate && pip install -e '.[dev]' && pytest
-cd frontend && npm ci && npm test && npm run typecheck && npm run build
+cd frontend && npm ci && npm run lint && npm test && npm run typecheck && npm run build
 ```
+
+## Frontend
+
+The frontend is being converted to Vuetify so that it is built like UC Berkeley RTL's other applications, BOA
+(`github.com/ets-berkeley-edu/boac`) in particular: Vuetify 3 with components registered by hand
+(`src/plugins/vuetify.ts`), BOA's theme colours and Verdana, icons from `@mdi/js`, Pinia stores (`src/stores/`),
+vue-router (`src/router.ts`), axios for the BMU API, and BOA's ESLint rules (`npm run lint`). Unlike BOA, the BMU
+keeps its TypeScript type check and its Vitest unit tests.
+
+Three rules are the BMU's own:
+
+- **`X-BMU` is an axios default** (`src/lib/axios-utils.ts`), so no call to the API can leave out the header that
+  guards it against cross-site requests. Use axios only for the BMU API; files go to S3 with their own request.
+- **`v-html` is a lint error.** Text from CollectionSpace and from file names is only ever shown as text.
+- **`npm audit` stays clean.** That is why two of BOA's lint packages are left out (see `eslint.config.js`), and why
+  axios is one release ahead of BOA's.
+
+The conversion goes screen by screen. Screens not yet converted are listed in `eslint.config.js`
+(`notYetConverted`); they keep their old look from `src/style.css`, inside an element with the class `legacy`,
+where Vuetify's style reset is undone. Take a screen off the list, and its rules out of `style.css`, when it is
+converted.
 
 ## Checking against the real CollectionSpace
 

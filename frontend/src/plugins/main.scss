@@ -1,0 +1,5 @@
+// The RTL look: Verdana first, as in BOA.
+@use 'vuetify' with (
+  $color-pack: true,
+  $body-font-family: (Verdana, "Open Sans", Roboto, Helvetica, Arial, sans-serif)
+);

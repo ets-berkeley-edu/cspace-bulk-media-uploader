@@ -2,7 +2,7 @@
  *  a warning style when the CollectionSpace is a real server. */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
-import App from "../App.vue";
+import App from "../views/Home.vue";
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 

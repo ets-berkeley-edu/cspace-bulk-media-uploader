@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
-import App from "../App.vue";
+import App from "../views/Home.vue";
 import DraftsList from "../components/DraftsList.vue";
 import JobActions from "../components/JobActions.vue";
 import JobDocsTable from "../components/JobDocsTable.vue";

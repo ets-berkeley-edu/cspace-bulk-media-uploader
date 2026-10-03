@@ -1,49 +1,21 @@
+import axios from "axios";
+import { ApiError } from "./lib/axios-utils";
 import type { Check, Created, Failure, Job, Me, Row, RowChange, Run, Schedule, Term } from "./types";
 
-export class ApiError extends Error {
-  constructor(public status: number, message: string, public detail: unknown = null) {
-    super(message);
-  }
-}
-
-function messageOf(detail: unknown, status: number): string {
-  if (typeof detail === "string") return detail;
-  if (detail && typeof detail === "object" && "message" in detail) return String((detail as { message: unknown }).message);
-  if (Array.isArray(detail)) return "Some values aren't valid.";
-  return `Request failed (${status})`;
-}
-
 /**
- * JSON request to the BMU API. The session is an httpOnly cookie; X-BMU guards against cross-site requests.
+ * JSON request to the BMU API, through axios: X-BMU, and what a failed request rejects with, are set up once in
+ * lib/axios-utils.ts (initializeAxios).
  * poll: a background refresh, which doesn't count as activity for the idle sign-out.
  */
 export async function request<T>(method: string, path: string, body?: unknown, poll = false): Promise<T> {
-  const res = await fetch(path, {
-    method,
-    credentials: "same-origin",
-    headers: { "X-BMU": "1", ...(poll ? { "X-BMU-Poll": "1" } : {}), ...(body !== undefined ? { "Content-Type": "application/json" } : {}) },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
-  const data = res.headers.get("content-type")?.includes("json") ? await res.json() : null;
-  if (!res.ok) {
-    const detail = data?.detail ?? null;
-    const err = new ApiError(res.status, messageOf(detail, res.status), detail);
-    // Signed out (idle or absolute timeout): the app returns to the sign-in page with the reason.
-    if (res.status === 401 && path !== "/api/me" && path !== "/api/login" && typeof window !== "undefined") {
-      window.dispatchEvent(new CustomEvent("bmu-signed-out", { detail: err.message }));
-    }
-    throw err;
-  }
-  return data as T;
+  const response = await axios.request<T>({ method, url: path, data: body, headers: poll ? { "X-BMU-Poll": "1" } : {} });
+  return response.data;
 }
 
 /** Send the thumbnail the browser made; the server rewrites it, and stores none for a protected file. */
 async function putThumbnail(id: string, n: number, jpeg: Blob): Promise<{ stored: boolean }> {
-  const res = await fetch(`/api/jobs/${id}/rows/${n}/thumbnail`, {
-    method: "POST", credentials: "same-origin", headers: { "X-BMU": "1", "Content-Type": "image/jpeg" }, body: jpeg,
-  });
-  if (!res.ok) throw new ApiError(res.status, `Thumbnail not stored (${res.status})`);
-  return res.json();
+  const response = await axios.post<{ stored: boolean }>(`/api/jobs/${id}/rows/${n}/thumbnail`, jpeg, { headers: { "Content-Type": "image/jpeg" } });
+  return response.data;
 }
 
 export const thumbnailUrl = (id: string, n: number, v = 0, large = false) =>
@@ -119,4 +91,5 @@ export const api = {
     request<{ terms: Term[]; total?: number; more?: boolean; message?: string }>("GET", `/api/authorities?field=${encodeURIComponent(field)}&q=${encodeURIComponent(q)}`),
 };
 
+export { ApiError };
 export type { Check };

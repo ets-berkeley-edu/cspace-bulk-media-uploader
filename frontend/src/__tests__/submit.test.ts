@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { defineComponent } from "vue";
 import { flushPromises, mount } from "@vue/test-utils";
-import App from "../App.vue";
+import App from "../views/Home.vue";
 import JobEditor from "../components/JobEditor.vue";
 import type { Job, Me, Perms, Row, TenantInfo } from "../types";
 
