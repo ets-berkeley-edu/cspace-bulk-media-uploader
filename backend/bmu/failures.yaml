@@ -41,7 +41,7 @@ object_gone:
   level: row
   needs_fix: true
   explain: The object was found when the job was checked, but not when it ran. It may have been renumbered or deleted in the meantime. The document's check usually finds this before anything is created, so no Media record was made. If the object went missing after that check, the Media record and its file exist and only the links were skipped; the document's steps show which.
-  fix: Correct the object number, or stop linking the document to an object, then choose Fix and reschedule.
+  fix: Correct the object number, then choose Fix and reschedule. If the document shouldn't be linked to an object after all, change its handling to one without an object when nothing was created for it, or choose "Stop linking" when its Media record already exists.
 
 object_ambiguous:
   title: Object number matches several objects

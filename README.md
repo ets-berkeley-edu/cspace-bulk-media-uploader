@@ -5,8 +5,8 @@ legacy `uploadmedia` Django webapp in `cspace-webapps-common`. It follows the de
 "New BMU (uploadmedia): High-Level Architecture" and its UI mockup.
 
 It implements the design for **PAHMA**. Not built yet: the other tenants, the TIFF quality checks, the audit-log
-screen (the audit entries are written), the Restricted Media option, tuning for 1,000-document jobs and the AWS
-deployment.
+screen (the audit entries are written), the Restricted Media option and tuning for 1,000-document jobs. The AWS
+deployment is built (`deploy/README.md`); what it leaves for later is listed there.
 
 ## What it does
 
@@ -215,7 +215,8 @@ Plain `docker compose up` still starts the simulator environment as before; the 
 variables in `docker-compose.yml` (`BMU_UI_PORT`, `BMU_API_PORT`, `BMU_S3_PORT`, `BMU_DYNAMODB_PORT`, `BMU_SIM_PORT`,
 `BMU_ENV_LABEL`, `BMU_COOKIE_NAME`) with the simulator's values as defaults.
 
-The UI mockup in `docs/mockup/` is kept the same as the hosted copy: every change to one is made to the other.
+The UI mockup in `docs/mockup/` is no longer updated: it shows the design as of September 30, 2026, and is being
+retired. The prototype is the reference for how the BMU looks and behaves.
 
 ## Development without Docker
 

@@ -238,6 +238,49 @@ def test_a_staged_file_that_is_gone_fails_the_document_with_nothing_created(api,
     row = api.get(f"/api/jobs/{job}").json()["rows"][0]
     assert row["result"]["error"]["code"] == "file_missing" and nothing_created(row, fake, media_before)
 
+    # no Media record yet, so the fix is a replacement file: until then the job can't be submitted again
+    assert api.post(f"/api/jobs/{job}/fix").status_code == 200
+    checks = api.post(f"/api/jobs/{job}/check").json()["rows"][0]["checks"]
+    assert any(c["level"] == "block" and "is gone. Choose Replace file" in c["text"] for c in checks), checks
+    assert api.post(f"/api/jobs/{job}/schedule").status_code != 200
+    r = api.post(f"/api/jobs/{job}/rows/1/replace-file", json={"name": "15-1234_1.jpg", "size": 5, "type": "image/jpeg"})
+    assert r.status_code == 200, r.text
+    new = r.json()["row"]
+    assert new["upload"]["s"] == "pending" and new["s3Key"] != rows[0]["s3Key"]
+    s3.put_object(Bucket=bucket, Key=new["s3Key"], Body=b"\xff\xd8\xffsm")
+    after = api.post(f"/api/jobs/{job}/rows/1/uploaded").json()["row"]
+    assert after["upload"]["s"] == "done" and not [c for c in after["checks"] if c["level"] == "block"], after["checks"]
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    worker.tick()
+    j = api.get(f"/api/jobs/{job}").json()
+    assert j["job"]["status"] == "Completed" and j["rows"][0]["result"]["state"] == "Done"
+    assert len(fake.media) == media_before + 1 and len(fake.blobs) == 1
+
+
+def test_a_file_the_check_rejects_for_its_content_takes_a_replacement(api, login, add_uploaded, worker, services):
+    login()
+    job = new_job(api)
+    rows = add_uploaded(job, ["15-1234_1.jpg"])
+    services.storage.s3.put_object(Bucket=services.settings.s3_bucket, Key=rows[0]["s3Key"], Body=b"%PDF-1.7 not a jpeg")
+    api.patch(f"/api/jobs/{job}/rows/1", json={"description": "kept"})
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    row = api.get(f"/api/jobs/{job}").json()["rows"][0]
+    # the staged version the row points at is the one uploaded first; point it at the wrong content
+    row["upload"]["version"] = ""
+    services.storage.put_row(job, row)
+    worker.tick()
+    row = api.get(f"/api/jobs/{job}").json()["rows"][0]
+    assert row["result"]["error"]["code"] == "file_type_rejected" and row["result"]["error"]["step"] == "values"
+    assert api.post(f"/api/jobs/{job}/fix").status_code == 200
+    checks = api.post(f"/api/jobs/{job}/check").json()["rows"][0]["checks"]
+    assert any(c["level"] == "block" and "doesn't match its name. Choose Replace file" in c["text"] for c in checks), checks
+    r = api.post(f"/api/jobs/{job}/rows/1/replace-file", json={"name": "15-1234_1.jpg", "size": 5, "type": "image/jpeg"})
+    assert r.status_code == 200 and r.json()["row"]["description"] == "kept"  # the document keeps its fields
+    # a document whose check failed on something else takes no replacement file
+    other = new_job(api)
+    add_uploaded(other, ["15-1234_2.jpg"])
+    assert api.post(f"/api/jobs/{other}/rows/1/replace-file", json={"name": "a.jpg", "size": 5, "type": "image/jpeg"}).status_code == 409
+
 
 def test_the_check_searches_for_the_object_once_and_the_object_step_reuses_it(api, login, add_uploaded, worker, monkeypatch):
     login()
@@ -382,6 +425,7 @@ def test_create_fails_when_the_object_appeared_after_the_check_and_the_row_can_s
     # still "create": the rerun check says the object exists
     checks = api.post(f"/api/jobs/{job}/check").json()["rows"][0]["checks"]
     assert any(c["level"] == "block" and "already exists" in c["text"] for c in checks), checks
+    assert any(c["text"] == "The rerun will only create the object and link the Media record to the object." for c in checks), checks
     # only a handling that links to the existing object is allowed
     r = api.patch(f"/api/jobs/{job}/rows/1", json={"handling": "mediaonly"})
     assert r.status_code == 422 and "links to that object" in r.json()["detail"]

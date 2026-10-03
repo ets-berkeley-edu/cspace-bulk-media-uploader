@@ -17,6 +17,7 @@ from datetime import datetime
 
 from botocore.exceptions import ClientError
 
+from . import logsafe
 from . import schedule as sched
 from .config import Settings, get_settings
 from .crypto import Crypto, make_crypto
@@ -345,12 +346,13 @@ class Worker:
         return gone
 
     def sweep_protected_staged(self) -> list[tuple[str, int]]:
-        """Design: Protected files, Cleanup. In jobs that need attention or failed, a protected file's staged
-        upload is removed after a time limit even though the job stays; a fix adds the file again."""
+        """Design: Protected files, Cleanup. In a job that has stopped, a protected file's staged upload is removed
+        after a time limit even though the job stays; a fix adds the file again. A Completed job counts too: an
+        excluded protected document never uploads, and its file would otherwise wait for the job's 30-day expiry."""
         removed = []
         limit = now() - self.s.protected_staged_days * 86400
         for j in self.storage.list_jobs(self.tenant.key):
-            if j["status"] not in ("NeedsAttention", "Failed") or (j.get("finishedAt") or now()) > limit:
+            if j["status"] not in ("NeedsAttention", "Failed", "Completed") or (j.get("finishedAt") or now()) > limit:
                 continue
             for r in self.storage.get_rows(j["id"]):
                 upload_open = ((r.get("result") or {}).get("steps") or {}).get("upload", {}).get("s") != "done"
@@ -1117,6 +1119,7 @@ def _progress(rows: list[dict]) -> dict:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    logsafe.install()
     s = get_settings()
     storage = Storage(s)
     if s.create_tables:

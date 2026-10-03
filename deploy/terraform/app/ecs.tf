@@ -69,7 +69,7 @@ resource "aws_ecs_task_definition" "worker" {
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
   cpu                      = 512
-  memory                   = 2048 # TIFF thumbnails and files up to 2 GB streamed through it
+  memory                   = 2048 # files up to 2 GB are streamed through it (the web app makes the TIFF thumbnails)
   execution_role_arn       = aws_iam_role.execution.arn
   task_role_arn            = aws_iam_role.worker.arn
 

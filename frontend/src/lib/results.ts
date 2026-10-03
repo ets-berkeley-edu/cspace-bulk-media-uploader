@@ -186,7 +186,14 @@ export function fixFields(r: Row): { obj: boolean; skipLink: boolean; handling: 
 /** The object behaviors a document can switch to after object_exists: those that link to the existing object. */
 export const RELINK_OBJECT: Handling["object"][] = ["existing", "either"];
 
-/** A replacement file is for a document whose Media record exists and whose file didn't reach CollectionSpace. */
+/** The document's check found its staged file gone, or not what its name says, before anything was created. */
+export function fileCheckFailed(r: Row): boolean {
+  const check = r.result?.steps?.values;
+  return !mediaCreated(r) && check?.s === "failed" && ["file_missing", "file_type_rejected"].includes(check.code ?? "");
+}
+
+/** A replacement file is for a document whose file didn't reach CollectionSpace: its Media record exists and the
+ *  upload hasn't succeeded, or its check failed on the file before anything was created (mirrors rows.can_replace_file). */
 export function canReplaceFile(r: Row): boolean {
-  return mediaCreated(r) && openSteps(r, ["upload"]).length > 0 && r.include;
+  return r.include && ((mediaCreated(r) && openSteps(r, ["upload"]).length > 0) || fileCheckFailed(r));
 }

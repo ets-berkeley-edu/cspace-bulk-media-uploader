@@ -14,6 +14,7 @@ Rows are separate items so a 1,000-row job never approaches the 400 KB item limi
 """
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from decimal import Decimal
@@ -25,6 +26,8 @@ from botocore.config import Config
 from botocore.exceptions import ClientError, ConnectionClosedError, EndpointConnectionError
 
 from .config import Settings
+
+log = logging.getLogger("bmu.storage")
 
 
 def _clean(v: Any) -> Any:
@@ -173,22 +176,31 @@ class Storage:
         if not item:
             return None
         if _clean(item).get("expires", 0) < now():
-            self.delete_session(key)  # past the absolute limit: the encrypted password goes with it
+            self.end_session(key, _clean(item).get("tenant"))  # past the absolute limit: the encrypted password goes with it
             return None
         return _clean(item)
+
+    def end_session(self, key: str, tenant: str | None) -> None:
+        """Remove a session, however it ends (Sign out, the idle or absolute limit, the sweep), and stop its editing
+        of any draft, so others can edit it without taking over (design: Drafts, Closing)."""
+        if tenant:
+            for job in self.list_jobs(tenant):
+                if job.get("editingSession") == key:
+                    self.close_draft(job["id"], key)
+        self.delete_session(key)
 
     def sweep_sessions(self, idle_seconds: float) -> int:
         """Delete sessions past their absolute limit or idle too long, with their encrypted passwords (design:
         Sessions): an abandoned browser tab never comes back to trigger the check itself."""
         t, gone = now(), 0
-        kw: dict[str, Any] = {"ProjectionExpression": "PK, expires, lastSeen"}
+        kw: dict[str, Any] = {"ProjectionExpression": "PK, expires, lastSeen, tenant"}
         while True:
             page = self.sessions.scan(**kw)
             for item in page.get("Items", []):
                 it = _clean(item)
                 last = it.get("lastSeen") or 0
                 if it.get("expires", 0) < t or (last and t - last > idle_seconds):
-                    self.delete_session(it["PK"])
+                    self.end_session(it["PK"], it.get("tenant"))
                     gone += 1
             if "LastEvaluatedKey" not in page:
                 return gone
@@ -333,7 +345,8 @@ class Storage:
         detail is written to S3 first (put_audit_detail) and the entry points to it. Raises if the transaction
         fails: the run then stays unfinished and the job Running, and the heartbeat check finishes it later.
         Returns the entry's key."""
-        entry = self._audit_item(tenant, "Run", user, job_id, detail, csids, **extra)
+        entry = self._audit_item(tenant, "Run", user, job_id, detail, csids, startedAt=run_item.get("startedAt"),
+                                 endedAt=run_item.get("endedAt"), **extra)  # the entry outlives the run item
         item = _dyn({**run_item, "PK": f"JOB#{job_id}", "SK": f"RUN#{int(run_item['run']):05d}", "auditKey": entry["SK"]})
         self.dynamodb.meta.client.transact_write_items(TransactItems=[
             {"Put": {"TableName": self.jobs.name, "Item": item}},
@@ -795,7 +808,21 @@ class Storage:
         return False
 
     def delete_object(self, key: str) -> None:
-        self.s3.delete_object(Bucket=self.s.s3_bucket, Key=key)
+        """Delete an object for good (design: Protected files, Cleanup). The bucket is versioned, so a plain delete
+        would only hide the file behind a delete marker; this removes every version and marker of the key. If the
+        versions can't be listed, it falls back to the plain delete, and the bucket's lifecycle rule removes the
+        hidden version within a day."""
+        try:
+            pages = self.s3.get_paginator("list_object_versions").paginate(Bucket=self.s.s3_bucket, Prefix=key)
+            versions = [v["VersionId"] for page in pages for v in page.get("Versions", []) + page.get("DeleteMarkers", [])
+                        if v["Key"] == key]
+        except ClientError:
+            log.warning("could not list the versions of a staged object; deleting its current version only")
+            versions = []
+        if not versions:
+            self.s3.delete_object(Bucket=self.s.s3_bucket, Key=key)
+        for version in versions:
+            self.s3.delete_object(Bucket=self.s.s3_bucket, Key=key, VersionId=version)
 
 
 def _strip(item: dict) -> dict:

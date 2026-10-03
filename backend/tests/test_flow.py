@@ -999,3 +999,14 @@ def test_deleting_the_last_document_of_a_new_draft_deletes_the_draft(api, login,
     add_uploaded(job, ["15-1234_a.jpg"])
     r = api.delete(f"/api/jobs/{job}/rows/1").json()
     assert r["jobStatus"] == "Deleted" and services.storage.get_job(job) is None
+
+
+def test_an_authority_source_not_set_up_for_the_tenant_is_skipped(api, login, services, monkeypatch):
+    """Design (Authority term fields, Unconfigured vocabularies): skipped, as in the CollectionSpace UI."""
+    login()
+    fields = services.tenant.authority_fields
+    monkeypatch.setitem(fields, "creator", [*fields["creator"], "person_shared"])
+    r = api.get("/api/authorities", params={"field": "creator", "q": "freu"})
+    assert r.status_code == 200 and r.json()["terms"]
+    monkeypatch.setitem(fields, "creator", ["person_shared"])
+    assert api.get("/api/authorities", params={"field": "creator", "q": "freu"}).json() == {"terms": [], "total": 0}

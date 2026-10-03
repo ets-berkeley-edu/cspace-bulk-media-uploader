@@ -172,7 +172,8 @@ resource "aws_s3_bucket_cors_configuration" "staging" {
 resource "aws_s3_bucket_lifecycle_configuration" "staging" {
   bucket = aws_s3_bucket.staging.id
 
-  # Large runs' per-row audit detail (Storage.put_audit_detail), kept a year.
+  # Large runs' per-row audit detail (Storage.put_audit_detail), kept a year. The task roles can add these files
+  # but not delete them; if one is written over, its earlier version is kept for the year too.
   rule {
     id     = "expire-audit-detail"
     status = "Enabled"
@@ -184,15 +185,22 @@ resource "aws_s3_bucket_lifecycle_configuration" "staging" {
     expiration {
       days = 365
     }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 365
+    }
   }
 
-  # The BMU deletes staged files itself (design: Retention and audit). With versioning on, a deletion leaves the old
-  # version behind; this removes it, and the leftover delete marker, after a day.
+  # The BMU deletes staged files itself, every version (Storage.delete_object; design: Retention and audit). This
+  # is the backstop for a version left behind (a file written over, or a delete that couldn't list the versions):
+  # gone after a day, with any leftover delete marker. Staged files only, so audit files keep their versions.
   rule {
     id     = "remove-deleted-versions"
     status = "Enabled"
 
-    filter {}
+    filter {
+      prefix = "staging/"
+    }
 
     expiration {
       expired_object_delete_marker = true

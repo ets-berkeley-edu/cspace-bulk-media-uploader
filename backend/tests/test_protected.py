@@ -106,6 +106,7 @@ def test_protected_uploads_are_removed_from_stopped_jobs_after_7_days(api, login
     assert rows["12-2001.jpg"]["upload"] == {"s": "failed", "reason": "removed"}
     assert services.storage.head_object(rows["12-2001.jpg"]["s3Key"]) is None
     assert rows["15-1234_1.jpg"]["upload"]["s"] == "done"
+    assert worker.sweep_protected_staged() == []  # once
     # fixing: the document asks for its file again, and Retry takes it
     api.post(f"/api/jobs/{job}/fix")
     r = api.post(f"/api/jobs/{job}/check").json()["rows"]
@@ -142,3 +143,19 @@ def test_a_running_job_past_the_sign_in_limit_loses_its_stored_sign_in(api, logi
     assert services.storage.get_credential(job)
     worker.sweep_expired_sign_ins()
     assert services.storage.get_credential(job) is None and services.storage.get_job(job)["status"] == "Running"
+
+
+def test_an_excluded_protected_documents_upload_is_removed_from_a_completed_job_too(api, login, add_uploaded, worker, services):
+    """An excluded document never uploads, so in a job that completes its staged file would wait 30 days."""
+    login()
+    job = new_job(api)
+    rows = by_file(add_uploaded(job, ["12-2001.jpg", "15-1234_1.jpg"]))
+    assert api.patch(f"/api/jobs/{job}/rows/{rows['12-2001.jpg']['n']}", json={"include": False}).status_code == 200
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    worker.tick()
+    assert api.get(f"/api/jobs/{job}").json()["job"]["status"] == "Completed"
+    key = rows["12-2001.jpg"]["s3Key"]
+    assert services.storage.head_object(key) is not None and worker.sweep_protected_staged() == []  # not yet
+    services.storage.update_job(job, {"finishedAt": now() - 8 * 86400})
+    assert worker.sweep_protected_staged() == [(job, rows["12-2001.jpg"]["n"])]
+    assert services.storage.head_object(key) is None

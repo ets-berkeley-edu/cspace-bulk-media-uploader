@@ -85,6 +85,12 @@ describe("results helpers (design: Finished jobs and error messages)", () => {
       relObjectMedia: { s: "skipped" as const, after: "createObject" } } } };
     expect(fixFields(exists)).toEqual({ obj: true, skipLink: true, handling: true });
     expect(canReplaceFile(gone)).toBe(false);
+    // the document's check found the staged file gone before anything was created: a replacement is the fix
+    const fileGone = { ...valueMissing, result: { ...valueMissing.result!, steps: { ...valueMissing.result!.steps!,
+      values: { s: "failed" as const, code: "file_missing", run: 1 } } } };
+    expect(canReplaceFile(fileGone)).toBe(true);
+    expect(canReplaceFile({ ...fileGone, include: false })).toBe(false);
+    expect(canReplaceFile(valueMissing)).toBe(false);
     expect(createdSomething(tooLarge)).toBe(true);
     expect(createdSomething(notRun)).toBe(false);
     // the worker stopped on it: a create may have reached CollectionSpace unrecorded, so it counts as having created something

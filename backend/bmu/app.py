@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import demo
+from . import logsafe
 from . import schedule as sched
 from .config import Settings, get_settings
 from .crypto import Crypto, make_crypto
@@ -77,6 +78,7 @@ class Services:
 
 def create_app(services: Services | None = None) -> FastAPI:
     app = FastAPI(title="New BMU (prototype)", docs_url="/api/docs", openapi_url="/api/openapi.json")
+    logsafe.install()  # uvicorn has set up its logging by the time the app is created
     if services is None:
         s = get_settings()
         storage = Storage(s)
@@ -158,7 +160,7 @@ def current_session(request: Request, s: Services = Depends(svc)) -> Session:
     t = now()
     last = float(item.get("lastSeen") or item.get("expires", t) - s.settings.session_hours * 3600)
     if t - last > s.settings.session_idle_minutes * 60:
-        s.storage.delete_session(item["PK"])
+        s.storage.end_session(item["PK"], item.get("tenant"))  # with its hold on any draft it was editing
         raise HTTPException(401, f"You were signed out after {s.settings.session_idle_minutes} minutes without activity. "
                                  "Please sign in again; everything you changed was saved.")
     if request.headers.get("x-bmu-poll") != "1" and t - last > 60:
@@ -544,11 +546,8 @@ def _routes(app: FastAPI) -> None:
         if token:
             key = _hash(token)
             item = s.storage.get_session(key)
-            if item:  # stop editing any draft this session had open, so others can edit it without taking over
-                for j in s.storage.list_jobs(item["tenant"]):
-                    if j.get("editingSession") == key:
-                        s.storage.close_draft(j["id"], key)
-            s.storage.delete_session(key)
+            # stop editing any draft this session had open, so others can edit it without taking over
+            s.storage.end_session(key, item["tenant"] if item else None)
         response.delete_cookie(s.settings.cookie_name, path="/")
         return {"ok": True}
 
@@ -571,6 +570,9 @@ def _routes(app: FastAPI) -> None:
             raise HTTPException(400, "Not an authority field")
         # As in the CollectionSpace UI, sources the user can't read are dropped silently.
         readable = {"personauthorities": sess.perms.get("readPersons", True), "orgauthorities": sess.perms.get("readOrgs", True)}
+        kinds = [k for k in kinds if k in s.tenant.authorities]  # a source not set up for this tenant is skipped, as in the UI
+        if not kinds:
+            return {"terms": [], "total": 0}
         kinds = [k for k in kinds if readable.get(s.tenant.authorities[k]["service"], True)]
         if not kinds:
             return {"terms": [], "total": 0, "message": "Your CollectionSpace account can't read the Person or Organization authorities, so it can't search them."}
@@ -889,14 +891,15 @@ def _routes(app: FastAPI) -> None:
 
     @app.post("/api/jobs/{job_id}/rows/{n}/replace-file")
     def replace_file(job_id: str, n: int, body: FileSpec, sess: Session = Depends(editor_session), s: Services = Depends(svc)):
-        """A replacement file for a document whose Media record exists but whose file didn't reach CollectionSpace
-        (rejected, or lost). The browser uploads it like any file; the rerun uploads it to the existing Media record."""
+        """A replacement file for a document whose file didn't reach CollectionSpace: rejected or lost after its Media
+        record was created (the rerun uploads it to that Media record), or found gone or of the wrong type by the
+        document's check, before anything was created. The browser uploads it like any file."""
         job = _job_or_404(s, sess, job_id)
         _editable(job, sess)
         row = s.storage.get_row(job_id, n) or _404()
         if not can_replace_file(row):
-            raise HTTPException(409, "Only a document whose Media record exists and whose file didn't reach CollectionSpace "
-                                     "takes a replacement file.")
+            raise HTTPException(409, "Only a document whose file didn't reach CollectionSpace in the last run takes a "
+                                     "replacement file.")
         if body.size > s.settings.max_file_bytes:
             raise HTTPException(413, f"Too large: {body.name}")
         if (refused := unsupported([body.name])):
