@@ -215,8 +215,9 @@ Plain `docker compose up` still starts the simulator environment as before; the 
 variables in `docker-compose.yml` (`BMU_UI_PORT`, `BMU_API_PORT`, `BMU_S3_PORT`, `BMU_DYNAMODB_PORT`, `BMU_SIM_PORT`,
 `BMU_ENV_LABEL`, `BMU_COOKIE_NAME`) with the simulator's values as defaults.
 
-The UI mockup in `docs/mockup/` is no longer updated: it shows the design as of September 30, 2026, and is being
-retired. The prototype is the reference for how the BMU looks and behaves.
+The UI mockup in `docs/mockup/` is kept in step with the prototype: the same layout and functionality, not the same
+look (it is plain HTML and doesn't use Vuetify). A change to what a screen shows or does is made in both, and the
+hosted copy is republished from the file in this repo.
 
 ## Development without Docker
 
