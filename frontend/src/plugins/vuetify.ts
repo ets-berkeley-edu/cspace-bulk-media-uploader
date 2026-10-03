@@ -1,21 +1,50 @@
 import './main.scss'
 import {aliases, mdi} from 'vuetify/iconsets/mdi-svg'
 import {createVuetify} from 'vuetify'
+import {VAlert} from 'vuetify/components/VAlert'
 import {VApp} from 'vuetify/components/VApp'
+import {VAppBar} from 'vuetify/components/VAppBar'
 import {VBtn} from 'vuetify/components/VBtn'
+import {VCard, VCardText} from 'vuetify/components/VCard'
+import {VChip} from 'vuetify/components/VChip'
+import {VDivider} from 'vuetify/components/VDivider'
+import {VForm} from 'vuetify/components/VForm'
 import {VIcon} from 'vuetify/components/VIcon'
+import {VList, VListItem, VListItemTitle} from 'vuetify/components/VList'
 import {VMain} from 'vuetify/components/VMain'
+import {VMenu} from 'vuetify/components/VMenu'
+import {VSnackbar} from 'vuetify/components/VSnackbar'
+import {VSpacer} from 'vuetify/components/VGrid'
+import {VTab, VTabs} from 'vuetify/components/VTabs'
+import {VTextField} from 'vuetify/components/VTextField'
 
 /**
- * Vuetify set up as BOA sets it up: components registered by hand (add each one here when a screen first uses it,
- * so the bundle holds only what the BMU uses), icons from @mdi/js, and BOA's theme colours and control defaults.
+ * Vuetify set up as BOA, Damien and Diablo set it up: components registered by hand (add each one here when a screen first uses it,
+ * so the bundle holds only what the BMU uses), icons from @mdi/js, and control defaults. The light theme is BOA's colours; the dark theme
+ * follows Damien's and Diablo's (BOA has none).
  */
 export default createVuetify({
   components: {
+    VAlert,
     VApp,
+    VAppBar,
     VBtn,
+    VCard,
+    VCardText,
+    VChip,
+    VDivider,
+    VForm,
     VIcon,
-    VMain
+    VList,
+    VListItem,
+    VListItemTitle,
+    VMain,
+    VMenu,
+    VSnackbar,
+    VSpacer,
+    VTab,
+    VTabs,
+    VTextField
   },
   defaults: {
     VBtn: {
@@ -75,7 +104,25 @@ export default createVuetify({
           success: '#437f4b',
           'surface-light': '#f5f5f5',
           tertiary: '#125074',
+          topbar: '#125074',
           warning: '#C74600'
+        }
+      },
+      dark: {
+        colors: {
+          anchor: '#7cc0e8',
+          background: '#0d202c',
+          body: '#e6e6e6',
+          error: '#ff6b6b',
+          info: '#61b8ff',
+          primary: '#86c8f3',
+          secondary: '#4298d1',
+          success: '#4fc46a',
+          surface: '#15293a',
+          'surface-light': '#1e3547',
+          tertiary: '#195f8a',
+          topbar: '#0c354d',
+          warning: '#ffa64d'
         }
       }
     }

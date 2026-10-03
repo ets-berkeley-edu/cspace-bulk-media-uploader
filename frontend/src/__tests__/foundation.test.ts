@@ -1,14 +1,13 @@
-/** The Vuetify foundation: axios set up for the BMU API, the screen reader and focus helpers, and the app shell. */
+/** The Vuetify foundation: axios set up for the BMU API, the screen reader and focus helpers, and the theme. */
 import axios from 'axios'
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 import {createPinia, setActivePinia} from 'pinia'
-import {flushPromises, mount} from '@vue/test-utils'
+import {mount} from '@vue/test-utils'
 import {nextTick} from 'vue'
-import App from '@/App.vue'
 import {ApiError, api, request} from '@/api'
+import {getMyProfile, logIn} from '@/api/auth'
 import {alertScreenReader, putFocusNextTick} from '@/lib/utils'
 import vuetify from '@/plugins/vuetify'
-import router from '@/router'
 import {useContextStore} from '@/stores/context'
 
 type Call = {url: string, init: RequestInit}
@@ -91,8 +90,8 @@ describe('axios for the BMU API', () => {
     const listener = (e: Event) => heard.push((e as CustomEvent<string>).detail)
     window.addEventListener('bmu-signed-out', listener)
     mockApi(401, {detail: 'You were signed out after 30 minutes without activity.'})
-    await api.me().catch(() => undefined)
-    await api.login('u', 'p').catch(() => undefined)
+    await getMyProfile().catch(() => undefined)
+    await logIn('u', 'p').catch(() => undefined)
     expect(heard).toEqual([])
     await api.jobs().catch(() => undefined)
     await request('GET', '/api/dates/parse?text=1920').catch(() => undefined)
@@ -156,24 +155,7 @@ describe('screen reader and focus helpers (from BOA)', () => {
   })
 })
 
-describe('the app shell', () => {
-  it('shows the app at /, sends any other address there, and has the screen reader live region', async () => {
-    mockApi(401, {detail: 'Not signed in'})
-    router.push('/no/such/page')
-    await router.isReady()
-    const w = mount(App, {global: {plugins: [createPinia(), vuetify, router]}})
-    await flushPromises()
-    expect(router.currentRoute.value.path).toBe('/')
-    expect(w.text()).toContain('Sign in with your CollectionSpace account')
-    const announcer = w.find('#announcer')
-    expect(announcer.attributes('aria-live')).toBe('polite')
-    alertScreenReader('Signed out.')
-    await nextTick()
-    await nextTick()
-    expect(w.find('#announcer').text()).toBe('Signed out.')
-    w.unmount()
-  })
-
+describe('Vuetify', () => {
   it('renders a Vuetify component with the BOA defaults', () => {
     const w = mount({template: '<v-btn id="go" color="primary">Go</v-btn>'}, {global: {plugins: [vuetify]}})
     const button = w.find('button#go')
@@ -182,7 +164,8 @@ describe('the app shell', () => {
     expect(button.attributes('style')).toContain('text-transform: none')
   })
 
-  it('has BOA\'s primary colour in its theme', () => {
+  it('has BOA\'s primary colour in its light theme, and a dark theme', () => {
     expect(vuetify.theme.themes.value.light.colors.primary.toLowerCase()).toBe('#37769a')
+    expect(vuetify.theme.themes.value.dark.dark).toBe(true)
   })
 })

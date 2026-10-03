@@ -5,13 +5,15 @@ import App from './App.vue'
 import {initializeAxios} from '@/lib/axios-utils'
 import vuetify from '@/plugins/vuetify'
 import router from '@/router'
-// After Vuetify's styles, so the screens not yet converted keep their own look. Goes away with the last of them.
-import './style.css'
+import {useContextStore} from '@/stores/context'
 
 initializeAxios(axios)
 
-createApp(App)
+const app = createApp(App)
   .use(createPinia())
   .use(vuetify)
-  .use(router)
-  .mount('#app')
+
+// Which environment this is and who is signed in, before the first page: the routes depend on both.
+useContextStore().init().then(() => {
+  app.use(router).mount('#app')
+})

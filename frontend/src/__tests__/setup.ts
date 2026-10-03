@@ -28,3 +28,25 @@ axios.defaults.adapter = async (config: InternalAxiosRequestConfig): Promise<Axi
 }
 
 initializeAxios(axios)
+
+// What Vuetify's layout components and the colour scheme choice need from a browser, which jsdom doesn't have.
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+globalThis.ResizeObserver = globalThis.ResizeObserver || ResizeObserverStub
+window.matchMedia = window.matchMedia || ((query: string) => ({
+  matches: false,
+  media: query,
+  onchange: null,
+  addEventListener: () => {},
+  removeEventListener: () => {},
+  addListener: () => {},
+  removeListener: () => {},
+  dispatchEvent: () => false
+}) as MediaQueryList)
+// Vuetify places a menu using the visual viewport.
+globalThis.visualViewport = globalThis.visualViewport || Object.assign(new EventTarget(), {
+  height: 768, offsetLeft: 0, offsetTop: 0, pageLeft: 0, pageTop: 0, scale: 1, width: 1024, onresize: null, onscroll: null, onscrollend: null
+}) as VisualViewport

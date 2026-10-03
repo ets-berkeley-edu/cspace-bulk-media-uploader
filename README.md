@@ -228,11 +228,12 @@ cd frontend && npm ci && npm run lint && npm test && npm run typecheck && npm ru
 
 ## Frontend
 
-The frontend is being converted to Vuetify so that it is built like UC Berkeley RTL's other applications, BOA
-(`github.com/ets-berkeley-edu/boac`) in particular: Vuetify 3 with components registered by hand
-(`src/plugins/vuetify.ts`), BOA's theme colours and Verdana, icons from `@mdi/js`, Pinia stores (`src/stores/`),
-vue-router (`src/router.ts`), axios for the BMU API, and BOA's ESLint rules (`npm run lint`). Unlike BOA, the BMU
-keeps its TypeScript type check and its Vitest unit tests.
+The frontend is being converted to Vuetify so that it is built like UC Berkeley RTL's other applications: BOA
+(`github.com/ets-berkeley-edu/boac`), Damien and Diablo. In common with them: Vuetify 3 with components registered
+by hand (`src/plugins/vuetify.ts`), icons from `@mdi/js`, Pinia stores (`src/stores/`), vue-router
+(`src/router.ts`), axios for the BMU API in function modules (`src/api/`), and one set of ESLint rules
+(`npm run lint`). The light theme's colours and Verdana are BOA's. Unlike those apps, the BMU keeps its TypeScript
+type check and its Vitest unit tests.
 
 Three rules are the BMU's own:
 
@@ -242,10 +243,18 @@ Three rules are the BMU's own:
 - **`npm audit` stays clean.** That is why two of BOA's lint packages are left out (see `eslint.config.js`), and why
   axios is one release ahead of BOA's.
 
-The conversion goes screen by screen. Screens not yet converted are listed in `eslint.config.js`
-(`notYetConverted`); they keep their old look from `src/style.css`, inside an element with the class `legacy`,
-where Vuetify's style reset is undone. Take a screen off the list, and its rules out of `style.css`, when it is
-converted.
+The conversion goes screen by screen. Done so far: sign-in (`views/Login.vue`), and the signed-in frame
+(`views/BaseView.vue`): the app bar with the user menu (Dark or Light mode, Sign out), and the four tabs, each now a
+page with its own address (`/job`, `/drafts`, `/queue`, `/finished`; `src/router.ts`, guards in `src/auth.ts`).
+What the tabs share about the job being worked on is in `src/stores/job-edit-session.ts`. Create / edit job stays
+alive behind the other tabs, so its uploads go on.
+
+Light or dark follows Damien: the system's setting until the user picks one in the menu, which is then remembered in
+the browser (`prefersDarkMode`). Both are Vuetify themes in `src/plugins/vuetify.ts`.
+
+Screens not yet converted are listed in `eslint.config.js` (`notYetConverted`). They keep their old look from
+`src/assets/styles/legacy.scss`, which applies only inside an element with the class `legacy` and undoes Vuetify's
+style reset there. Take a screen off the list, and its rules out of `legacy.scss`, when it is converted.
 
 ## Checking against the real CollectionSpace
 

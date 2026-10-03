@@ -1,0 +1,30 @@
+/* Styles every page shares. The look of the screens not yet converted to Vuetify is in legacy.scss. */
+/* A page's heading takes the keyboard when the page opens (loadingComplete); it needs no focus ring. */
+h1[tabindex="-1"]:focus {
+  outline: none;
+}
+.page-width {
+  margin: 0 auto;
+  max-width: 1400px;
+}
+.scroll-margins {
+  scroll-margin-top: 80px;
+}
+.sr-only {
+  height: 1px !important;
+  left: -10000px !important;
+  overflow: hidden !important;
+  position: absolute !important;
+  top: auto !important;
+  width: 1px !important;
+}
+.sr-only-focusable:focus {
+  background-color: rgb(var(--v-theme-surface));
+  color: rgb(var(--v-theme-on-surface));
+  height: auto !important;
+  left: 8px !important;
+  padding: 8px 12px;
+  top: 8px !important;
+  width: auto !important;
+  z-index: 2000;
+}

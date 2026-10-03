@@ -1,6 +1,6 @@
 import axios from 'axios'
-import {ApiError} from './lib/axios-utils'
-import type {Check, Created, Failure, Job, Me, Row, RowChange, Run, Schedule, Term} from './types'
+import {ApiError} from '@/lib/axios-utils'
+import type {Check, Created, Failure, Job, Row, RowChange, Run, Schedule, Term} from '@/types'
 
 /**
  * JSON request to the BMU API, through axios: X-BMU, and what a failed request rejects with, are set up once in
@@ -23,11 +23,6 @@ export const thumbnailUrl = (id: string, n: number, v = 0, large = false) =>
 
 export const api = {
   putThumbnail,
-  me: () => request<Me>('GET', '/api/me'),
-  /** Which environment this is (no sign-in needed): its label, and whether its CollectionSpace is a real server. */
-  env: () => request<{ label: string; realCollectionSpace: boolean }>('GET', '/api/env'),
-  login: (username: string, password: string) => request<Me>('POST', '/api/login', {username, password}),
-  logout: () => request('POST', '/api/logout'),
   jobs: (poll = false) => request<{ jobs: Job[] }>('GET', '/api/jobs', undefined, poll),
   createJob: (name: string) => request<Job>('POST', '/api/jobs', {name}),
   job: (id: string, poll = false) => request<{ job: Job; rows: Row[]; runs: Run[]; created: Created }>('GET', `/api/jobs/${id}`, undefined, poll),

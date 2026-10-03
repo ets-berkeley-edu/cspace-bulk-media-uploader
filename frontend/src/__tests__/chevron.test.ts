@@ -47,7 +47,7 @@ describe('the expand/collapse toggle', () => {
   })
 
   it('is a 30px button with a 20px icon that rotates when open', () => {
-    const css = readFileSync(resolve(__dirname, '../style.css'), 'utf8')
+    const css = readFileSync(resolve(__dirname, '../assets/styles/legacy.scss'), 'utf8')
     expect(css).toMatch(/\.chevron \{[^}]*width: 30px; height: 30px;/)
     expect(css).toMatch(/\.chevron \.chev-icon \{ width: 20px; height: 20px;/)
     expect(css).toMatch(/\.chevron\.open \.chev-icon \{ transform: rotate\(90deg\); \}/)

@@ -52,3 +52,30 @@ export function putFocusNextTick(
     }, 500)
   })
 }
+
+const DARK_MODE_KEY = 'prefersDarkMode'
+
+/**
+ * Light or dark, as Damien decides it: the choice made with the user menu's Dark mode item, remembered in this
+ * browser; until one is made, the system's setting.
+ */
+export function prefersDarkMode(): boolean {
+  let stored: string | null = null
+  try {
+    stored = window.localStorage.getItem(DARK_MODE_KEY)
+  } catch {
+    // No storage (a private window, say): the system's setting decides.
+  }
+  if (stored) {
+    return stored === 'true'
+  }
+  return !!window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+}
+
+export function rememberDarkMode(dark: boolean) {
+  try {
+    window.localStorage.setItem(DARK_MODE_KEY, `${dark}`)
+  } catch {
+    // No storage: the choice lasts until the page is reloaded.
+  }
+}

@@ -15,7 +15,6 @@ import vueParser from 'vue-eslint-parser'
 // are not reformatted now: only the v-html rule applies to them. Take a file off this list when it is converted;
 // the conversion is finished when the list is empty.
 const notYetConverted = [
-  'src/views/Home.vue',
   'src/components/AuthorityInput.vue',
   'src/components/BulkPanel.vue',
   'src/components/ChevronIcon.vue',
@@ -32,7 +31,6 @@ const notYetConverted = [
   'src/components/JobEditor.vue',
   'src/components/JobPreview.vue',
   'src/components/JobResults.vue',
-  'src/components/LoginForm.vue',
   'src/components/PagerBar.vue',
   'src/components/QueueList.vue',
   'src/components/RepeatingSelect.vue',

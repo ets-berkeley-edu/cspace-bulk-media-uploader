@@ -273,3 +273,16 @@ export interface ScreenReaderAlert {
   message: string;
   politeness?: 'polite' | 'assertive';
 }
+
+/** Which environment this is (local with the simulator, local against PAHMA QA, AWS): GET /api/env. */
+export interface BmuConfig {
+  label: string
+  realCollectionSpace: boolean
+}
+
+/** The message shown at the top of the page by components/util/Snackbar.vue. */
+export interface SnackbarState {
+  color: string
+  text: string | undefined
+  timeout: number
+}
