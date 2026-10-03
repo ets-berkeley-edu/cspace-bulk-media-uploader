@@ -71,9 +71,9 @@ deploy pushes a new image tag (commit and time), so `./bmu aws status` shows whi
 | Load balancer | Internal; health check `/api/health`. |
 | ECS Fargate | Cluster `bmu-<env>` with two services. Both run on ARM. The tasks are replaced one by one on deploy and rolled back automatically if they don't start. |
 | DynamoDB | `bmu-<env>-jobs`, `-sessions`, `-credentials` and `-audit`: the same keys, index and TTL as the local tables (a test checks this). Point-in-time recovery is on for jobs and audit, and off for the two tables that hold encrypted passwords. |
-| S3 | Staging bucket `bmu-<env>-staging-<account>-<region>`: SSE-KMS with its own key, versioning, all public access blocked, TLS only, KMS-encrypted uploads only, and CORS for the BMU's address only. Deleted files' old versions go after a day. Access logs go to `bmu-<env>-s3-logs-…`, kept 90 days. |
+| S3 | Staging bucket `bmu-<env>-staging-<account>-<region>`: SSE-KMS with its own key, versioning, all public access blocked, TLS only, KMS-encrypted uploads only, and CORS for the BMU's address only. The BMU deletes every version of a staged file; a rule removes any version left behind after a day. Audit files (`audit/`) keep their versions for a year. Access logs go to `bmu-<env>-s3-logs-…`, kept 90 days. |
 | KMS | Three keys: session, job and staging. Rotation is on. See the key policies below. |
-| IAM | Separate roles for the web app and the worker. The worker role has no access to the session key and can only decrypt with the job key. |
+| IAM | Separate roles for the web app and the worker, each with only what its code uses. The web app can save and delete a job's sign-in but not read it; the worker can read and delete it. Only the web app adds staged files; both can read and delete them (the web app makes the TIFF thumbnails). Both can add audit entries and audit files, and neither can read, change or delete them. The worker role has no access to the session key and can only decrypt with the job key. |
 | CloudWatch Logs | `/bmu/<env>/web` and `/bmu/<env>/worker`, kept 30 days. |
 
 **The two services**
@@ -159,6 +159,9 @@ Neither of the first two needs an AWS sign-in.
 - **No thumbnail Lambda.** The web app makes TIFF thumbnails, as in the prototype, so its role can read staged
   files.
 - **No custom domain.** No custom domain or certificate.
+- **No Object Lock or CloudTrail for the audit files.** The roles can't delete them, and their versions are kept
+  for a year, but an administrator still can. Object Lock and CloudTrail data events come with the UC Berkeley
+  account: Object Lock would stop `./bmu aws destroy` from emptying a test account's bucket.
 - **60-second requests.** CloudFront waits at most 60 seconds for an answer (more needs a quota increase). A
   request that waits longer on CollectionSpace, such as a sign-in while the QA server is slow, shows an error,
   though the app finishes it.

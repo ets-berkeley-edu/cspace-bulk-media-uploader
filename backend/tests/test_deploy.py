@@ -122,3 +122,61 @@ def test_state_and_local_settings_are_never_committed():
     for part in ("registry", "app"):  # state lives in S3, configured by ./bmu aws; nothing account-specific in the code
         text = "".join(p.read_text() for p in (DEPLOY / "terraform" / part).glob("*.tf"))
         assert 'backend "s3" {}' in text and not re.search(r"\b\d{12}\b", text)
+
+
+# ---- the two task roles (design: Concurrency, IAM and security) ---------------------------------------------------
+def _statements(doc: str) -> dict:
+    docs = _blocks("iam.tf", "data", "aws_iam_policy_document")
+    return {s["sid"]: (set(s["actions"]), s["resources"]) for s in docs[doc]["statement"]}
+
+
+SESSIONS, CREDENTIALS = '${aws_dynamodb_table.main["sessions"].arn}', '${aws_dynamodb_table.main["credentials"].arn}'
+
+
+def test_each_role_has_only_what_its_code_uses():
+    web, worker = _statements("web"), _statements("worker")
+    assert web["Sessions"] == ({"dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem"}, [SESSIONS])
+    assert web["CredentialsPutAndDelete"] == ({"dynamodb:PutItem", "dynamodb:DeleteItem"}, [CREDENTIALS])  # never read
+    assert worker["SessionsSweep"] == ({"dynamodb:Scan", "dynamodb:DeleteItem"}, [SESSIONS])
+    assert worker["CredentialsReadAndDelete"] == ({"dynamodb:GetItem", "dynamodb:DeleteItem", "dynamodb:ConditionCheckItem"}, [CREDENTIALS])
+    assert "s3:PutObject" in web["StagedFiles"][0] and "s3:PutObject" not in worker["StagedFiles"][0]  # only the web app adds files
+    roles = _blocks("iam.tf", "resource", "aws_iam_role_policy")
+    assert roles["web"]["policy"] == "${data.aws_iam_policy_document.web.json}" and roles["web"]["role"] == "${aws_iam_role.web.id}"
+    assert roles["worker"]["policy"] == "${data.aws_iam_policy_document.worker.json}" and roles["worker"]["role"] == "${aws_iam_role.worker.id}"
+    for doc in ("web", "worker"):
+        source = _blocks("iam.tf", "data", "aws_iam_policy_document")[doc]["source_policy_documents"]
+        assert source == ["${data.aws_iam_policy_document.task_common.json}"]
+
+
+def test_the_roles_match_what_the_code_calls():
+    """The policy lists above are what the code needs: the web app never reads a job's sign-in, and the worker never
+    reads or writes a session or saves a sign-in. If this fails, the code changed and iam.tf must follow."""
+    package = Path(appmod.__file__).parent
+    web_code = (package / "app.py").read_text() + (package / "thumbnails.py").read_text()
+    worker_code = (package / "worker.py").read_text()
+    assert "get_credential(" not in web_code and "claim_job(" not in web_code
+    for call in ("put_session(", "get_session(", "update_session", "touch_session(", "put_credential(", "queue_with_credential(",
+                 "presign_upload(", "store_thumbnail(", "put_bytes("):
+        assert call not in worker_code, call
+
+
+def test_no_role_can_delete_read_or_replace_audit_records():
+    everything = {**{f"common:{k}": v for k, v in _statements("task_common").items()},
+                  **{f"web:{k}": v for k, v in _statements("web").items()},
+                  **{f"worker:{k}": v for k, v in _statements("worker").items()}}
+    for sid, (actions, resources) in everything.items():
+        assert not any(a.endswith("*") for a in actions), sid  # no wildcards
+        if actions & {"s3:GetObject", "s3:GetObjectVersion", "s3:DeleteObject", "s3:DeleteObjectVersion"}:
+            assert resources == ["${local.staged_objects}"], sid  # staged files only, never audit files
+        if any("audit" in r for r in resources):
+            assert actions in ({"dynamodb:PutItem"}, {"s3:PutObject"}), sid  # the audit log is add-only
+    assert _local("iam.tf", "staged_objects") == "${aws_s3_bucket.staging.arn}/staging/*"
+    assert _local("iam.tf", "audit_objects") == "${aws_s3_bucket.staging.arn}/audit/*"
+
+
+def test_lifecycle_rules_keep_audit_versions_and_clear_staged_ones():
+    rules = {r["id"]: r for r in _blocks("s3.tf", "resource", "aws_s3_bucket_lifecycle_configuration")["staging"]["rule"]}
+    audit, staged = rules["expire-audit-detail"], rules["remove-deleted-versions"]
+    assert audit["filter"][0]["prefix"] == "audit/" and audit["expiration"][0]["days"] == 365
+    assert audit["noncurrent_version_expiration"][0]["noncurrent_days"] == 365
+    assert staged["filter"][0]["prefix"] == "staging/" and staged["noncurrent_version_expiration"][0]["noncurrent_days"] == 1
