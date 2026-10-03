@@ -1,8 +1,8 @@
 import {describe, expect, it} from 'vitest'
 import {mount} from '@vue/test-utils'
-import BulkPanel from '../components/BulkPanel.vue'
 import {applyAllTargets, bulkCheck, includeTargets} from '../lib/bulk'
 import type {Perms, Row, TenantInfo} from '../types'
+import BulkPanel from '@/components/job/BulkPanel.vue'
 
 function row(p: Partial<Row> = {}): Row {
   return {n: 1, file: '15-1234_a.jpg', size: 10, contentType: 'image/jpeg', handling: 'link', obj: '15-1234', objParsed: '15-1234',

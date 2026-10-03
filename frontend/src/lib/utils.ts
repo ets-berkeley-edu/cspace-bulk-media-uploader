@@ -36,6 +36,11 @@ export function putFocusNextTick(
   nextTick(() => {
     let counter = 0
     const putFocus = setInterval(() => {
+      if (typeof document === 'undefined') {
+        // The page is gone (a test that ended meanwhile)
+        clearInterval(putFocus)
+        return
+      }
       let el: HTMLElement | null = document.getElementById(id)
       el = el && cssSelector ? el.querySelector<HTMLElement>(cssSelector) : el
       if (el) {

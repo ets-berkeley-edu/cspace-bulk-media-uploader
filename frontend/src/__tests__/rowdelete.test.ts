@@ -1,10 +1,10 @@
 /** Deleting documents in the editor (design: Deleting a row): the Delete column, and Delete selected in the panel. */
 import {afterEach, describe, expect, it, vi} from 'vitest'
 import {flushPromises, mount} from '@vue/test-utils'
-import BulkPanel from '../components/BulkPanel.vue'
-import DocumentRow from '../components/DocumentRow.vue'
-import JobEditor from '../components/JobEditor.vue'
 import type {Job, Me, Perms, Row, TenantInfo} from '../types'
+import BulkPanel from '@/components/job/BulkPanel.vue'
+import DocumentRow from '@/components/job/DocumentRow.vue'
+import JobEditor from '@/components/job/JobEditor.vue'
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
@@ -23,7 +23,7 @@ const created = (p: Partial<Row> = {}) => row({result: {state: 'Partial', steps:
 const interrupted = (p: Partial<Row> = {}) => row({result: {state: 'Not started', steps: {}, interrupted: 1}, ...p})
 
 function mountRow(p: Record<string, unknown>) {
-  return mount({components: {DocumentRow}, template: '<table><tbody><DocumentRow v-bind=\'p\'/></tbody></table>',
+  return mount({components: {DocumentRow}, template: '<table><DocumentRow v-bind=\'p\'/></table>',
     data: () => ({p: {row: row(), tenant, perms, expanded: false, readonly: false, ...p}})})
 }
 const trash = (w: ReturnType<typeof mount>) => w.find('button[aria-label="Delete document"]')
@@ -164,7 +164,7 @@ describe('the editor deletes documents', () => {
     return calls
   }
   const editor = async () => {
-    const w = mount(JobEditor, {props: {me, jobId: 'j1'}, global: {stubs: {ThumbCell: true}}})
+    const w = mount(JobEditor, {props: {me, jobId: 'j1'}, global: {stubs: {DocumentThumbnail: true, ThumbCell: true}}})
     await flushPromises()
     return w
   }
@@ -204,7 +204,7 @@ describe('the editor deletes documents', () => {
     await button(w, 'Delete 2 documents')!.trigger('click')
     await flushPromises()
     expect(calls.find((c) => c.url.endsWith('/rows/delete'))!.body).toEqual({rows: [1, 2, 3]})
-    expect(w.find('.msg[role="status"]').text()).toBe('Deleted 2 documents. 1 couldn\'t be deleted because it already created records in CollectionSpace.')
+    expect(w.find('#editor-message').text()).toBe('Deleted 2 documents. 1 couldn\'t be deleted because it already created records in CollectionSpace.')
     expect(w.text()).not.toContain('15-1234_1.jpg')
     expect(w.text()).toContain('1-2345_01_b.jpg')
     expect(w.find('.sel-banner').text()).toContain('1 selected') // only the one that stayed
@@ -220,7 +220,7 @@ describe('the editor deletes documents', () => {
     expect(w.find('.bulk-confirm').text()).toContain('That\'s every document in the job, so the job is deleted too.')
     await button(w, 'Delete 2 documents')!.trigger('click')
     await flushPromises()
-    expect(w.find('.msg[role="status"]').text()).toBe('That was the job\'s last document, so the job was deleted.')
+    expect(w.find('#editor-message').text()).toBe('That was the job\'s last document, so the job was deleted.')
     expect(w.text()).toContain('No documents yet.')
     expect(w.find('.sel-banner').exists()).toBe(false)
     // what's added next goes to a new job, not the deleted one

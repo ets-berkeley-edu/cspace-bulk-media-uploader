@@ -1,7 +1,7 @@
 import {afterEach, describe, expect, it, vi} from 'vitest'
 import {flushPromises, mount} from '@vue/test-utils'
-import DateInput from '../components/DateInput.vue'
 import {describeDate} from '../lib/dates'
+import DateInput from '@/components/util/DateInput.vue'
 
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers() })
 
@@ -21,7 +21,7 @@ describe('structured dates (design: Structured dates)', () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ok: false, group: {}}),
       {status: 200, headers: {'content-type': 'application/json'}}))
     vi.stubGlobal('fetch', fetchMock)
-    const w = mount(DateInput, {props: {modelValue: ''}})
+    const w = mount(DateInput, {props: {id: 'date', modelValue: ''}})
     const input = w.find('input')
     await input.setValue('the twenties')
     await input.trigger('input')
@@ -35,13 +35,13 @@ describe('structured dates (design: Structured dates)', () => {
   })
 
   it('shows the stored parse without asking again', () => {
-    const w = mount(DateInput, {props: {modelValue: '1920s', parsed: {value: '1920s', ok: true,
+    const w = mount(DateInput, {props: {id: 'date', modelValue: '1920s', parsed: {value: '1920s', ok: true,
       group: {dateEarliestSingleYear: '1920', dateLatestYear: '1929'}}}})
     expect(w.text()).toContain('Earliest 1920 · latest 1929')
   })
 
   it('says the date came from EXIF, and offers it back once edited or cleared', async () => {
-    const w = mount(DateInput, {props: {modelValue: '2025-11-04', exif: '2025-11-04'}})
+    const w = mount(DateInput, {props: {id: 'date', modelValue: '2025-11-04', exif: '2025-11-04'}})
     expect(w.text()).toContain('(from EXIF)')
     expect(w.find('button').exists()).toBe(false)
     await w.setProps({modelValue: '1920s'})
@@ -50,7 +50,7 @@ describe('structured dates (design: Structured dates)', () => {
     expect(w.text()).toContain('(cleared — EXIF date 2025-11-04)')
     await w.find('button').trigger('click')
     expect(w.emitted('update:modelValue')?.at(-1)).toEqual(['2025-11-04'])
-    const plain = mount(DateInput, {props: {modelValue: '1920s'}})
+    const plain = mount(DateInput, {props: {id: 'date', modelValue: '1920s'}})
     expect(plain.text()).not.toContain('EXIF')
   })
 })

@@ -1,10 +1,10 @@
 /** Deleting a document while its file is still uploading stops the upload at once (design: Deleting a row). */
 import {afterEach, describe, expect, it, vi} from 'vitest'
 import {mount} from '@vue/test-utils'
-import BulkPanel from '../components/BulkPanel.vue'
-import DocumentRow from '../components/DocumentRow.vue'
 import {UploadCancelled, uploadToS3} from '../lib/files'
 import type {Perms, Row, TenantInfo} from '../types'
+import BulkPanel from '@/components/job/BulkPanel.vue'
+import DocumentRow from '@/components/job/DocumentRow.vue'
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
@@ -58,14 +58,14 @@ const row = (p: Partial<Row> = {}): Row => ({n: 1, file: '1-2345_large.tif', siz
 
 describe('the delete confirmations for documents still uploading', () => {
   it('a row says its upload is stopped', async () => {
-    const w = mount({components: {DocumentRow}, template: '<table><tbody><DocumentRow v-bind=\'p\'/></tbody></table>',
+    const w = mount({components: {DocumentRow}, template: '<table><DocumentRow v-bind=\'p\'/></table>',
       data: () => ({p: {row: row({upload: {s: 'uploading', pct: 40}}), tenant, perms, expanded: false, readonly: false, uploadingHere: true}})})
     await w.find('button[aria-label="Delete document"]').trigger('click')
     expect(w.text()).toContain('Delete “1-2345_large.tif”? Its upload is stopped and anything already sent is removed; nothing in CollectionSpace is touched.')
   })
 
   it('a row whose upload is done still says its uploaded file is removed', async () => {
-    const w = mount({components: {DocumentRow}, template: '<table><tbody><DocumentRow v-bind=\'p\'/></tbody></table>',
+    const w = mount({components: {DocumentRow}, template: '<table><DocumentRow v-bind=\'p\'/></table>',
       data: () => ({p: {row: row(), tenant, perms, expanded: false, readonly: false}})})
     await w.find('button[aria-label="Delete document"]').trigger('click')
     expect(w.text()).toContain('Its uploaded file is removed; nothing in CollectionSpace is touched.')

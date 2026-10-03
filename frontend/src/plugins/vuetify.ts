@@ -7,16 +7,24 @@ import {VAppBar} from 'vuetify/components/VAppBar'
 import {VBtn} from 'vuetify/components/VBtn'
 import {VCard, VCardText} from 'vuetify/components/VCard'
 import {VChip} from 'vuetify/components/VChip'
+import {VDialog} from 'vuetify/components/VDialog'
 import {VDivider} from 'vuetify/components/VDivider'
+import {VExpansionPanel, VExpansionPanelText, VExpansionPanelTitle, VExpansionPanels} from 'vuetify/components/VExpansionPanel'
 import {VForm} from 'vuetify/components/VForm'
 import {VIcon} from 'vuetify/components/VIcon'
+import {VLazy} from 'vuetify/components/VLazy'
 import {VList, VListItem, VListItemTitle} from 'vuetify/components/VList'
 import {VMain} from 'vuetify/components/VMain'
 import {VMenu} from 'vuetify/components/VMenu'
+import {VProgressCircular} from 'vuetify/components/VProgressCircular'
+import {VProgressLinear} from 'vuetify/components/VProgressLinear'
+import {VSheet} from 'vuetify/components/VSheet'
 import {VSnackbar} from 'vuetify/components/VSnackbar'
 import {VSpacer} from 'vuetify/components/VGrid'
 import {VTab, VTabs} from 'vuetify/components/VTabs'
+import {VTable} from 'vuetify/components/VTable'
 import {VTextField} from 'vuetify/components/VTextField'
+import {VTextarea} from 'vuetify/components/VTextarea'
 
 /**
  * Vuetify set up as BOA, Damien and Diablo set it up: components registered by hand (add each one here when a screen first uses it,
@@ -32,18 +40,29 @@ export default createVuetify({
     VCard,
     VCardText,
     VChip,
+    VDialog,
     VDivider,
+    VExpansionPanel,
+    VExpansionPanels,
+    VExpansionPanelText,
+    VExpansionPanelTitle,
     VForm,
     VIcon,
+    VLazy,
     VList,
     VListItem,
     VListItemTitle,
     VMain,
     VMenu,
+    VProgressCircular,
+    VProgressLinear,
+    VSheet,
     VSnackbar,
     VSpacer,
     VTab,
+    VTable,
     VTabs,
+    VTextarea,
     VTextField
   },
   defaults: {

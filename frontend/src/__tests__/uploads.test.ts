@@ -2,10 +2,10 @@
  *  waited its turn ("Sign"), and files over the size limit skipped before anything is sent. */
 import {afterEach, describe, expect, it, vi} from 'vitest'
 import {flushPromises, mount} from '@vue/test-utils'
-import DocumentRow from '../components/DocumentRow.vue'
-import JobEditor from '../components/JobEditor.vue'
 import {FORM_MAX_AGE_MS, fileTooLargeText, formIsOld, formatBytes, splitSize, tooLargeText} from '../lib/files'
 import type {Job, Me, Perms, Row, TenantInfo} from '../types'
+import DocumentRow from '@/components/job/DocumentRow.vue'
+import JobEditor from '@/components/job/JobEditor.vue'
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
@@ -66,7 +66,7 @@ function stub(rows: Row[] = [], formReply?: (n: number) => Promise<unknown>) {
   return calls
 }
 const editor = async (me: Partial<Me> = {}) => {
-  const w = mount(JobEditor, {props: {me: {user: 'admin', tenant, perms, scheduler: false, ...me}, jobId: 'j1'}, global: {stubs: {ThumbCell: true}}})
+  const w = mount(JobEditor, {props: {me: {user: 'admin', tenant, perms, scheduler: false, ...me}, jobId: 'j1'}, global: {stubs: {DocumentThumbnail: true, ThumbCell: true}}})
   await flushPromises()
   return w
 }
@@ -169,7 +169,7 @@ describe('files over the size limit (design: Browser uploads)', () => {
     const calls = stub()
     const w = await editor({maxFileBytes: 10})
     await choose(w, [tif('15-1234_1.tif', 5), tif('15-1234_big.tif', 20), new File(['x'], 'notes.docx'), tif('15-1234_huge.tif', 30)])
-    expect(w.find('.msg[role="status"]').text()).toBe('1 file skipped: notes.docx. The BMU accepts JPEG or TIFF. '
+    expect(w.find('#editor-message').text()).toBe('1 file skipped: notes.docx. The BMU accepts JPEG or TIFF. '
       + 'Skipped 2 files over the 10 B limit: 15-1234_big.tif, 15-1234_huge.tif.')
     expect(calls.find((c) => c.url.endsWith('/files'))!.body).toEqual({files: [expect.objectContaining({name: '15-1234_1.tif', size: 5})]})
     w.unmount()
@@ -179,7 +179,7 @@ describe('files over the size limit (design: Browser uploads)', () => {
     const calls = stub()
     const w = await editor({maxFileBytes: 10})
     await choose(w, [tif('15-1234_big.tif', 20)])
-    expect(w.find('.msg[role="status"]').text()).toBe('Skipped 1 file over the 10 B limit: 15-1234_big.tif.')
+    expect(w.find('#editor-message').text()).toBe('Skipped 1 file over the 10 B limit: 15-1234_big.tif.')
     expect(calls.some((c) => c.url.endsWith('/files') || c.method === 'POST' && c.url.endsWith('/api/jobs'))).toBe(false)
     w.unmount()
   })
@@ -188,13 +188,13 @@ describe('files over the size limit (design: Browser uploads)', () => {
     const failed = row({upload: {s: 'failed'}})
     const calls = stub([failed])
     const w = await editor({maxFileBytes: 10})
-    w.findComponent(DocumentRow).vm.$emit('replace', tif('15-1234_1.tif', 20))
+    w.findComponent(DocumentRow).vm.$emit('replace', failed, tif('15-1234_1.tif', 20))
     await flushPromises()
-    expect(w.find('.msg[role="status"]').text()).toBe('“15-1234_1.tif” is over the 10 B limit, so it can\'t be uploaded. Choose a smaller version of the file.')
-    w.findComponent(DocumentRow).vm.$emit('retry')
+    expect(w.find('#editor-message').text()).toBe('“15-1234_1.tif” is over the 10 B limit, so it can\'t be uploaded. Choose a smaller version of the file.')
+    w.findComponent(DocumentRow).vm.$emit('retry', failed)
     await flushPromises()
     await choose(w, [tif('15-1234_1.tif', 30)], 'input[type=file][aria-hidden=true]')
-    expect(w.find('.msg[role="status"]').text()).toContain('“15-1234_1.tif” is over the 10 B limit')
+    expect(w.find('#editor-message').text()).toContain('“15-1234_1.tif” is over the 10 B limit')
     expect(calls.some((c) => c.url.endsWith('/replace-file') || c.url.endsWith('/retry-upload'))).toBe(false)
     expect(FakeXHR.all).toHaveLength(0)
     w.unmount()

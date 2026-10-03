@@ -1,8 +1,8 @@
 import {afterEach, describe, expect, it, vi} from 'vitest'
 import {flushPromises, mount} from '@vue/test-utils'
-import AuthorityInput from '../components/AuthorityInput.vue'
-import DocumentRow from '../components/DocumentRow.vue'
 import type {Perms, Row, TenantInfo} from '../types'
+import AuthorityInput from '@/components/util/AuthorityInput.vue'
+import DocumentRow from '@/components/job/DocumentRow.vue'
 
 const REF = 'urn:cspace:pahma.cspace.berkeley.edu:personauthorities:name(person):item:name(7475)\'Leslie Freund\''
 
@@ -14,7 +14,7 @@ describe('AuthorityInput', () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({terms: [{refName: REF, displayName: 'Leslie Freund', source: 'person'}]}),
       {status: 200, headers: {'content-type': 'application/json'}}))
     vi.stubGlobal('fetch', fetchMock)
-    const w = mount(AuthorityInput, {props: {modelValue: '', field: 'creator', label: 'Creator'}})
+    const w = mount(AuthorityInput, {props: {id: 'creator', modelValue: '', field: 'creator', label: 'Creator'}})
     const input = w.find('input')
     await input.setValue('fr')
     expect(w.text()).toContain('3+ characters')
@@ -33,7 +33,7 @@ describe('AuthorityInput', () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({terms: []}),
       {status: 200, headers: {'content-type': 'application/json'}}))
     vi.stubGlobal('fetch', fetchMock)
-    const w = mount(AuthorityInput, {props: {modelValue: '', field: 'creator', label: 'Creator', timing: {findDelayMs: 1000, minLength: 4}}})
+    const w = mount(AuthorityInput, {props: {id: 'creator', modelValue: '', field: 'creator', label: 'Creator', timing: {findDelayMs: 1000, minLength: 4}}})
     await w.find('input').setValue('fre')
     expect(w.text()).toContain('4+ characters')
     await w.find('input').setValue('freu')
@@ -45,7 +45,7 @@ describe('AuthorityInput', () => {
 
   it('shows only the display name of the stored refName, and never saves free text', async () => {
     vi.useFakeTimers()
-    const w = mount(AuthorityInput, {props: {modelValue: REF, field: 'creator', label: 'Creator'}})
+    const w = mount(AuthorityInput, {props: {id: 'creator', modelValue: REF, field: 'creator', label: 'Creator'}})
     const input = w.find('input')
     expect((input.element as HTMLInputElement).value).toBe('Leslie Freund')
     await input.setValue('Somebody New')
@@ -71,10 +71,10 @@ function row(p: Partial<Row> = {}): Row {
 
 describe('DocumentRow', () => {
   it('shows Needs fixing for blocking checks and locks rows that created records', () => {
-    let w = mount({components: {DocumentRow}, template: '<table><tbody><DocumentRow v-bind=\'p\'/></tbody></table>',
+    let w = mount({components: {DocumentRow}, template: '<table><DocumentRow v-bind=\'p\'/></table>',
       data: () => ({p: {row: row({checks: [{level: 'block', text: 'No object'}]}), tenant, perms, expanded: false, readonly: false}})})
     expect(w.text()).toContain('Needs fixing')
-    w = mount({components: {DocumentRow}, template: '<table><tbody><DocumentRow v-bind=\'p\'/></tbody></table>',
+    w = mount({components: {DocumentRow}, template: '<table><DocumentRow v-bind=\'p\'/></table>',
       data: () => ({p: {row: row({result: {state: 'Partial', steps: {media: {s: 'done', csid: 'm1'}}}}), tenant, perms, expanded: true, readonly: false}})})
     expect(w.text()).toContain('already created records')
     expect(w.find('select').attributes('disabled')).toBeDefined()
@@ -82,7 +82,7 @@ describe('DocumentRow', () => {
 })
 
 function mountRow(p: Record<string, unknown>) {
-  return mount({components: {DocumentRow}, template: '<table><tbody><DocumentRow v-bind=\'p\'/></tbody></table>',
+  return mount({components: {DocumentRow}, template: '<table><DocumentRow v-bind=\'p\'/></table>',
     data: () => ({p: {row: row(), tenant, perms, expanded: true, readonly: false, ...p}})})
 }
 
@@ -115,7 +115,7 @@ describe('DocumentRow checks', () => {
     const box = w.find('input[aria-label="15-1234_a.jpg in the job\'s group"]')
     expect((box.element as HTMLInputElement).checked).toBe(true)
     await box.setValue(false)
-    expect(w.findComponent(DocumentRow).emitted('edit')?.[0]).toEqual([{group: false}])
+    expect(w.findComponent(DocumentRow).emitted('edit')?.[0]).toEqual([expect.anything(), {group: false}])
     const mediaOnly = mountRow({row: row({handling: 'mediaonly'}), groupOn: true,
       tenant: {...tenant, handling: [...tenant.handling, {id: 'mediaonly', label: 'Media only', object: 'none', id_rule: 'image'}]}})
     expect((mediaOnly.find('input[aria-label="15-1234_a.jpg in the job\'s group"]').element as HTMLInputElement).disabled).toBe(true)
@@ -126,19 +126,19 @@ describe('DocumentRow checks', () => {
     const box = w.find('input[aria-label="Exclude 15-1234_a.jpg from the job"]')
     expect((box.element as HTMLInputElement).checked).toBe(false)
     await box.setValue(true)
-    expect(w.findComponent(DocumentRow).emitted('edit')?.[0]).toEqual([{include: false}])
+    expect(w.findComponent(DocumentRow).emitted('edit')?.[0]).toEqual([expect.anything(), {include: false}])
     const excluded = mountRow({row: row({include: false})})
     expect((excluded.find('input[aria-label="Exclude 15-1234_a.jpg from the job"]').element as HTMLInputElement).checked).toBe(true)
     expect(excluded.text()).toContain('Excluded — ignored')
     await excluded.find('input[aria-label="Exclude 15-1234_a.jpg from the job"]').setValue(false)
-    expect(excluded.findComponent(DocumentRow).emitted('edit')?.[0]).toEqual([{include: true}])
+    expect(excluded.findComponent(DocumentRow).emitted('edit')?.[0]).toEqual([expect.anything(), {include: true}])
   })
 
   it('in a running job\'s preview, Status shows each document\'s run state', () => {
     const busy = mountRow({row: row({result: {state: 'In progress', steps: {}}}), runView: true, readonly: true})
     expect(busy.text()).toContain('In progress')
     expect(busy.text()).not.toContain('▶')
-    expect(busy.find('.badge .run-spin').exists()).toBe(true) // a spinning ring, not a play/expand triangle
+    expect(busy.find('.v-chip .v-progress-circular').exists()).toBe(true) // a spinning ring, not a play/expand triangle
     expect(mountRow({row: row(), runView: true, readonly: true}).text()).toContain('Not started')
     expect(mountRow({row: row({result: {state: 'Partial', steps: {media: {s: 'done', csid: 'm'}}}}), runView: true, readonly: true}).text()).toContain('Partial')
   })
@@ -147,7 +147,7 @@ describe('DocumentRow checks', () => {
     const eng = 'urn:cspace:pahma.cspace.berkeley.edu:vocabularies:name(languages):item:name(eng)\'English\''
     const t = {...tenant, languageDefault: eng}
     const w = mountRow({tenant: t, row: row({language: [eng]})})
-    const labels = w.findAll('.grid .field > span, .grid .field > label > span, .grid label.field > span').map((x) => x.text())
+    const labels = w.findAll('.detail-grid .field-label').map((x) => x.text())
     const at = (name: string) => labels.findIndex((l) => l.startsWith(name))
     expect(at('Identification number')).toBeLessThan(at('Object number'))
     expect(at('Description')).toBeLessThan(at('Copyright statement'))
@@ -160,7 +160,7 @@ describe('DocumentRow checks', () => {
     const org = 'urn:cspace:pahma.cspace.berkeley.edu:orgauthorities:name(organization):item:name(Hearst)\'Hearst Museum\''
     const t: TenantInfo = {...tenant, handling: [{...tenant.handling[0], presets: {type: ['slide'], contributor: org, copyright: '© Regents'}},
       tenant.handling[1]]}
-    const presetOf = (w: ReturnType<typeof mountRow>) => w.findAll('.field-preset > span').map((x) => x.text().replace('PRESET', ''))
+    const presetOf = (w: ReturnType<typeof mountRow>) => w.findAll('.field-preset > .field-label').map((x) => x.text().replace('PRESET', '').trim())
     const filled = row({type: ['slide'], contributor: org, copyright: '© Regents'})
     expect(presetOf(mountRow({tenant: t, row: filled}))).toEqual(['Media type', 'Contributor', 'Copyright statement'])
     expect(presetOf(mountRow({tenant: t, row: {...filled, touched: ['contributor']}}))).toEqual(['Media type', 'Copyright statement'])
@@ -198,13 +198,13 @@ describe('DocumentRow checks', () => {
   })
 })
 
-import RepeatingSelect from '../components/RepeatingSelect.vue'
+import RepeatingSelect from '@/components/util/RepeatingSelect.vue'
 
 describe('RepeatingSelect (design: repeating media type and language)', () => {
   const options = [{value: 'still_image', label: 'still image'}, {value: 'document', label: 'document'}]
 
   it('shows labels, stores values, and adds or removes values', async () => {
-    const w = mount(RepeatingSelect, {props: {modelValue: ['still_image'], options, label: 'Media type', word: 'type'}})
+    const w = mount(RepeatingSelect, {props: {id: 'pick', modelValue: ['still_image'], options, label: 'Media type', word: 'type'}})
     expect(w.find('select option:checked').text()).toBe('still image')
     await w.find('button.link').trigger('click') // + Add an additional type
     const selects = w.findAll('select')
@@ -219,7 +219,7 @@ describe('RepeatingSelect (design: repeating media type and language)', () => {
 
   it('keeps a stored value that isn\'t among the options, showing its display name', () => {
     const ref = 'urn:cspace:pahma.cspace.berkeley.edu:vocabularies:name(languages):item:name(eng)\'English\''
-    const w = mount(RepeatingSelect, {props: {modelValue: [ref], options: [], label: 'Language', word: 'language'}})
+    const w = mount(RepeatingSelect, {props: {id: 'pick', modelValue: [ref], options: [], label: 'Language', word: 'language'}})
     expect(w.find('select option:checked').text()).toBe('English')
   })
 })

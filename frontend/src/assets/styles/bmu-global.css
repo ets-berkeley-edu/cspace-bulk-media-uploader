@@ -28,3 +28,105 @@ h1[tabindex="-1"]:focus {
   width: auto !important;
   z-index: 2000;
 }
+/* A native checkbox in a table row or a form line, as in BOA: cheap enough for a hundred rows. */
+.checkbox {
+  accent-color: rgb(var(--v-theme-primary));
+  cursor: pointer;
+  height: 18px;
+  vertical-align: middle;
+  width: 18px;
+}
+.checkbox:disabled {
+  cursor: default;
+}
+/* A native select, as the team's apps use for short lists. Vuetify's reset takes its arrow away; this restores it. */
+.native-select {
+  -moz-appearance: auto;
+  -webkit-appearance: auto;
+  appearance: auto;
+  background-color: rgb(var(--v-theme-surface));
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.38);
+  border-radius: 4px;
+  color: inherit;
+  font-size: 0.875rem;
+  max-width: 100%;
+  padding: 5px 8px;
+}
+.native-select:disabled {
+  opacity: 0.6;
+}
+.native-select:focus-visible,
+.checkbox:focus-visible {
+  outline: 2px solid rgb(var(--v-theme-primary));
+  outline-offset: 1px;
+}
+/* The small label above a field, and the note under it */
+.field-label {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 500;
+  margin-bottom: 2px;
+  opacity: var(--v-high-emphasis-opacity);
+}
+.field-note {
+  display: block;
+  font-size: 0.75rem;
+  margin-top: 2px;
+  min-height: 1em;
+  opacity: var(--v-medium-emphasis-opacity);
+}
+.field-note.bad {
+  color: rgb(var(--v-theme-error));
+  opacity: 1;
+}
+/* A value the user changed from what the BMU worked out (a renamed file, an edited number, a changed date) */
+.field-edited .field-label,
+.field-edited .field-state {
+  color: rgb(var(--v-theme-warning));
+}
+.field-state {
+  font-style: normal;
+  font-weight: 600;
+}
+.link-btn {
+  background: none;
+  border: 0;
+  color: rgb(var(--v-theme-anchor));
+  cursor: pointer;
+  font-size: inherit;
+  padding: 0;
+  text-decoration: underline;
+}
+.link-btn:focus-visible {
+  outline: 2px solid rgb(var(--v-theme-primary));
+  outline-offset: 1px;
+}
+/* The triangle that opens a row: it turns when the row is open. */
+.chevron .v-icon {
+  transition: transform 0.15s;
+}
+.chevron.open .v-icon {
+  transform: rotate(90deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .chevron .v-icon {
+    transition: none;
+  }
+}
+/* Text fields in a crowded place (a document's fields, the bulk-change panel): shorter, with smaller text. */
+.dense-fields .v-input--density-compact {
+  --v-field-input-padding-bottom: 4px;
+  --v-field-input-padding-top: 4px;
+  --v-field-padding-end: 10px;
+  --v-field-padding-start: 10px;
+  --v-input-control-height: 32px;
+}
+.dense-fields .v-field {
+  font-size: 0.875rem;
+}
+.dense-fields .v-field__input {
+  min-height: 32px;
+}
+.v-alert--density-compact {
+  font-size: 0.875rem;
+}

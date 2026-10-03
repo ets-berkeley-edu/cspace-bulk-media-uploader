@@ -81,3 +81,15 @@ export function handlingBlocked(h: Handling, perms: Perms): string {
   if (h.object === 'create' && !perms.objects) return 'Your account can\'t create Object records.'
   return ''
 }
+
+/** The Vuetify colour of a status chip, from a badge's class (the screens not yet converted use the class). */
+const CHIP_COLOR: Record<string, string | undefined> = {'b-ok': 'success', 'b-warn': 'warning', 'b-danger': 'error', 'b-accent': 'info', 'b-muted': undefined}
+export function chipColor(cls: string): string | undefined {
+  return CHIP_COLOR[cls]
+}
+
+/** The type of a v-alert, from a message's class or a check's level. */
+const ALERT_TYPE: Record<string, 'error' | 'warning' | 'info'> = {'msg-block': 'error', 'msg-warn': 'warning', 'msg-info': 'info', block: 'error', warn: 'warning', info: 'info'}
+export function alertType(cls: string): 'error' | 'warning' | 'info' {
+  return ALERT_TYPE[cls] ?? 'info'
+}

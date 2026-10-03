@@ -4,8 +4,8 @@ import {resolve} from 'node:path'
 import {describe, expect, it} from 'vitest'
 import {mount} from '@vue/test-utils'
 import ChevronIcon from '../components/ChevronIcon.vue'
-import DocumentRow from '../components/DocumentRow.vue'
 import type {Perms, Row, TenantInfo} from '../types'
+import DocumentRow from '@/components/job/DocumentRow.vue'
 
 const tenant = {key: 'pahma', name: 'PAHMA', filenameHint: '', filenamePattern: '^(?P<obj>[A-Za-z0-9.-]+)$', mediaTypes: [],
   languageDefault: '', authorityFields: {}, publish: {field: 'approvedForWeb', header: 'Restricted', invert: true},
@@ -16,7 +16,7 @@ const row = {n: 1, file: '15-1234_1.jpg', size: 10, contentType: 'image/jpeg', h
   rightsHolder: '', description: '', copyright: '', include: true, upload: {s: 'done'}, checks: [], result: null} as unknown as Row
 
 function mountRow(expanded: boolean) {
-  return mount({components: {DocumentRow}, template: '<table><tbody><DocumentRow v-bind=\'p\'/></tbody></table>',
+  return mount({components: {DocumentRow}, template: '<table><DocumentRow v-bind=\'p\'/></table>',
     data: () => ({p: {row, tenant, perms, expanded, readonly: false}})})
 }
 
@@ -33,16 +33,22 @@ describe('the expand/collapse toggle', () => {
       expect(b.classes()).toContain('chevron')
       expect(b.classes().includes('open')).toBe(open)
       expect(b.attributes('aria-expanded')).toBe(String(open))
-      expect(b.find('svg.chev-icon').exists()).toBe(true)
+      expect(b.find('svg').exists()).toBe(true)
       expect(b.text()).toBe('')
     }
   })
 
   it('no component still uses the small ▸ character for a row toggle', () => {
-    for (const f of ['JobEditor', 'DocumentRow', 'DraftsList', 'QueueList', 'FinishedJobs']) {
+    for (const f of ['DraftsList', 'QueueList', 'FinishedJobs']) {
       const src = readFileSync(resolve(__dirname, `../components/${f}.vue`), 'utf8')
       expect(src).not.toContain('>▸</button>')
       expect(src).toContain('<ChevronIcon />')
+    }
+    // The converted editor uses a Vuetify icon button
+    for (const f of ['JobEditor', 'DocumentRow']) {
+      const src = readFileSync(resolve(__dirname, `../components/job/${f}.vue`), 'utf8')
+      expect(src).not.toContain('▸')
+      expect(src).toContain(':icon="mdiChevronRight"')
     }
   })
 
