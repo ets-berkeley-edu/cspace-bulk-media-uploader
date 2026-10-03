@@ -278,4 +278,6 @@ cd backend && python ../scripts/find_csid.py <csid>
 
 ## License
 
-Educational Community License, Version 2.0 (ECL-2.0), the license CollectionSpace uses. See `LICENSE`.
+Copyright ©2026 The Regents of the University of California. The BMU carries the same license as UC Berkeley RTL's
+other applications, such as BOA: free to use, copy, modify and distribute for educational, research and not-for-profit
+purposes; commercial use needs a license from UC Berkeley's Office of Technology Licensing. See `LICENSE`.
