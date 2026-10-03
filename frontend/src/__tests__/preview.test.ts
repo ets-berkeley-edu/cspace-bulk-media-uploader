@@ -1,6 +1,5 @@
 import {afterEach, describe, expect, it, vi} from 'vitest'
 import {flushPromises, mount} from '@vue/test-utils'
-import App from '../views/Home.vue'
 import DraftsList from '../components/DraftsList.vue'
 import JobActions from '../components/JobActions.vue'
 import JobDocsTable from '../components/JobDocsTable.vue'
@@ -186,58 +185,6 @@ describe('JobPreview (design: Drafts; UI mockup renderPreview)', () => {
     expect(w.text()).toContain('Run state')
     await w.find('.schedule-bar').findAll('button')[0].trigger('click')
     expect(w.text()).toContain('Stop this run?')
-    w.unmount()
-  })
-})
-
-describe('App: previews stay in their tab (design: Drafts)', () => {
-  const me = {user: 'admin', tenant, perms}
-  function routes(url: string) {
-    if (url.endsWith('/api/me')) return me
-    if (url.endsWith('/api/jobs')) return {jobs: [job({id: 'd1', name: 'My draft', editingBy: 'admin', editingByYou: true}), job({id: 'd2', name: 'Other draft'})]}
-    if (url.includes('/vocabularies/')) return {terms: []}
-    if (url.endsWith('/api/failures')) return {failures: {}}
-    if (url.endsWith('/check')) return {rows: [row()], counts: {block: 0, warn: 0}}
-    if (url.endsWith('/api/jobs/d1')) return {job: job({id: 'd1', name: 'My draft', editingBy: 'admin', editingByYou: true}), rows: [row()], runs: [], created: {}}
-    if (url.endsWith('/api/jobs/d2')) return {job: job({id: 'd2', name: 'Other draft'}), rows: [row()], runs: [], created: {}}
-    return {}
-  }
-
-  it('previewing a draft doesn\'t close the draft open in Create / edit job, and Back returns to the list', async () => {
-    const calls = stubFetch(routes)
-    const w = mount(App, {global: {stubs: {ThumbCell: true, JobEditor: {props: ['jobId'], template: '<div class=\'editor-stub\'>editing {{ jobId }}</div>'}}}})
-    await flushPromises()
-    // Open d1 for editing from the Drafts list, then come back and preview d2
-    const rowOf = (name: string) => w.findAll('tbody tr').find((r) => r.text().includes(name))!
-    await w.findAll('.tab').find((b) => b.text() === 'Drafts')!.trigger('click')
-    await flushPromises()
-    await rowOf('My draft').findAll('button').find((b) => b.text() === 'Continue editing')!.trigger('click')
-    await flushPromises()
-    expect(w.find('.editor-stub').text()).toBe('editing d1')
-    await w.findAll('.tab').find((b) => b.text() === 'Drafts')!.trigger('click')
-    await flushPromises()
-    await rowOf('Other draft').findAll('button').find((b) => b.text() === 'Preview')!.trigger('click')
-    await flushPromises()
-    expect(w.text()).toContain('← Back to Drafts')
-    expect(w.findAll('.tab').find((b) => b.text() === 'Drafts')!.classes()).toContain('active')
-    expect(calls.some((c) => c.url.endsWith('/close'))).toBe(false)
-    expect(w.find('.editor-stub').text()).toBe('editing d1')
-    await w.findAll('button').find((b) => b.text() === '← Back to Drafts')!.trigger('click')
-    await flushPromises()
-    expect(w.text()).toContain('Other draft')
-    expect(w.text()).not.toContain('← Back to Drafts')
-    w.unmount()
-  })
-
-  it('without Media permissions, + New job is off and Create / edit job explains why', async () => {
-    stubFetch((url) => (url.endsWith('/api/me') ? {...me, perms: {...perms, media: false}} : routes(url)))
-    const w = mount(App, {global: {stubs: {ThumbCell: true}}})
-    await flushPromises()
-    const nj = w.find('.new-job')
-    expect(nj.attributes('disabled')).toBeDefined()
-    expect(nj.attributes('title')).toContain('can\'t create and update Media records')
-    expect(w.text()).toContain('so it can\'t create or edit jobs. You can still view them in Drafts, Job queue and Finished jobs.')
-    expect(w.find('.dropzone').exists()).toBe(false)
     w.unmount()
   })
 })

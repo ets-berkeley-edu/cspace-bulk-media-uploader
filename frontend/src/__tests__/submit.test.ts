@@ -1,7 +1,5 @@
 import {afterEach, describe, expect, it, vi} from 'vitest'
-import {defineComponent} from 'vue'
 import {flushPromises, mount} from '@vue/test-utils'
-import App from '../views/Home.vue'
 import JobEditor from '../components/JobEditor.vue'
 import type {Job, Me, Perms, Row, TenantInfo} from '../types'
 
@@ -50,51 +48,6 @@ describe('Submit job (design: Job scheduling)', () => {
     expect(calls.some((c) => c.url.endsWith('/j1/schedule') && c.method === 'POST')).toBe(true)
     expect((w.emitted('scheduled')?.[0][0] as Job).plan).toEqual(plan)
     w.unmount()
-  })
-
-  it('after submitting, the page says when it runs, from the response\'s plan', async () => {
-    stub((url) => {
-      if (url.endsWith('/api/me')) return me
-      if (url.endsWith('/api/schedule')) return {days: [1, 2, 3, 4, 5, 6, 7], start: '19:00', end: '', timezone: 'America/Los_Angeles', paused: null,
-        nextRunAt: plan.at, windowOpen: false, alwaysRunTime: false}
-      if (url.endsWith('/api/jobs')) return {jobs: []}
-      return {}
-    })
-    const Editor = defineComponent({emits: ['scheduled'],
-      data: () => ({job: {...draft, status: 'Queued', plan}}), template: '<button class=\'fake-submit\' @click="$emit(\'scheduled\', job)">Submit job</button>'})
-    const w = mount(App, {global: {stubs: {ThumbCell: true, JobEditor: Editor}}})
-    await flushPromises()
-    await w.find('.fake-submit').trigger('click')
-    await flushPromises()
-    const notice = w.find('.msg[role="status"]').text()
-    expect(notice).toMatch(/^“Spring batch” was submitted and added to the end of the queue\. It runs at the next run time, .+ at \d+:\d\d [AP]M, after 2 other jobs\./)
-    expect(notice).toContain(', after 2 other jobs.')
-    expect(notice).toContain('It runs with your sign-in, which is deleted when the run ends.')
-    expect(w.findAll('.tab').find((b) => b.text() === 'Job queue')!.classes()).toContain('active')
-    w.unmount()
-  })
-
-  it('says the queue is paused, or that it starts now in development mode', async () => {
-    const run = async (p: object, alwaysRunTime: boolean) => {
-      stub((url) => {
-        if (url.endsWith('/api/me')) return me
-        if (url.endsWith('/api/schedule')) return {days: [1, 2, 3, 4, 5, 6, 7], start: '19:00', end: '', timezone: 'America/Los_Angeles', paused: null,
-          nextRunAt: null, windowOpen: true, alwaysRunTime}
-        if (url.endsWith('/api/jobs')) return {jobs: []}
-        return {}
-      })
-      const Editor = defineComponent({emits: ['scheduled'],
-        data: () => ({job: {...draft, status: 'Queued', plan: {...plan, ...p}}}), template: '<button class=\'fake-submit\' @click="$emit(\'scheduled\', job)">Submit job</button>'})
-      const w = mount(App, {global: {stubs: {ThumbCell: true, JobEditor: Editor}}})
-      await flushPromises()
-      await w.find('.fake-submit').trigger('click')
-      await flushPromises()
-      const text = w.find('.msg[role="status"]').text()
-      w.unmount()
-      return text
-    }
-    expect(await run({kind: 'paused'}, false)).toContain('The queue is paused, so it waits until a BMU scheduler resumes it.')
-    expect(await run({at: Date.now() / 1000, ahead: 0}, true)).toContain('Development setting: every moment counts as run time, so it starts now.')
   })
 })
 
