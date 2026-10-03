@@ -160,7 +160,7 @@ def current_session(request: Request, s: Services = Depends(svc)) -> Session:
     t = now()
     last = float(item.get("lastSeen") or item.get("expires", t) - s.settings.session_hours * 3600)
     if t - last > s.settings.session_idle_minutes * 60:
-        s.storage.delete_session(item["PK"])
+        s.storage.end_session(item["PK"], item.get("tenant"))  # with its hold on any draft it was editing
         raise HTTPException(401, f"You were signed out after {s.settings.session_idle_minutes} minutes without activity. "
                                  "Please sign in again; everything you changed was saved.")
     if request.headers.get("x-bmu-poll") != "1" and t - last > 60:
@@ -546,11 +546,8 @@ def _routes(app: FastAPI) -> None:
         if token:
             key = _hash(token)
             item = s.storage.get_session(key)
-            if item:  # stop editing any draft this session had open, so others can edit it without taking over
-                for j in s.storage.list_jobs(item["tenant"]):
-                    if j.get("editingSession") == key:
-                        s.storage.close_draft(j["id"], key)
-            s.storage.delete_session(key)
+            # stop editing any draft this session had open, so others can edit it without taking over
+            s.storage.end_session(key, item["tenant"] if item else None)
         response.delete_cookie(s.settings.cookie_name, path="/")
         return {"ok": True}
 
@@ -573,6 +570,9 @@ def _routes(app: FastAPI) -> None:
             raise HTTPException(400, "Not an authority field")
         # As in the CollectionSpace UI, sources the user can't read are dropped silently.
         readable = {"personauthorities": sess.perms.get("readPersons", True), "orgauthorities": sess.perms.get("readOrgs", True)}
+        kinds = [k for k in kinds if k in s.tenant.authorities]  # a source not set up for this tenant is skipped, as in the UI
+        if not kinds:
+            return {"terms": [], "total": 0}
         kinds = [k for k in kinds if readable.get(s.tenant.authorities[k]["service"], True)]
         if not kinds:
             return {"terms": [], "total": 0, "message": "Your CollectionSpace account can't read the Person or Organization authorities, so it can't search them."}

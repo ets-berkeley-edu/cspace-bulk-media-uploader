@@ -281,10 +281,14 @@ def test_idle_sessions_are_signed_out_but_polling_is_not_activity(api, login, se
     assert item["lastSeen"] < now() - 19 * 60  # didn't count as activity
     assert api.get("/api/jobs").status_code == 200  # a real request renews it
     assert services.storage.get_session(key)["lastSeen"] > now() - 5
+    draft = api.post("/api/jobs", json={"name": "left open"}).json()["id"]
+    assert services.storage.get_job(draft)["editingSession"] == key
     services.storage.touch_session(key, now() - 31 * 60)
     r = api.get("/api/jobs")
     assert r.status_code == 401 and "30 minutes without activity" in r.json()["detail"]
     assert services.storage.get_session(key) is None
+    # the draft it was editing is released, so others can edit it without taking over (design: Drafts, Closing)
+    assert "editingSession" not in services.storage.get_job(draft) and "editingBy" not in services.storage.get_job(draft)
 
 
 def test_the_sweep_deletes_idle_and_expired_sessions_with_their_passwords(api, login, services, worker):
@@ -293,6 +297,13 @@ def test_the_sweep_deletes_idle_and_expired_sessions_with_their_passwords(api, l
     login("limited")
     login("reader")
     keys = {i["user"]: i["PK"] for i in services.storage.sessions.scan()["Items"]}
+    login()  # admin again: a second session, with a draft open
+    second = next(i["PK"] for i in services.storage.sessions.scan()["Items"] if i["PK"] not in keys.values())
+    draft = api.post("/api/jobs", json={"name": "abandoned tab"}).json()["id"]
+    assert services.storage.get_job(draft)["editingSession"] == second
+    services.storage.touch_session(second, now() - 31 * 60)
+    assert services.storage.sweep_sessions(30 * 60) == 1
+    assert "editingSession" not in services.storage.get_job(draft)  # the sweep released the draft it was editing
     services.storage.touch_session(keys["admin"], now() - 31 * 60)  # idle
     services.storage.sessions.update_item(Key={"PK": keys["limited"]}, UpdateExpression="SET expires = :e",
                                           ExpressionAttributeValues={":e": int(now()) - 10})  # past the 8 hours

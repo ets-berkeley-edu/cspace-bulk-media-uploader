@@ -176,22 +176,31 @@ class Storage:
         if not item:
             return None
         if _clean(item).get("expires", 0) < now():
-            self.delete_session(key)  # past the absolute limit: the encrypted password goes with it
+            self.end_session(key, _clean(item).get("tenant"))  # past the absolute limit: the encrypted password goes with it
             return None
         return _clean(item)
+
+    def end_session(self, key: str, tenant: str | None) -> None:
+        """Remove a session, however it ends (Sign out, the idle or absolute limit, the sweep), and stop its editing
+        of any draft, so others can edit it without taking over (design: Drafts, Closing)."""
+        if tenant:
+            for job in self.list_jobs(tenant):
+                if job.get("editingSession") == key:
+                    self.close_draft(job["id"], key)
+        self.delete_session(key)
 
     def sweep_sessions(self, idle_seconds: float) -> int:
         """Delete sessions past their absolute limit or idle too long, with their encrypted passwords (design:
         Sessions): an abandoned browser tab never comes back to trigger the check itself."""
         t, gone = now(), 0
-        kw: dict[str, Any] = {"ProjectionExpression": "PK, expires, lastSeen"}
+        kw: dict[str, Any] = {"ProjectionExpression": "PK, expires, lastSeen, tenant"}
         while True:
             page = self.sessions.scan(**kw)
             for item in page.get("Items", []):
                 it = _clean(item)
                 last = it.get("lastSeen") or 0
                 if it.get("expires", 0) < t or (last and t - last > idle_seconds):
-                    self.delete_session(it["PK"])
+                    self.end_session(it["PK"], it.get("tenant"))
                     gone += 1
             if "LastEvaluatedKey" not in page:
                 return gone
