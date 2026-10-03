@@ -2,7 +2,7 @@
 name = "cs-bmu"
 version = "0.1.0"
 description = "Prototype of the new CollectionSpace Bulk Media Uploader (BMU) for UC Berkeley tenants"
-license = { text = "ECL-2.0" }
+license = { text = "Copyright The Regents of the University of California. Educational, research and not-for-profit use; see LICENSE" }
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.115",

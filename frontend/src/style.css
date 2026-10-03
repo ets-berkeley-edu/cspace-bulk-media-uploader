@@ -1,4 +1,13 @@
-/* Visual language follows the UI mockup (bmu-concept-c-mockup-v2.html). */
+/* The look of the screens not yet converted to Vuetify. It shrinks as each screen is converted, and goes away with
+   the last one. Visual language follows the UI mockup (bmu-concept-c-mockup-v2.html). */
+
+/* Vuetify's stylesheet resets every element (no margins or padding; form controls without borders, backgrounds or
+   the select arrow). Inside .legacy, which wraps the screens not yet converted, that is undone, so they look as they
+   did. :where() keeps these rules no stronger than the plain element rules below, which come later and so still apply,
+   and weaker than the class rules of Vuetify's own components. */
+:where(.legacy) :where(*) { margin: revert; padding: revert; }
+:where(.legacy) button, :where(.legacy) input, :where(.legacy) select, :where(.legacy) textarea { background-color: revert; border-style: revert; }
+:where(.legacy) select { -webkit-appearance: revert; -moz-appearance: revert; appearance: revert; }
 :root {
   --border: #d8d8d3; --border-strong: #b8b8b0;
   --surface-0: #f6f5f1; --surface-1: #efeee8; --surface-2: #ffffff;

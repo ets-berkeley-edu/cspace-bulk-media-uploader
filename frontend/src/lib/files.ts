@@ -2,24 +2,24 @@
 
 /** Run fn over items, at most limit at a time, keeping the results in order. */
 export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const out: R[] = new Array(items.length);
-  let next = 0;
+  const out: R[] = new Array(items.length)
+  let next = 0
   const lane = async () => {
-    for (let i = next++; i < items.length; i = next++) out[i] = await fn(items[i]);
-  };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, lane));
-  return out;
+    for (let i = next++; i < items.length; i = next++) out[i] = await fn(items[i])
+  }
+  await Promise.all(Array.from({length: Math.min(limit, items.length)}, lane))
+  return out
 }
 
 export function canPreview(file: File): boolean {
-  return /^image\/(jpeg|png|gif|webp)$/i.test(file.type);
+  return /^image\/(jpeg|png|gif|webp)$/i.test(file.type)
 }
 
 /** An upload stopped on purpose (its document was deleted), not a failure. */
 export class UploadCancelled extends Error {
   constructor() {
-    super("Upload cancelled");
-    this.name = "UploadCancelled";
+    super('Upload cancelled')
+    this.name = 'UploadCancelled'
   }
 }
 
@@ -28,11 +28,11 @@ export type UploadForm = { url: string; fields: Record<string, string> };
 
 /** Each form expires about 15 minutes after it is signed. A file whose form is older than this when its turn comes
  *  (it waited behind other files) gets a fresh one first, leaving ample time for the upload itself to start. */
-export const FORM_MAX_AGE_MS = 5 * 60 * 1000;
+export const FORM_MAX_AGE_MS = 5 * 60 * 1000
 
 /** Whether a form received at receivedAt (ms) is too old to start an upload with now. */
 export function formIsOld(receivedAt: number, now = Date.now()): boolean {
-  return now - receivedAt > FORM_MAX_AGE_MS;
+  return now - receivedAt > FORM_MAX_AGE_MS
 }
 
 /** Upload one file with a presigned POST, reporting progress (0–100). An abort signal stops it at once: S3 keeps
@@ -44,33 +44,33 @@ export function uploadToS3(
   signal?: AbortSignal,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
-    if (signal?.aborted) return reject(new UploadCancelled());
-    const data = new FormData();
-    Object.entries(form.fields).forEach(([k, v]) => data.append(k, v));
-    data.append("file", file);
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", form.url);
+    if (signal?.aborted) return reject(new UploadCancelled())
+    const data = new FormData()
+    Object.entries(form.fields).forEach(([k, v]) => data.append(k, v))
+    data.append('file', file)
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', form.url)
     // Demo builds with a browser upload speed set send the form to the web app (Demo tools), which checks X-BMU.
-    if (form.url.startsWith("/api/")) xhr.setRequestHeader("X-BMU", "1");
-    xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(Math.round((e.loaded / e.total) * 100));
-    xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(`Upload failed (${xhr.status})`)));
-    xhr.onerror = () => reject(new Error("Upload failed (network)"));
-    xhr.onabort = () => reject(new UploadCancelled());
-    signal?.addEventListener("abort", () => xhr.abort(), { once: true });
-    xhr.send(data);
-  });
+    if (form.url.startsWith('/api/')) xhr.setRequestHeader('X-BMU', '1')
+    xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(Math.round((e.loaded / e.total) * 100))
+    xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(`Upload failed (${xhr.status})`)))
+    xhr.onerror = () => reject(new Error('Upload failed (network)'))
+    xhr.onabort = () => reject(new UploadCancelled())
+    signal?.addEventListener('abort', () => xhr.abort(), {once: true})
+    xhr.send(data)
+  })
 }
 
 export function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 ** 2) return `${(n / 1024).toFixed(0)} KB`;
-  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
-  return `${(n / 1024 ** 3).toFixed(2).replace(/\.00$/, "")} GB`; // a whole number of GB, like the 2 GB limit, without ".00"
+  if (n < 1024) return `${n} B`
+  if (n < 1024 ** 2) return `${(n / 1024).toFixed(0)} KB`
+  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`
+  return `${(n / 1024 ** 3).toFixed(2).replace(/\.00$/, '')} GB` // a whole number of GB, like the 2 GB limit, without ".00"
 }
 
 export function formatTime(epochSeconds?: number): string {
-  if (!epochSeconds) return "—";
-  return new Date(epochSeconds * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  if (!epochSeconds) return '—'
+  return new Date(epochSeconds * 1000).toLocaleString(undefined, {dateStyle: 'medium', timeStyle: 'short'})
 }
 
 /**
@@ -79,63 +79,63 @@ export function formatTime(epochSeconds?: number): string {
  * browser can't draw it.
  */
 export async function makeThumbnail(file: File, maxSide = 320): Promise<Blob | null> {
-  if (!canPreview(file) || typeof createImageBitmap !== "function") return null;
+  if (!canPreview(file) || typeof createImageBitmap !== 'function') return null
   try {
-    const bmp = await createImageBitmap(file);
-    const scale = Math.min(1, maxSide / Math.max(bmp.width, bmp.height));
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.max(1, Math.round(bmp.width * scale));
-    canvas.height = Math.max(1, Math.round(bmp.height * scale));
-    canvas.getContext("2d")?.drawImage(bmp, 0, 0, canvas.width, canvas.height);
-    bmp.close();
-    return await new Promise((resolve) => canvas.toBlob((b) => resolve(b), "image/jpeg", 0.8));
+    const bmp = await createImageBitmap(file)
+    const scale = Math.min(1, maxSide / Math.max(bmp.width, bmp.height))
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.max(1, Math.round(bmp.width * scale))
+    canvas.height = Math.max(1, Math.round(bmp.height * scale))
+    canvas.getContext('2d')?.drawImage(bmp, 0, 0, canvas.width, canvas.height)
+    bmp.close()
+    return await new Promise((resolve) => canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.8))
   } catch {
-    return null;
+    return null
   }
 }
 
 /** What to show for a file the browser can't draw: its kind (design: video, audio and 3D files show a type icon). */
 export function fileKind(name: string): { icon: string; label: string; image: boolean } {
-  const ext = name.includes(".") ? name.split(".").pop()!.toLowerCase() : "";
-  if (["wav", "mp3", "aac"].includes(ext)) return { icon: "♪", label: "Audio", image: false };
-  if (ext === "mp4") return { icon: "▶", label: "Video", image: false };
-  if (ext === "x3d") return { icon: "⬡", label: "3D model", image: false };
-  if (ext === "pdf") return { icon: "PDF", label: "PDF document", image: false };
-  return { icon: ext.toUpperCase() || "FILE", label: ext.toUpperCase() || "File", image: ["jpg", "jpeg", "png", "tif", "tiff"].includes(ext) };
+  const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : ''
+  if (['wav', 'mp3', 'aac'].includes(ext)) return {icon: '♪', label: 'Audio', image: false}
+  if (ext === 'mp4') return {icon: '▶', label: 'Video', image: false}
+  if (ext === 'x3d') return {icon: '⬡', label: '3D model', image: false}
+  if (ext === 'pdf') return {icon: 'PDF', label: 'PDF document', image: false}
+  return {icon: ext.toUpperCase() || 'FILE', label: ext.toUpperCase() || 'File', image: ['jpg', 'jpeg', 'png', 'tif', 'tiff'].includes(ext)}
 }
 
 /** Split chosen files into the ones the BMU accepts and the ones it skips (design: Supported file types).
  *  Skipped files are never uploaded; the server's row check is the backstop. No list means accept all. */
 export function splitSupported<T extends { name: string }>(files: T[], types: string[] | undefined): { ok: T[]; skipped: T[] } {
-  if (!types?.length) return { ok: files, skipped: [] };
-  const allowed = new Set(types.map((t) => t.toLowerCase()));
-  const ext = (n: string) => (n.includes(".") ? n.split(".").pop()!.toLowerCase() : "");
-  const ok: T[] = [];
-  const skipped: T[] = [];
-  for (const f of files) (allowed.has(ext(f.name)) ? ok : skipped).push(f);
-  return { ok, skipped };
+  if (!types?.length) return {ok: files, skipped: []}
+  const allowed = new Set(types.map((t) => t.toLowerCase()))
+  const ext = (n: string) => (n.includes('.') ? n.split('.').pop()!.toLowerCase() : '')
+  const ok: T[] = []
+  const skipped: T[] = []
+  for (const f of files) (allowed.has(ext(f.name)) ? ok : skipped).push(f)
+  return {ok, skipped}
 }
 
 /** The message for files skipped because of their type. */
 export function skippedText(names: string[], hint: string | undefined): string {
-  const shown = names.slice(0, 5).join(", ") + (names.length > 5 ? `, and ${names.length - 5} more` : "");
-  return `${names.length} file${names.length === 1 ? "" : "s"} skipped: ${shown}. The BMU accepts ${hint || "only supported file types"}.`;
+  const shown = names.slice(0, 5).join(', ') + (names.length > 5 ? `, and ${names.length - 5} more` : '')
+  return `${names.length} file${names.length === 1 ? '' : 's'} skipped: ${shown}. The BMU accepts ${hint || 'only supported file types'}.`
 }
 
 /** Split chosen files into the ones within the per-file size limit and the ones over it (design: Browser uploads).
  *  Files over it are never sent; the server refuses them too. No limit means accept all. */
 export function splitSize<T extends { size: number }>(files: T[], limit: number | undefined): { ok: T[]; tooLarge: T[] } {
-  if (!limit) return { ok: files, tooLarge: [] };
-  return { ok: files.filter((f) => f.size <= limit), tooLarge: files.filter((f) => f.size > limit) };
+  if (!limit) return {ok: files, tooLarge: []}
+  return {ok: files.filter((f) => f.size <= limit), tooLarge: files.filter((f) => f.size > limit)}
 }
 
 /** The message for files skipped because they are over the size limit. */
 export function tooLargeText(names: string[], limit: number): string {
-  const shown = names.slice(0, 5).join(", ") + (names.length > 5 ? `, and ${names.length - 5} more` : "");
-  return `Skipped ${names.length} file${names.length === 1 ? "" : "s"} over the ${formatBytes(limit)} limit: ${shown}.`;
+  const shown = names.slice(0, 5).join(', ') + (names.length > 5 ? `, and ${names.length - 5} more` : '')
+  return `Skipped ${names.length} file${names.length === 1 ? '' : 's'} over the ${formatBytes(limit)} limit: ${shown}.`
 }
 
 /** The message for a replacement or retried file over the size limit (it is not sent). */
 export function fileTooLargeText(name: string, limit: number): string {
-  return `“${name}” is over the ${formatBytes(limit)} limit, so it can't be uploaded. Choose a smaller version of the file.`;
+  return `“${name}” is over the ${formatBytes(limit)} limit, so it can't be uploaded. Choose a smaller version of the file.`
 }
