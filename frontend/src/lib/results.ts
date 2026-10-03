@@ -98,7 +98,7 @@ export function importantRows(rows: Row[], n = 10): Row[] {
 // In the order a document's steps run. "values": the worker checks the document's values against CollectionSpace
 // again just before creating its records (failure value_missing; see backend worker.plan_steps).
 export const STEP_LABEL: Record<string, string> = {
-  values: "Check values in CollectionSpace", media: "Create Media record", findObject: "Find object", createObject: "Create object", findOrCreateObject: "Find or create object",
+  values: "Check the document in CollectionSpace", media: "Create Media record", findObject: "Find object", createObject: "Create object", findOrCreateObject: "Find or create object",
   upload: "Upload file (creates the Blob)", relMediaObject: "Relate Media → Object", relObjectMedia: "Relate Object → Media",
   addToGroup: "Add object to the job's group",
 };

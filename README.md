@@ -44,12 +44,15 @@ deployment.
   and give a job Run now, its own run time or a hold. Everyone sees when each job will run. Cancel run is for
   schedulers and the person who submitted the job. A job whose saved sign-in expires while it waits moves back to
   Drafts.
-- **The run:** a worker runs each document's steps in order: check its values in CollectionSpace again, create
+- **The run:** a worker runs each document's steps in order: check the document in CollectionSpace again, create
   the Media record, find or create the Object, attach the file (`PUT media/{csid}/blob`, which creates the Blob),
   relate Media and Object both ways, and add the Object to the job's Group. Before the first document, and again
   just before each one, the worker checks that its terms, languages and media types still exist: a renamed term
   is used under its current name (with a notice); a document whose value no longer exists fails before anything
-  is created for it. Each step records its CSID; a step whose dependencies failed is skipped. A rerun runs only
+  is created for it. The same check, just before each document, covers everything else the editor checked: the
+  account's permissions, the Object the handling needs (missing, already there for "Create new object + link", or
+  matching several) and the staged file. A document that fails it has nothing created, so a change in
+  CollectionSpace between submitting and running doesn't leave a Media record without its Object. Each step records its CSID; a step whose dependencies failed is skipped. A rerun runs only
   unfinished steps. Five failed requests in a row, or a refused sign-in, stop the job.
 - **Finished jobs:** each job's outcome (Completed, Needs attention, Failed), documents by result and run history.
   View results shows every document's steps and CSIDs, and every failure in plain language (title, explanation,
