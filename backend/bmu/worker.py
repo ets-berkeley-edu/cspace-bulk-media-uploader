@@ -17,6 +17,7 @@ from datetime import datetime
 
 from botocore.exceptions import ClientError
 
+from . import logsafe
 from . import schedule as sched
 from .config import Settings, get_settings
 from .crypto import Crypto, make_crypto
@@ -1117,6 +1118,7 @@ def _progress(rows: list[dict]) -> dict:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    logsafe.install()
     s = get_settings()
     storage = Storage(s)
     if s.create_tables:

@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import demo
+from . import logsafe
 from . import schedule as sched
 from .config import Settings, get_settings
 from .crypto import Crypto, make_crypto
@@ -77,6 +78,7 @@ class Services:
 
 def create_app(services: Services | None = None) -> FastAPI:
     app = FastAPI(title="New BMU (prototype)", docs_url="/api/docs", openapi_url="/api/openapi.json")
+    logsafe.install()  # uvicorn has set up its logging by the time the app is created
     if services is None:
         s = get_settings()
         storage = Storage(s)
