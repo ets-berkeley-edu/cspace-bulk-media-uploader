@@ -1,10 +1,10 @@
 export interface Handling {
   id: string;
   label: string;
-  object: "existing" | "create" | "either" | "none"; // either: link to the object, or create it if missing
-  id_rule: "object" | "image";
+  object: 'existing' | 'create' | 'either' | 'none'; // either: link to the object, or create it if missing
+  id_rule: 'object' | 'image';
   /** Field presets (design: Handling per document): type and language are lists, contributor a refName. */
-  presets?: Partial<Record<"type" | "contributor" | "copyright" | "language", string | string[]>>;
+  presets?: Partial<Record<'type' | 'contributor' | 'copyright' | 'language', string | string[]>>;
 }
 
 export interface Option {
@@ -70,20 +70,20 @@ export interface Schedule {
 
 /** When a queued job is planned to start (design: Job scheduling). */
 export interface JobPlan {
-  kind: "running" | "held" | "paused" | "runNow" | "at" | "schedule";
+  kind: 'running' | 'held' | 'paused' | 'runNow' | 'at' | 'schedule';
   at: number | null; // planned start: its runAt, or the next start for "schedule"
   ahead: number; // not-held queued jobs picked before it
   signInExpiresFirst: boolean;
 }
 
-export type CheckLevel = "block" | "warn" | "info";
+export type CheckLevel = 'block' | 'warn' | 'info';
 export interface Check {
   level: CheckLevel;
   text: string;
 }
 
 export interface Step {
-  s: "done" | "failed" | "skipped" | "not run" | "not needed";
+  s: 'done' | 'failed' | 'skipped' | 'not run' | 'not needed';
   csid?: string;
   run?: number; // the run that did it
   after?: string; // skipped: the step it depended on
@@ -96,7 +96,7 @@ export interface Step {
 }
 
 export interface RowResult {
-  state: "Not started" | "In progress" | "Done" | "Partial" | "Failed";
+  state: 'Not started' | 'In progress' | 'Done' | 'Partial' | 'Failed';
   steps?: Record<string, Step>;
   error?: { code: string; detail: string; step: string } | null;
   notices?: { code: string; detail: string }[];
@@ -108,7 +108,7 @@ export interface RowResult {
 /** One entry of the failure catalog (design: Finished jobs and error messages). */
 export interface Failure {
   title: string;
-  level: "row" | "job" | "notice" | "any";
+  level: 'row' | 'job' | 'notice' | 'any';
   explain: string;
   fix: string;
   needs_fix: boolean;
@@ -130,7 +130,7 @@ export interface Run {
   scheduledAt?: number;
   startedAt?: number;
   endedAt?: number;
-  outcome: "Running" | "Completed" | "NeedsAttention" | "Failed";
+  outcome: 'Running' | 'Completed' | 'NeedsAttention' | 'Failed';
   code?: string;
   codeDetail?: string; // the technical detail of a job-level code
   counts?: ResultCounts;
@@ -187,7 +187,7 @@ export interface Row {
   disabledAt?: number;
   skipLink?: boolean; // stop linking a Partial row's Media record to an object
   replacedFor?: number; // the run whose rejected or lost file this row's file replaces
-  upload: { s: "pending" | "uploading" | "verifying" | "done" | "failed"; pct?: number; reason?: string };
+  upload: { s: 'pending' | 'uploading' | 'verifying' | 'done' | 'failed'; pct?: number; reason?: string };
   checks: Check[];
   /** The last CollectionSpace searches for this row (object number, identification number). */
   lookups?: { object?: Lookup; media?: Lookup; date?: { value: string; ok: boolean; group: Record<string, string> } };
@@ -208,7 +208,7 @@ export interface RowChange {
   others: Row[];
 }
 
-export type JobStatus = "Draft" | "Queued" | "Running" | "Completed" | "NeedsAttention" | "Failed";
+export type JobStatus = 'Draft' | 'Queued' | 'Running' | 'Completed' | 'NeedsAttention' | 'Failed';
 
 export interface Job {
   id: string;
@@ -254,11 +254,11 @@ export interface Job {
   counts?: ResultCounts;
   runBy?: string;
   startedAt?: number;
-  fixFrom?: { status: "NeedsAttention" | "Failed"; code: string; codeDetail?: string; run: number } | null;
+  fixFrom?: { status: 'NeedsAttention' | 'Failed'; code: string; codeDetail?: string; run: number } | null;
   // the job's group (design: Groups)
   groupOn?: boolean;
   groupTitle?: string;
-  groupStep?: { s: "done" | "failed"; csid?: string; code?: string; detail?: string; run?: number } | null;
+  groupStep?: { s: 'done' | 'failed'; csid?: string; code?: string; detail?: string; run?: number } | null;
   protectedCount?: number; // documents that are protected files (a draft then expires after 7 days)
 }
 
@@ -271,5 +271,5 @@ export interface Term {
 /** A message for screen reader users, shown in the page's live region (lib/utils.ts alertScreenReader). */
 export interface ScreenReaderAlert {
   message: string;
-  politeness?: "polite" | "assertive";
+  politeness?: 'polite' | 'assertive';
 }
