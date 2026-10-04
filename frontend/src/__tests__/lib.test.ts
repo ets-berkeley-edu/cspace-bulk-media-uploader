@@ -1,7 +1,7 @@
 import {describe, expect, it} from 'vitest'
 import {displayName, isRefName} from '../lib/refname'
 import {formatBytes, mapLimit} from '../lib/files'
-import {jobCounts, rowStatus} from '../lib/status'
+import {jobCounts, rowStatus, runName, runNumber} from '../lib/status'
 import {isPreset} from '../lib/presets'
 import type {Row, TenantInfo} from '../types'
 
@@ -30,6 +30,17 @@ describe('files', () => {
   it('formats sizes', () => {
     expect(formatBytes(512)).toBe('512 B')
     expect(formatBytes(3 * 1024 * 1024)).toBe('3.0 MB')
+  })
+})
+
+describe('which run a job is on', () => {
+  it('names it in words: a queued job\'s next run, a running job\'s current one', () => {
+    expect(runName({status: 'Queued', run: 0})).toBe('first run')
+    expect(runName({status: 'Running', run: 1})).toBe('first run') // not "rerun (run 1)"
+    expect(runName({status: 'Queued', run: 1})).toBe('second run')
+    expect(runName({status: 'Running', run: 3})).toBe('third run')
+    expect(runName({status: 'Queued', run: 10})).toBe('run 11')
+    expect(runNumber({})).toBe(1)
   })
 })
 

@@ -59,6 +59,36 @@ describe('Job queue (design: The job queue)', () => {
     w.unmount()
   })
 
+  it('an expanded running job reads its documents again as the run moves on', async () => {
+    vi.useFakeTimers()
+    const doc = (n: number, state: string | null) => ({n, file: `1-000${n}.jpg`, handling: 'link', idnum: `1-000${n}`, include: true, checks: [],
+      upload: {s: 'done'}, result: state ? {state, steps: {}} : null})
+    let progress = {total: 2, done: 0, failed: 0}
+    let rows = [doc(1, 'In progress'), doc(2, null)]
+    mockApi({}, (url) => (url.endsWith('/api/jobs') ? {status: 200, body: {jobs: [{...jobs[0], rowCount: 2, progress, currentFile: '1-0001.jpg'}]}}
+      : url.endsWith('/api/jobs/r') ? {status: 200, body: {job: jobs[0], rows, runs: [], created: {}}} : undefined))
+    const w = mount(QueueList, {props: scheduler, global: {stubs: {DocumentThumbnail: true}}})
+    await flushPromises()
+    await w.find('#job-r-toggle-btn').trigger('click')
+    await flushPromises()
+    const states = () => w.findAll('#job-r-details tbody tr').map((r) => r.text()).join(' | ')
+    expect(states()).toContain('In progress')
+    expect(states()).not.toContain('Done')
+    // the worker finishes the first document: the list's next refresh reads the documents again
+    progress = {total: 2, done: 1, failed: 0}
+    rows = [doc(1, 'Done'), doc(2, 'In progress')]
+    await vi.advanceTimersByTimeAsync(2100)
+    await flushPromises()
+    expect(states()).toContain('Done')
+    // nothing moved: the documents aren't read again
+    const reads = calls.filter((c) => c.url.endsWith('/api/jobs/r')).length
+    await vi.advanceTimersByTimeAsync(4100)
+    await flushPromises()
+    expect(calls.filter((c) => c.url.endsWith('/api/jobs/r')).length).toBe(reads)
+    w.unmount()
+    vi.useRealTimers()
+  })
+
   it('moves a queued job, asks before Edit and Cancel run', async () => {
     mockApi()
     const w = mount(QueueList, {props: scheduler})

@@ -77,7 +77,19 @@
           <th class="actions-col" scope="col"><span class="sr-only">Actions</span></th>
         </tr>
       </thead>
-      <tbody v-if="!drafts.length">
+      <tbody v-if="!isLoaded">
+        <tr v-if="!error">
+          <td
+            id="drafts-loading"
+            aria-busy="true"
+            class="py-5 text-center text-medium-emphasis"
+            colspan="8"
+          >
+            Loading drafts…
+          </td>
+        </tr>
+      </tbody>
+      <tbody v-else-if="!drafts.length">
         <tr>
           <td id="drafts-empty" class="py-5 text-center text-medium-emphasis" colspan="8">
             No drafts. A job you start in Create / edit job is a draft until you submit it.
@@ -222,6 +234,8 @@ const docs = reactive(new Map<string, Row[]>())
 const expanded = reactive(new Set<string>())
 const checks = reactive(new Map<string, {block: number, warn: number} | 'checking'>())
 const error = ref('')
+// The first answer from the server has arrived: until then the list is loading, not empty.
+const isLoaded = ref(false)
 const table = tableState()
 let timer: ReturnType<typeof setInterval> | undefined
 
@@ -293,6 +307,7 @@ const refresh = async (runChecks = false) => {
   try {
     drafts.value = (await api.jobs(!runChecks)).jobs.filter(j => j.status === 'Draft').sort((a, b) => (b.lastSavedAt ?? 0) - (a.lastSavedAt ?? 0))
     error.value = ''
+    isLoaded.value = true
   } catch (e) {
     error.value = (e as Error).message
   }

@@ -276,7 +276,8 @@ confirmation and its details; a confirmation (Delete, Take over, Edit, Cancel ru
 the job. Every control has an id, built from the job's id or the document's number rather than its position
 (`job-<id>-edit-btn`, `job-<id>-status`, `result-<n>`, `run-<n>`), and state can be read from the page (a chip's
 text, `aria-expanded`, `aria-busy`). The browser tests planned for later rely on both; don't rename an id without
-need.
+need. A list says "Loading…" (`drafts-loading`, `queue-loading`, `finished-loading`, with `aria-busy`) until the
+server's first answer, so it never reads as empty before it knows.
 
 **Demo tools** (`components/demo/DemoPane.vue`, `src/lib/demo.ts`) are in demo builds only (`npm run dev`,
 `npm run build:demo`); a production build leaves their code out, and the server answers 404 to them unless
@@ -287,6 +288,10 @@ remembered in the browser (`prefersDarkMode`). Both are Vuetify themes in `src/p
 utility classes and theme colours first; what several screens share is in `src/assets/styles/bmu-global.css`
 (native checkboxes, selects and inputs, link buttons, the row toggle, job lists), and what one component needs is in
 its own scoped style. There is no other stylesheet.
+
+Two accessibility rules live in `bmu-global.css` and in the components: keyboard focus draws a solid outline on
+buttons, tabs, list items and links (Vuetify's own mark is a faint tint), and nothing clickable is smaller than 24
+pixels (WCAG 2.2, target size), so don't combine `size="x-small"` or `density="compact"` with a button.
 
 ## Checking against the real CollectionSpace
 

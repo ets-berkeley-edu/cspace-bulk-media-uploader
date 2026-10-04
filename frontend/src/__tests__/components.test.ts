@@ -206,7 +206,7 @@ describe('RepeatingSelect (design: repeating media type and language)', () => {
   it('shows labels, stores values, and adds or removes values', async () => {
     const w = mount(RepeatingSelect, {props: {id: 'pick', modelValue: ['still_image'], options, label: 'Media type', word: 'type'}})
     expect(w.find('select option:checked').text()).toBe('still image')
-    await w.find('button.link').trigger('click') // + Add an additional type
+    await w.find('#pick-add-btn').trigger('click') // + Add an additional type
     const selects = w.findAll('select')
     expect(selects).toHaveLength(2)
     expect(selects[1].find('option[value="still_image"]').attributes('disabled')).toBeDefined() // no repeats
