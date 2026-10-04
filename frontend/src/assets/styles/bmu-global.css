@@ -1,4 +1,11 @@
-/* Styles every page shares. The look of the screens not yet converted to Vuetify is in legacy.scss. */
+/* Styles every page shares. */
+/* The browser's own controls (native selects and checkboxes, date pickers, scroll bars) follow the Vuetify theme. */
+.v-theme--light {
+  color-scheme: light;
+}
+.v-theme--dark {
+  color-scheme: dark;
+}
 /* A page's heading takes the keyboard when the page opens (loadingComplete); it needs no focus ring. */
 h1[tabindex="-1"]:focus {
   outline: none;
