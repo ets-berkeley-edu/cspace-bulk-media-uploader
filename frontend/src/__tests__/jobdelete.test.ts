@@ -3,18 +3,20 @@ import {readFileSync} from 'node:fs'
 import {resolve} from 'node:path'
 import {describe, expect, it} from 'vitest'
 import {mount} from '@vue/test-utils'
-import JobActions from '../components/JobActions.vue'
 import type {Job} from '../types'
+import JobActions from '@/components/job/JobActions.vue'
 
 const job = (p: Partial<Job> = {}) => ({id: 'j1', name: 'Spring batch', status: 'Draft', createdBy: 'jlee', rowCount: 1, run: 0, ...p}) as Job
 const del = (w: ReturnType<typeof mount>) => w.find('button.job-del')
 
 describe('a job\'s Delete button', () => {
-  it('is the trash icon, with the word for screen readers and a tooltip', () => {
+  it('is the trash icon, labelled for screen readers, with a tooltip', () => {
     for (const [j, kind] of [[job(), 'drafts'], [job({status: 'Queued'}), 'queue']] as const) {
       const b = del(mount(JobActions, {props: {job: j, kind}}))
-      expect(b.find('svg.trash-icon').attributes('aria-hidden')).toBe('true')
-      expect(b.find('.sr-only').text()).toBe('Delete')
+      expect(b.find('svg').exists()).toBe(true)
+      expect(b.text()).toBe('')
+      expect(b.attributes('aria-label')).toBe('Delete')
+      expect(b.attributes('id')).toBe('job-j1-delete-btn')
       expect(b.attributes('title')).toBe('Delete job')
       expect(b.attributes('disabled')).toBeUndefined()
     }

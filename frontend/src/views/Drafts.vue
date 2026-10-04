@@ -1,36 +1,32 @@
 <template>
   <div>
     <h1 id="page-title" class="sr-only" tabindex="-1">Drafts</h1>
-    <div class="legacy">
-      <div class="card">
-        <JobPreview
-          v-if="session.previewing.drafts"
-          :key="session.previewing.drafts"
-          :edit-why="editWhy"
-          from="drafts"
-          :job-id="session.previewing.drafts"
-          :scheduler="!!currentUser.scheduler"
-          :tenant="currentUser.tenant"
-          :user="currentUser.user"
-          @back="session.previewing.drafts = null"
-          @open="openJob"
-        />
-        <DraftsList
-          v-else
-          :edit-why="editWhy"
-          :tenant="currentUser.tenant"
-          @open="openJob"
-        />
-      </div>
-    </div>
+    <JobPreview
+      v-if="session.previewing.drafts"
+      :key="session.previewing.drafts"
+      :edit-why="editWhy"
+      from="drafts"
+      :job-id="session.previewing.drafts"
+      :scheduler="!!currentUser.scheduler"
+      :tenant="currentUser.tenant"
+      :user="currentUser.user"
+      @back="session.previewing.drafts = null"
+      @open="openJob"
+    />
+    <DraftsList
+      v-else
+      :edit-why="editWhy"
+      :tenant="currentUser.tenant"
+      @open="openJob"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import {onMounted} from 'vue'
 import type {Me} from '@/types'
-import DraftsList from '@/components/DraftsList.vue'
-import JobPreview from '@/components/JobPreview.vue'
+import DraftsList from '@/components/job/DraftsList.vue'
+import JobPreview from '@/components/job/JobPreview.vue'
 import {editBlocked} from '@/lib/status'
 import {useContextStore} from '@/stores/context'
 import {useJobEditSessionStore} from '@/stores/job-edit-session'

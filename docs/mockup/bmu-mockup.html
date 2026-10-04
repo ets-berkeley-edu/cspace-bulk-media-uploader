@@ -1,4 +1,3 @@
-<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -494,7 +493,7 @@
       <li><strong>Layout:</strong> the “change selected documents” controls sit in a panel to the left of the document table and stay in view while you scroll, with a count of how many documents are selected. The arrow button in its header slides it closed to a slim rail that shows how many documents are selected, giving the table more room; the same button, or a click anywhere on the rail, slides it open again. The page remembers your choice. On narrow screens the panel moves above the table.</li>
       <li><strong>Large jobs:</strong> jobs can hold up to 1,000 documents, so the editor, job previews and job results show them in pages (25, 50 or 100 per page) with first / previous / next / last controls above and below the table. Click a column heading to sort (ascending, descending, then back to the original order); every table on every tab sorts this way, including the Drafts, Job queue and Finished jobs lists and the documents shown in an expanded job. Sorting the job queue only changes the view: the queue still runs in its own order, and dragging is off until the sort is cleared; a “Show” filter narrows to documents that need fixing, have warnings, are protected files, excluded or selected (in results: failed, partial, not started, excluded, done). The header checkbox selects the documents on the current page, with a link to select every matching document; bulk changes apply to everything selected, on any page. Try it with “Load 1,000 sample documents” in the bar at the top, or the “2026 digitization project, batch 1” job in Finished jobs. Expanded rows in the job lists show the 10 most important documents; the full preview or results shows them all.</li>
       <li><strong>Sign-in:</strong> the mockup opens on the sign-in screen, like the BMU. The BMU checks the username and password against CollectionSpace (Basic Auth) and reads the account's permissions and roles; here any username and password work, the password “wrong” shows a rejected sign-in, and the tenant, permissions and scheduler role are picked on the sign-in screen. Your username (top right) opens a menu, as in the BMU: Dark mode or Light mode (the choice is remembered in this browser; until you make one, your system's setting decides) and Sign out. Signing out stops editing the open draft; it stays in Drafts, saved, since every change is saved as it's made. Submitted jobs keep running after you sign out: each keeps its own sign-in until it finishes. The Mockup settings pane collapses to one line with the triangle at its left.</li>
-      <li><strong>Job lists:</strong> Drafts, Job queue and Finished jobs show one line per job. The triangle at the start of a row expands it in place to show the job's details (handling mix, group, who and when, expiry or run history) and one line per document with its status and most important problem or result, with a link to the full preview or results. “Expand all / Collapse all” sits above each list; hover over dates and badges for who did what.</li>
+      <li><strong>Job lists:</strong> Drafts, Job queue and Finished jobs show one line per job. The triangle at the start of a row expands it in place to show the job's details (handling mix, group, who and when, expiry or run history) and one line per document with its status and most important problem or result, with a link to the full preview or results. “Expand all / Collapse all” sits above each list; hover over dates and badges for who did what. In Drafts and the Job queue, a job's confirmation (Delete, Edit, Cancel run, Take over) opens in a full-width row under the job, where its text has room.</li>
       <li><strong>Worked example:</strong> in Finished jobs, open “example: fixed by excluding a document” with View results. Its run history shows run 1 needing attention because one document's Media record was rejected, that document then excluded by jdoe, and run 2 completing with the document shown as excluded. To try it yourself: use Fix and reschedule on “collections survey batch 4”, check Exclude for the documents that need fixing, press Submit job, then in the Job queue use Run now on it and Finish run (mockup) on the running jobs until it has run.</li>
       <li><strong>Excluding documents:</strong> the Exclude checkbox at the end of each row (unchecked by default; hover its heading for “To exclude a document from a job, check the box.”) tells the BMU to ignore a document, for example one with a problem that can't be fixed yet. Excluded rows are grayed out, their fields can't be changed, and they are left out of the checks, so they never block submitting; unchecking Exclude restores the row as it was. Exclude selected / Include selected in the side panel work on several rows at once. Done rows have nothing to ignore. <strong>Deleting documents:</strong> the trash button at the very end of each row (after Exclude) deletes that document from the job permanently, after a confirmation in the row; its uploaded file is removed and nothing in CollectionSpace is touched. <strong>Delete selected</strong>, under Exclude selected / Include selected in the side panel, does the same for all selected documents after a confirmation in the panel. Excluded documents can be deleted too. Only documents that haven't created anything in CollectionSpace, and that the last run didn't stop on while working on them (BAMPFA's “loan documentation”), can be deleted (finding an existing object doesn't count): for the others the trash button is disabled, its tooltip and the expanded row explain why, Delete selected leaves them in place and says how many it skipped, and they can only be excluded. Deleting the job's last document, or every document at once, deletes the job too. Each deleted document is written to the audit log (Row deleted). In the BMU a document shows “Deleting…” in its Status, and Delete selected reads “Deleting…”, until the server has removed it; this mockup deletes at once. A partial row can be excluded too; its Media record stays in CollectionSpace, unfinished.</li>
       <li><strong>Finished jobs:</strong> jobs that have run, with their outcome (Completed, Needs attention, Failed), how many documents were done, partial, failed or not started, and who ran them. View results shows every document's steps with the CSIDs created, and for each failure a plain explanation, what to do, and the technical detail on request. <strong>Fix and reschedule</strong> (or just <strong>Reschedule</strong>, when every failure only needs another run, such as a sign-in failure, an outage or a cancelled run) moves a job that needs attention or failed into Drafts: documents already created are read-only (🔒), a partial document shows why its fields are locked (its Media record already exists, and the BMU never updates records; change them in CollectionSpace instead) and only allows what the rerun still needs: a corrected object number, a replacement file, stopping the link to an object, or leaving the job's group (untick Group while its Add to group step hasn't been done; the rerun then shows that step as not needed), and submitting queues a rerun that skips everything already done. The BMU checks every document against CollectionSpace again just before creating anything for it: its values (renamed terms are used under their current names, with a notice), the permissions its handling needs, its object and its file. A document that fails this check (a value that no longer exists, an object that is gone or that now exists for “Create new object + link”, a missing permission) has nothing created for it, while the rest of the job goes on: in its results, the first step, Check the document in CollectionSpace, failed and the other steps were skipped. Completed jobs are removed after 30 days.</li>
@@ -2693,8 +2692,9 @@ function checksCell(j) {
     (changed ? '<div class="changed">Changed since submitted</div>' : "");
 }
 function lockedByOther(j) { return j.editingBy && j.editingBy !== "you"; }
-function actionsFor(j, inPreview) {
-  var run = j.status === "Running", locked = lockedByOther(j);
+/* A job's open confirmation (Delete, Edit, Cancel run, Take over), or "" when none is open. In the lists it is shown
+   in a full-width row under the job (confirmRow); in a preview, in place of the buttons. */
+function confirmFor(j) {
   if (confirmDeleteId === j.id) return deleteConfirmHtml(j);
   if (false) {
     var cs = createdSummary(j);
@@ -2715,6 +2715,15 @@ function actionsFor(j, inPreview) {
     return '<span class="msg msg-warn" style="font-size:12px">' + esc(j.editingBy) + " has been editing this draft since " + esc(j.editingSince) +
       ". If you take over, their editing ends and their page becomes read-only; everything they changed is already saved.</span>" +
       '<button class="q-takeover-yes" data-id="' + j.id + '">Take over and edit</button><button class="q-takeover-no">Cancel</button>';
+  return "";
+}
+function confirmRow(j, cols) {
+  var c = confirmFor(j);
+  return c ? '<tr class="job-confirm"><td colspan="' + cols + '" style="white-space:normal"><div class="actions" style="justify-content:flex-start">' + c + "</div></td></tr>" : "";
+}
+function actionsFor(j, inPreview) {
+  var run = j.status === "Running", locked = lockedByOther(j), open = confirmFor(j);
+  if (open) return inPreview ? open : "";
   var why = run ? "A running job can\u2019t be changed" : (locked ? j.editingBy + " is editing this job" : (!canEdit() ? NO_EDIT_WHY : ""));
   var noEdit = canEdit() ? "" : ' disabled title="' + esc(NO_EDIT_WHY) + '"';
   return (inPreview ? "" : '<button class="q-preview" data-id="' + j.id + '">Preview</button>') +
@@ -2842,7 +2851,7 @@ function renderDrafts() {
         '<td><span class="' + (ex.soon ? "lock" : "") + '" title="' + esc(ex.sens ? "7 days: contains protected files" : "30 days after last save") + '">' + esc(shortDate(ex.at)) + "</span>" +
           '<div class="sub">' + (j.fixFrom ? "then reverts to " + esc(j.fixFrom.toLowerCase()) : "then deleted") + "</div>" +
           (j.note ? '<div class="sub" style="color:var(--text-warning)">' + esc(j.note) + "</div>" : "") + "</td>" +
-        '<td><div class="actions">' + actionsFor(j) + "</div></td></tr>" + jobDetailRow(j, "drafts", 8);
+        '<td><div class="actions">' + actionsFor(j) + "</div></td></tr>" + confirmRow(j, 8) + jobDetailRow(j, "drafts", 8);
     });
     html += "</tbody></table></div>";
   }
@@ -2880,7 +2889,7 @@ function renderQueue() {
         "<td>" + j.rows.length + "</td><td>" + checksCell(j).replace('<div class="changed">Changed since submitted</div>', ' <span class="changed" title="Changed since submitted">●</span>') + "</td>" +
         '<td title="by ' + esc(j.submittedBy || "—") + '">' + esc(j.submittedAt || "—") + credNote(j) + "</td>" +
         runsAtCell(j) +
-        "<td>" + statusBadge(j) + '</td><td><div class="actions">' + actionsFor(j) + "</div></td></tr>" + jobDetailRow(j, "queue", 9);
+        "<td>" + statusBadge(j) + '</td><td><div class="actions">' + actionsFor(j) + "</div></td></tr>" + confirmRow(j, 9) + jobDetailRow(j, "queue", 9);
     });
     html += "</tbody></table></div>";
   }

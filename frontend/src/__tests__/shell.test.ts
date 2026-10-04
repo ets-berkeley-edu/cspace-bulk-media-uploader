@@ -238,7 +238,7 @@ describe('the job being worked on, across the tabs', () => {
   it('previewing a draft doesn\'t close the draft open in Create / edit job, and Back returns to the list', async () => {
     stubApi(routes)
     const w = await mountApp('/drafts', {ThumbCell: true, JobEditor: EditorStub})
-    const rowOf = (name: string) => w.findAll('tbody tr').find(r => r.text().includes(name))!
+    const rowOf = (name: string) => w.findAll('tbody').find(r => r.text().includes(name))!
     await rowOf('My draft').findAll('button').find(b => b.text() === 'Continue editing')!.trigger('click')
     await settle()
     expect(router.currentRoute.value.path).toBe('/job/d1')

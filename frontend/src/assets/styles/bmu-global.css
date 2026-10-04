@@ -130,3 +130,43 @@ h1[tabindex="-1"]:focus {
 .v-alert--density-compact {
   font-size: 0.875rem;
 }
+/* A job's facts in a line: Handling, Group title, Created by, and so on. */
+.job-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 24px;
+}
+.job-facts dt {
+  display: inline;
+  font-weight: 700;
+  margin-right: 4px;
+}
+.job-facts dd {
+  display: inline;
+}
+/* A native date or time field. */
+.native-input {
+  background-color: rgb(var(--v-theme-surface));
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.38);
+  border-radius: 4px;
+  color: inherit;
+  color-scheme: inherit;
+  font-size: 0.875rem;
+  padding: 4px 8px;
+}
+.native-input:disabled {
+  opacity: 0.6;
+}
+.native-input:focus-visible {
+  outline: 2px solid rgb(var(--v-theme-primary));
+  outline-offset: 1px;
+}
+/* An expanded job's details, under its row in a list. */
+.job-list .job-details-row > td {
+  background-color: rgba(var(--v-theme-on-surface), 0.03);
+}
+.job-list td {
+  padding-bottom: 6px !important;
+  padding-top: 6px !important;
+  vertical-align: top;
+}

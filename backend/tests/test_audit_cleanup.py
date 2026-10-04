@@ -53,3 +53,27 @@ def test_deleting_falls_back_to_a_plain_delete_when_versions_cannot_be_listed(se
     monkeypatch.setattr(s3, "get_paginator", denied)
     services.storage.delete_object(key)
     assert services.storage.head_object(key) is None  # hidden; the lifecycle rule removes the old version
+
+
+def test_deleting_several_objects_removes_every_version_of_those_only(services):
+    s3, bucket = services.storage.s3, services.settings.s3_bucket
+    keys = [f"staging/pahma/jobx/{n:05d}/file{n}" for n in range(1, 7)]
+    for key in keys:
+        s3.put_object(Bucket=bucket, Key=key, Body=b"one")
+    s3.put_object(Bucket=bucket, Key=keys[0], Body=b"two")  # a second version
+    s3.delete_object(Bucket=bucket, Key=keys[1])            # a delete marker on top of a version
+    services.storage.delete_objects(keys[:5] + [None, "", "staging/pahma/jobx/00009/never-uploaded"])
+    assert [v["Key"] for v in _versions(services, "staging/pahma/jobx/")] == [keys[5]]
+
+
+def test_deleting_several_objects_falls_back_to_one_by_one(services, monkeypatch):
+    s3, bucket = services.storage.s3, services.settings.s3_bucket
+    keys = [f"staging/pahma/joby/{n:05d}/file{n}" for n in range(1, 6)]
+    for key in keys:
+        s3.put_object(Bucket=bucket, Key=key, Body=b"one")
+
+    def denied(name):
+        raise ClientError({"Error": {"Code": "AccessDenied", "Message": "no"}}, "ListObjectVersions")
+    monkeypatch.setattr(s3, "get_paginator", denied)
+    services.storage.delete_objects(keys)
+    assert all(services.storage.head_object(key) is None for key in keys)

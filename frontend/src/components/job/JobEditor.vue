@@ -452,7 +452,7 @@
       rounded
     >
       <span id="document-counts" class="text-body-2">
-        <strong>{{ counts.total }} documents<template v-if="counts.disabled"> ({{ counts.disabled }} excluded)</template></strong>
+        <strong>{{ counts.total }} document{{ counts.total === 1 ? '' : 's' }}<template v-if="counts.disabled"> ({{ counts.disabled }} excluded)</template></strong>
         · {{ counts.block ? `${counts.block} ${counts.block === 1 ? 'needs' : 'need'} fixing` : 'nothing to fix' }}<template v-if="counts.warn"> · {{ counts.warn }} {{ counts.warn === 1 ? 'has' : 'have' }} warnings</template>
       </span>
       <v-spacer />
