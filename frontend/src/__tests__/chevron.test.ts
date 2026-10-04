@@ -3,7 +3,6 @@ import {readFileSync} from 'node:fs'
 import {resolve} from 'node:path'
 import {describe, expect, it} from 'vitest'
 import {mount} from '@vue/test-utils'
-import ChevronIcon from '../components/ChevronIcon.vue'
 import type {Perms, Row, TenantInfo} from '../types'
 import DocumentRow from '@/components/job/DocumentRow.vue'
 
@@ -21,12 +20,6 @@ function mountRow(expanded: boolean) {
 }
 
 describe('the expand/collapse toggle', () => {
-  it('is an SVG, hidden from screen readers, not a text character', () => {
-    const svg = mount(ChevronIcon).find('svg')
-    expect(svg.attributes('aria-hidden')).toBe('true')
-    expect(svg.attributes('width')).toBe('20')
-  })
-
   it('on a document row, keeps its label and expanded state and has no text', () => {
     for (const open of [false, true]) {
       const b = mountRow(open).find('button[aria-label="Show details"]')
@@ -39,23 +32,17 @@ describe('the expand/collapse toggle', () => {
   })
 
   it('no component still uses the small ▸ character for a row toggle', () => {
-    for (const f of ['DemoPane']) {
+    // Every screen uses a Vuetify icon button
+    for (const f of ['job/JobEditor', 'job/DocumentRow', 'job/DraftsList', 'job/QueueList', 'job/FinishedJobs', 'demo/DemoPane']) {
       const src = readFileSync(resolve(__dirname, `../components/${f}.vue`), 'utf8')
-      expect(src).not.toContain('>▸</button>')
-      expect(src).toContain('<ChevronIcon />')
-    }
-    // The converted screens use a Vuetify icon button
-    for (const f of ['JobEditor', 'DocumentRow', 'DraftsList', 'QueueList', 'FinishedJobs']) {
-      const src = readFileSync(resolve(__dirname, `../components/job/${f}.vue`), 'utf8')
       expect(src).not.toContain('▸')
       expect(src).toContain(':icon="mdiChevronRight"')
     }
   })
 
-  it('is a 30px button with a 20px icon that rotates when open', () => {
-    const css = readFileSync(resolve(__dirname, '../assets/styles/legacy.scss'), 'utf8')
-    expect(css).toMatch(/\.chevron \{[^}]*width: 30px; height: 30px;/)
-    expect(css).toMatch(/\.chevron \.chev-icon \{ width: 20px; height: 20px;/)
-    expect(css).toMatch(/\.chevron\.open \.chev-icon \{ transform: rotate\(90deg\); \}/)
+  it('rotates the icon when open, without animation for people who ask for less motion', () => {
+    const css = readFileSync(resolve(__dirname, '../assets/styles/bmu-global.css'), 'utf8')
+    expect(css).toMatch(/\.chevron\.open \.v-icon \{\s*transform: rotate\(90deg\);/)
+    expect(css).toMatch(/prefers-reduced-motion: reduce\) \{\s*\.chevron \.v-icon \{\s*transition: none;/)
   })
 })

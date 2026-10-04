@@ -64,9 +64,7 @@
           Prototype · creates Media records, files, Objects and Relations in CollectionSpace using your own account.
         </p>
         <!-- Demo tools: only in demo builds (lib/demo.ts). In a production build its code isn't in the bundle. -->
-        <div v-if="DemoPane" class="legacy">
-          <component :is="DemoPane" @jobs-deleted="session.jobsDeleted" />
-        </div>
+        <component :is="DemoPane" v-if="DemoPane" @jobs-deleted="session.jobsDeleted" />
         <v-alert
           v-if="session.notice"
           id="notice"
@@ -135,7 +133,7 @@ import {logOut} from '@/api/auth'
 import {useContextStore} from '@/stores/context'
 import {useJobEditSessionStore} from '@/stores/job-edit-session'
 
-const DemoPane = import.meta.env.MODE !== 'production' ? defineAsyncComponent(() => import('@/components/DemoPane.vue')) : null
+const DemoPane = import.meta.env.MODE !== 'production' ? defineAsyncComponent(() => import('@/components/demo/DemoPane.vue')) : null
 
 const contextStore = useContextStore()
 // This page is only reached signed in (src/auth.ts), and is left before signing out clears the user.

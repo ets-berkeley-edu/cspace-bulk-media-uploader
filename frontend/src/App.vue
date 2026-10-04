@@ -43,7 +43,3 @@ onUnmounted(() => window.removeEventListener('bmu-signed-out', onSignedOut))
 <style>
 @import '@/assets/styles/bmu-global.css';
 </style>
-
-<style lang="scss">
-@use '@/assets/styles/legacy';
-</style>

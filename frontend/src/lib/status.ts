@@ -82,7 +82,7 @@ export function handlingBlocked(h: Handling, perms: Perms): string {
   return ''
 }
 
-/** The Vuetify colour of a status chip, from a badge's class (the screens not yet converted use the class). */
+/** The Vuetify colour of a status chip, from the badge class that lib/results.ts and lib/schedule.ts give a status. */
 const CHIP_COLOR: Record<string, string | undefined> = {'b-ok': 'success', 'b-warn': 'warning', 'b-danger': 'error', 'b-accent': 'info', 'b-muted': undefined}
 export function chipColor(cls: string): string | undefined {
   return CHIP_COLOR[cls]

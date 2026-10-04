@@ -11,14 +11,6 @@ import vueParser from 'vue-eslint-parser'
 //     it is only ever rendered as text.
 //   - BOA's scoped-CSS plugin and @vue/eslint-config-typescript are left out: each brings in packages that
 //     `npm audit` reports, and the BMU keeps `npm audit` clean.
-// Screens still as they were before the Vuetify conversion. Each is rewritten when its screen is converted, so they
-// are not reformatted now: only the v-html rule applies to them. Take a file off this list when it is converted;
-// the conversion is finished when the list is empty.
-const notYetConverted = [
-  'src/components/ChevronIcon.vue',
-  'src/components/DemoPane.vue'
-]
-
 const vueLanguageOptions = {
   globals: {
     ...globals.node,
@@ -39,17 +31,7 @@ export default tseslint.config(
     ignores: ['dist/**', 'node_modules/**']
   },
   {
-    files: notYetConverted,
-    plugins: {vue: pluginVue},
-    languageOptions: vueLanguageOptions,
-    rules: {
-      'vue/no-v-html': 2,
-      'vue/no-v-text-v-html-on-component': 2
-    }
-  },
-  {
     files: ['**/*.js', '**/*.ts', '**/*.vue'],
-    ignores: notYetConverted,
     extends: [
       js.configs.recommended,
       ...tseslint.configs.recommended,

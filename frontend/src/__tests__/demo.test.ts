@@ -1,8 +1,8 @@
 /** Demo tools pane (demo builds only): collapsible, off when the server's demo mode is off, and its controls. */
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 import {flushPromises, mount} from '@vue/test-utils'
-import DemoPane from '../components/DemoPane.vue'
 import {COMMANDS, DEMO_BUILD, type DemoStatus, demoSummary, failureText} from '../lib/demo'
+import DemoPane from '@/components/demo/DemoPane.vue'
 
 const sim = {
   delay: 0, upload_mbps: 0, rules: [], term_states: {}, term_renames: {}, deleted_languages: [], language_renames: {},
@@ -36,9 +36,9 @@ describe('Demo tools', () => {
     stub(() => ({body: status({browserUploadMbps: 2})}))
     const w = mount(DemoPane)
     await flushPromises()
-    expect(w.find('#demoBody').isVisible()).toBe(true)
+    expect(w.find('#demo-body').isVisible()).toBe(true)
     await w.find('button.chevron').trigger('click')
-    expect(w.find('#demoBody').attributes('style')).toContain('display: none')
+    expect(w.find('#demo-body').attributes('style')).toContain('display: none')
     expect(w.find('.demo-summary').text()).toContain('Browser uploads: 2 MB/s')
     expect(localStorage.getItem('bmuDemoPaneOpen')).toBe('0')
     expect(mount(DemoPane).find('button.chevron').attributes('aria-expanded')).toBe('false')

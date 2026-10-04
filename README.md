@@ -72,7 +72,7 @@ deployment is built (`deploy/README.md`); what it leaves for later is listed the
 | `backend/bmu/failures.yaml` | The failure catalog: every failure code with its title, explanation and what to do |
 | `backend/fakecspace/` | A simulated CollectionSpace API for development and tests (not CollectionSpace) |
 | `backend/tests/` | pytest: unit tests and the full run path with moto (AWS) and the simulated CollectionSpace |
-| `frontend/` | Vue 3 + TypeScript app (Vite, Vitest), being converted to Vuetify following BOA: see Frontend, below |
+| `frontend/` | Vue 3 + TypeScript app (Vuetify, Pinia, vue-router, axios; Vite, Vitest), built like BOA: see Frontend, below |
 | `scripts/check_cspace.py` | Checks the BMU's calls against a real CollectionSpace server |
 | `scripts/find_csid.py` | Finds which BMU job created a CollectionSpace record |
 | `docker-compose.yml` | Local stack: web, worker, Vue dev server, DynamoDB Local, moto (S3), simulated CollectionSpace |
@@ -228,12 +228,11 @@ cd frontend && npm ci && npm run lint && npm test && npm run typecheck && npm ru
 
 ## Frontend
 
-The frontend is being converted to Vuetify so that it is built like UC Berkeley RTL's other applications: BOA
-(`github.com/ets-berkeley-edu/boac`), Damien and Diablo. In common with them: Vuetify 3 with components registered
-by hand (`src/plugins/vuetify.ts`), icons from `@mdi/js`, Pinia stores (`src/stores/`), vue-router
-(`src/router.ts`), axios for the BMU API in function modules (`src/api/`), and one set of ESLint rules
-(`npm run lint`). The light theme's colours and Verdana are BOA's. Unlike those apps, the BMU keeps its TypeScript
-type check and its Vitest unit tests.
+The frontend is built like UC Berkeley RTL's other applications: BOA (`github.com/ets-berkeley-edu/boac`), Damien
+and Diablo. In common with them: Vuetify 3 with components registered by hand (`src/plugins/vuetify.ts`), icons from
+`@mdi/js`, Pinia stores (`src/stores/`), vue-router (`src/router.ts`), axios for the BMU API in function modules
+(`src/api/`), and one set of ESLint rules (`npm run lint`). The light theme's colours and Verdana are BOA's. Unlike
+those apps, the BMU keeps its TypeScript type check and its Vitest unit tests.
 
 Three rules are the BMU's own:
 
@@ -243,18 +242,18 @@ Three rules are the BMU's own:
 - **`npm audit` stays clean.** That is why two of BOA's lint packages are left out (see `eslint.config.js`), and why
   axios is one release ahead of BOA's.
 
-The conversion goes screen by screen. Done so far: sign-in (`views/Login.vue`), and the signed-in frame
-(`views/BaseView.vue`): the app bar with the user menu (Dark or Light mode, Sign out), and the four tabs, each now a
-page with its own address (`/job`, `/drafts`, `/queue`, `/finished`; `src/router.ts`, guards in `src/auth.ts`).
-What the tabs share about the job being worked on is in `src/stores/job-edit-session.ts`. Create / edit job stays
-alive behind the other tabs, so its uploads go on. The draft open there is part of the address (`/job/<job id>`), so a
-reload, a bookmark or Back reopens it; `/job` alone is a new, empty job. The store's `jobPath` is that address, and
-`views/EditJob.vue` keeps the address and the open draft in agreement.
+**Pages.** Sign-in is `views/Login.vue`. The signed-in frame is `views/BaseView.vue`: the app bar with the user menu
+(Dark or Light mode, Sign out), and the four tabs, each a page with its own address (`/job`, `/drafts`, `/queue`,
+`/finished`; `src/router.ts`, guards in `src/auth.ts`). What the tabs share about the job being worked on is in
+`src/stores/job-edit-session.ts`. Create / edit job stays alive behind the other tabs, so its uploads go on. The draft
+open there is part of the address (`/job/<job id>`), so a reload, a bookmark or Back reopens it; `/job` alone is a
+new, empty job. The store's `jobPath` is that address, and `views/EditJob.vue` keeps the address and the open draft
+in agreement.
 
-Create / edit job is converted too (`views/EditJob.vue`, `components/job/`): `JobEditor.vue`, one `DocumentRow.vue`
-per document, `BulkPanel.vue`, and shared pieces in `components/util/` (`AuthorityInput`, `DateInput`,
-`RepeatingSelect`, `Pagination`, `SortableColumnHeader`, `DocumentThumbnail`, `FailureAlert`). Three things there are
-deliberate, because a page can hold 100 documents:
+**Create / edit job** (`views/EditJob.vue`, `components/job/`): `JobEditor.vue`, one `DocumentRow.vue` per document,
+`BulkPanel.vue`, and shared pieces in `components/util/` (`AuthorityInput`, `DateInput`, `RepeatingSelect`,
+`Pagination`, `SortableColumnHeader`, `DocumentThumbnail`, `FailureAlert`). Three things there are deliberate,
+because a page can hold 100 documents:
 
 - Each row's checkboxes and its handling list are native elements, as in BOA's and Damien's tables; a Vuetify
   component for each would be drawn hundreds of times a page.
@@ -263,26 +262,31 @@ deliberate, because a page can hold 100 documents:
 - `JobEditor` gives every row the same handler functions (`@edit="edit"`, and the row passes itself back), and the
   list of other file names as a function. A handler written inline per row makes every row redraw on any change.
 
-Drafts and Job queue are converted as well (`views/Drafts.vue`, `views/Queue.vue`): `DraftsList.vue`, `QueueList.vue`
-with `QueueSchedule.vue` (the schedule banner, Schedule settings, Pause and Resume), `JobActions.vue` with
+**Drafts and Job queue** (`views/Drafts.vue`, `views/Queue.vue`): `DraftsList.vue`, `QueueList.vue` with
+`QueueSchedule.vue` (the schedule banner, Schedule settings, Pause and Resume), `JobActions.vue` with
 `DeleteJobConfirm.vue`, `JobDetails.vue` and `JobDocumentsTable.vue` (an expanded job), and `JobPreview.vue`, all in
-`components/job/`. In a list, each job is a `<tbody id="job-<id>">` holding its row, its confirmation and its details;
-a confirmation (Delete, Take over, Edit, Cancel run) opens in a full-width row under the job. Every control has an id
-built from the job's id (`job-<id>-edit-btn`, `job-<id>-status`), which the browser tests planned for later will use.
+`components/job/`.
 
-Finished jobs is converted too (`views/Finished.vue`): `FinishedJobs.vue` (the list, and a job's results in the same
-page), `JobResults.vue` (run history and every document's steps) and `FinishedJobActions.vue` (View results, Fix and
-reschedule or Reschedule, Delete), in `components/job/`. The list is built like the other two, and a job's ids follow
-the same pattern (`job-<id>-view-results-btn`, `job-<id>-fix-btn`, `job-<id>-outcome`); in the results, each document
-is `result-<n>` and each run `run-<n>`.
+**Finished jobs** (`views/Finished.vue`): `FinishedJobs.vue` (the list, and a job's results in the same page),
+`JobResults.vue` (run history and every document's steps) and `FinishedJobActions.vue` (View results, Fix and
+reschedule or Reschedule, Delete), in `components/job/`.
 
-Light or dark follows Damien: the system's setting until the user picks one in the menu, which is then remembered in
-the browser (`prefersDarkMode`). Both are Vuetify themes in `src/plugins/vuetify.ts`.
+**Job lists and ids.** In each of the three lists a job is a `<tbody id="job-<id>">` holding its row, its
+confirmation and its details; a confirmation (Delete, Take over, Edit, Cancel run) opens in a full-width row under
+the job. Every control has an id, built from the job's id or the document's number rather than its position
+(`job-<id>-edit-btn`, `job-<id>-status`, `result-<n>`, `run-<n>`), and state can be read from the page (a chip's
+text, `aria-expanded`, `aria-busy`). The browser tests planned for later rely on both; don't rename an id without
+need.
 
-Only the demo tools (`components/DemoPane.vue`, shown in the simulator) are not yet converted; they are listed in
-`eslint.config.js` (`notYetConverted`) and keep their old look from `src/assets/styles/legacy.scss`, which applies only
-inside an element with the class `legacy` and undoes Vuetify's style reset there. The next part of the conversion
-converts them and removes `legacy.scss`.
+**Demo tools** (`components/demo/DemoPane.vue`, `src/lib/demo.ts`) are in demo builds only (`npm run dev`,
+`npm run build:demo`); a production build leaves their code out, and the server answers 404 to them unless
+`BMU_DEMO=true`.
+
+**Styles.** Light or dark follows Damien: the system's setting until the user picks one in the menu, which is then
+remembered in the browser (`prefersDarkMode`). Both are Vuetify themes in `src/plugins/vuetify.ts`. Use Vuetify's
+utility classes and theme colours first; what several screens share is in `src/assets/styles/bmu-global.css`
+(native checkboxes, selects and inputs, link buttons, the row toggle, job lists), and what one component needs is in
+its own scoped style. There is no other stylesheet.
 
 ## Checking against the real CollectionSpace
 
