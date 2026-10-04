@@ -18,21 +18,23 @@ def _row(api, job, n):
     return next(r for r in api.post(f"/api/jobs/{job}/check").json()["rows"] if r["n"] == n)
 
 
-def test_two_jobs_that_create_the_same_object_the_second_must_be_fixed(api, login, add_uploaded, worker):
+def test_two_jobs_that_create_the_same_object_the_second_must_be_fixed(api, login, add_uploaded, worker, services):
     login()
     first, _ = _job(api, add_uploaded, "First batch", f"{MISSING}.jpg", "create")
     assert api.post(f"/api/jobs/{first}/schedule").status_code == 200
     second, n = _job(api, add_uploaded, "Second batch", f"{MISSING}_b.jpg", "create")
     blocks = _checks(_row(api, second, n), "block")
     assert len(blocks) == 1 and "Job “First batch”, ahead of this one in the job queue, creates object 20-0501" in blocks[0]
-    assert "choose “Link to object (create if missing)”" in blocks[0] and f"({MISSING}.jpg)" in blocks[0]
+    assert "Submit this job after that one has run" in blocks[0] and f"({MISSING}.jpg)" in blocks[0]
     r = api.post(f"/api/jobs/{second}/schedule")
     assert r.status_code == 409 and r.json()["detail"]["rows"] == [n]
-    # the fix the message offers: link to the object the first job creates
+    # run the first job, then link to the object it created
+    assert worker.tick()
+    services.queue_rows.clear()  # the web app keeps the queue's documents for 5 seconds
     api.patch(f"/api/jobs/{second}/rows/{n}", json={"handling": "linkorcreate"})
     assert _checks(_row(api, second, n), "block") == []
     assert api.post(f"/api/jobs/{second}/schedule").status_code == 200
-    assert worker.tick() and worker.tick()
+    assert worker.tick()
     steps = {}
     for job in (first, second):
         j = api.get(f"/api/jobs/{job}").json()
@@ -49,25 +51,50 @@ def test_create_if_missing_ahead_also_creates_the_object(api, login, add_uploade
     first, _ = _job(api, add_uploaded, "First batch", f"{MISSING}.jpg", "linkorcreate")
     assert api.post(f"/api/jobs/{first}/schedule").status_code == 200
     second, n = _job(api, add_uploaded, "Second batch", f"{MISSING}_b.jpg", "create")
-    assert any("creates object 20-0501" in t for t in _checks(_row(api, second, n), "block"))
+    blocks = _checks(_row(api, second, n), "block")
+    # beside a "create if missing" document the fix is to do the same: two of those never collide
+    assert len(blocks) == 1 and "creates object 20-0501" in blocks[0] and "choose “Link to object (create if missing)”" in blocks[0]
 
 
-def test_a_job_that_links_or_creates_never_collides(api, login, add_uploaded):
+def test_link_or_create_behind_a_create_is_refused_so_no_queue_can_be_broken_by_reordering(api, login, add_uploaded, worker, services):
     login()
     first, _ = _job(api, add_uploaded, "First batch", f"{MISSING}.jpg", "create")
     assert api.post(f"/api/jobs/{first}/schedule").status_code == 200
     second, n = _job(api, add_uploaded, "Second batch", f"{MISSING}_b.jpg", "linkorcreate")
+    blocks = _checks(_row(api, second, n), "block")
+    assert len(blocks) == 1 and "Job “First batch”, in the job queue, creates object 20-0501 with “Create new object + link”" in blocks[0]
+    assert "can't wait in the queue together" in blocks[0]
+    r = api.post(f"/api/jobs/{second}/schedule")
+    assert r.status_code == 409 and r.json()["detail"]["rows"] == [n]
+    # once the first job has run the object exists, and linking to it is fine
+    assert worker.tick()
+    services.queue_rows.clear()  # the web app keeps the queue's documents for 5 seconds
     assert _checks(_row(api, second, n), "block") == []
     assert api.post(f"/api/jobs/{second}/schedule").status_code == 200
 
 
-def test_the_same_identification_number_in_an_earlier_job_is_a_warning(api, login, add_uploaded):
+def test_two_jobs_that_link_or_create_can_wait_together_in_either_order(api, login, add_uploaded, worker):
     login()
-    first, _ = _job(api, add_uploaded, "First batch", f"{MISSING}.jpg", "create")
+    first, _ = _job(api, add_uploaded, "First batch", f"{MISSING}.jpg", "linkorcreate")
     assert api.post(f"/api/jobs/{first}/schedule").status_code == 200
     second, n = _job(api, add_uploaded, "Second batch", f"{MISSING}_b.jpg", "linkorcreate")
+    assert _checks(_row(api, second, n), "block") == []
+    assert api.post(f"/api/jobs/{second}/schedule").status_code == 200
+    assert api.post(f"/api/jobs/{second}/move", json={"toIndex": 0}).status_code == 200
+    for job in (first, second):
+        assert api.post(f"/api/jobs/{job}/check").json()["counts"]["block"] == 0
+    assert worker.tick() and worker.tick()
+    for job in (first, second):
+        assert api.get(f"/api/jobs/{job}").json()["job"]["status"] == "Completed"
+
+
+def test_the_same_identification_number_in_an_earlier_job_is_a_warning(api, login, add_uploaded):
+    login()
+    first, _ = _job(api, add_uploaded, "First batch", "1-2345_a.jpg", "link")
+    assert api.post(f"/api/jobs/{first}/schedule").status_code == 200
+    second, n = _job(api, add_uploaded, "Second batch", "1-2345_b.jpg", "link")
     warns = _checks(_row(api, second, n), "warn")
-    assert any("Job “First batch”, ahead of this one in the job queue, also has a document with ID 20-0501" in t
+    assert any("Job “First batch”, ahead of this one in the job queue, also has a document with ID 1-2345" in t
                and "Both Media records would be created" in t for t in warns)
     assert api.post(f"/api/jobs/{second}/schedule").status_code == 200  # a warning doesn't stop Submit
     # the first job, which runs first, is told nothing
@@ -75,13 +102,18 @@ def test_the_same_identification_number_in_an_earlier_job_is_a_warning(api, logi
     assert one["counts"] == {"block": 0, "warn": 0}
 
 
-def test_reordering_the_queue_moves_the_problem_to_the_job_that_now_runs_second(api, login, add_uploaded):
+def test_a_queue_built_before_the_rule_shows_the_problem_on_the_job_that_runs_second(api, login, add_uploaded, services):
+    """Two people submitting at the same moment can each miss the other. The Job queue then follows the real order."""
     login()  # admin is a BMU scheduler
-    creates, n = _job(api, add_uploaded, "Creates it", f"{MISSING}.jpg", "create")
+    creates, _ = _job(api, add_uploaded, "Creates it", f"{MISSING}.jpg", "create")
     assert api.post(f"/api/jobs/{creates}/schedule").status_code == 200
     links, _ = _job(api, add_uploaded, "Links or creates", f"{MISSING}_b.jpg", "linkorcreate")
-    assert api.post(f"/api/jobs/{links}/schedule").status_code == 200
+    # put it in the queue as a submission that missed the other job would have
+    services.storage.update_job(links, {"status": "Queued", "queuedAt": services.clock(), "queuePos": services.clock(),
+                                        "editingSession": None, "editingBy": None})
+    services.queue_rows.clear()
     assert api.post(f"/api/jobs/{creates}/check").json()["counts"]["block"] == 0
+    assert api.post(f"/api/jobs/{links}/check").json()["counts"]["block"] == 0  # in this order nothing fails
     # a scheduler puts the second job first: now it creates the object, and the first job's document would fail
     assert api.post(f"/api/jobs/{links}/move", json={"toIndex": 0}).status_code == 200
     checked = api.post(f"/api/jobs/{creates}/check").json()
@@ -102,6 +134,44 @@ def test_once_the_first_job_has_run_collectionspace_itself_says_the_object_exist
     second, n = _job(api, add_uploaded, "Second batch", f"{MISSING}_b.jpg", "create")
     blocks = _checks(_row(api, second, n), "block")
     assert len(blocks) == 1 and "already exists in CollectionSpace" in blocks[0] and "First batch" not in blocks[0]
+
+
+HANDLINGS = ("link", "linkorcreate", "create", "mediaonly")
+
+
+def test_no_queue_that_submit_allows_can_be_broken_by_reordering(api, login, add_uploaded, worker, services):
+    """Every pair of handlings, for an object number CollectionSpace doesn't have: whenever Submit lets both jobs
+    into the queue, they run to the end in the order submitted and in the other order."""
+    login()
+    allowed = []
+    for i, first_handling in enumerate(HANDLINGS):
+        for j, second_handling in enumerate(HANDLINGS):
+            for swap in (False, True):
+                num = f"77-{i}{j}{int(swap)}"
+                one, _ = _job(api, add_uploaded, f"one {num}", f"{num}.jpg", first_handling)
+                if api.post(f"/api/jobs/{one}/schedule").status_code != 200:
+                    assert first_handling == "link"  # no such object to link to
+                    api.delete(f"/api/jobs/{one}")
+                    continue
+                two, _ = _job(api, add_uploaded, f"two {num}", f"{num}_b.jpg", second_handling)
+                if api.post(f"/api/jobs/{two}/schedule").status_code != 200:
+                    api.delete(f"/api/jobs/{two}")
+                    assert worker.tick()
+                    services.queue_rows.clear()
+                    continue
+                allowed.append((first_handling, second_handling))
+                if swap:
+                    assert api.post(f"/api/jobs/{two}/move", json={"toIndex": 0}).status_code == 200
+                for job in (one, two):
+                    assert api.post(f"/api/jobs/{job}/check").json()["counts"]["block"] == 0, (first_handling, second_handling, swap)
+                assert worker.tick() and worker.tick()
+                services.queue_rows.clear()
+                for job in (one, two):
+                    got = api.get(f"/api/jobs/{job}").json()
+                    assert got["job"]["status"] == "Completed", (first_handling, second_handling, swap, got["rows"][0]["result"])
+    # what may wait together: anything with a media-only job, and two jobs that both link or create
+    assert sorted(set(allowed)) == sorted({("linkorcreate", "linkorcreate"), ("linkorcreate", "mediaonly"), ("create", "mediaonly"),
+                                           ("mediaonly", "linkorcreate"), ("mediaonly", "create"), ("mediaonly", "mediaonly")})
 
 
 def test_ahead_of_follows_the_workers_order():

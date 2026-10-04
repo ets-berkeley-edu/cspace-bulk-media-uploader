@@ -1299,7 +1299,8 @@ def _collisions(s: Services, tenant: str, job: dict, rows: list[dict], fresh: bo
         return {}
     ids = {j["id"] for j in sched.ahead_of([j for j, _ in queue], job, sched.load(s.storage, tenant), s.clock(),
                                            s.settings.always_run_time)}
-    return collision_checks(s.tenant, rows, [(j, rs) for j, rs in queue if j["id"] in ids])
+    return collision_checks(s.tenant, rows, [(j, rs) for j, rs in queue if j["id"] in ids],
+                            joining=job.get("status") != "Queued")
 
 
 def _note_protected(s: Services, job_id: str, rows: list[dict]) -> None:

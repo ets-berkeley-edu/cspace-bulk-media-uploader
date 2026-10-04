@@ -879,7 +879,8 @@ STEP_TEXT = {"values": "check the document in CollectionSpace", "media": "create
              "addToGroup": "add the object to the job's group"}
 
 
-def collision_checks(tenant: Tenant, rows: list[dict], ahead: list[tuple[dict, list[dict]]]) -> dict[int, list[dict]]:
+def collision_checks(tenant: Tenant, rows: list[dict], ahead: list[tuple[dict, list[dict]]],
+                     joining: bool = False) -> dict[int, list[dict]]:
     """Design (Jobs that collide in the queue): what the jobs that run before this one will have changed in
     CollectionSpace by the time it runs. ahead: (job, rows) of each of those jobs, in any order. Returns the extra
     checks by row number; nothing is asked of CollectionSpace.
@@ -888,8 +889,15 @@ def collision_checks(tenant: Tenant, rows: list[dict], ahead: list[tuple[dict, l
     create" when the Object doesn't exist yet): this job's check just before the document would find the Object
     and fail it. Warning: a document whose identification number an earlier job's document also has: both Media
     records are created. A document CollectionSpace already blocks or warns about for the same reason isn't told
-    twice."""
-    creates: dict[str, tuple[str, str]] = {}  # object number -> (job name, file) of the first job that creates it
+    twice.
+
+    joining: the job isn't in the queue yet (a draft). Then one more pair is Must fix: a "find or create" document
+    whose Object a queued job creates with "create". In that order nothing fails, but a scheduler who put this job
+    first would make the queued job's document fail. Refusing the pair at Submit means no queue that Submit lets
+    someone build can be broken by reordering it. A job already in the queue isn't told this: its order is known,
+    and the first rule covers it."""
+    creates: dict[str, tuple[str, str, str]] = {}  # object number -> (job name, file, behavior) of the first that creates it
+    only_creates: dict[str, tuple[str, str]] = {}  # object number -> (job name, file), for "create" documents alone
     ids: dict[str, tuple[str, str]] = {}      # identification number -> the same
     for job, others in ahead:
         name = job.get("name") or "Untitled job"
@@ -899,7 +907,9 @@ def collision_checks(tenant: Tenant, rows: list[dict], ahead: list[tuple[dict, l
             h = tenant.handling_by_id(o.get("handling") or "")
             num = (o.get("obj") or "").strip()
             if h and h.object in ("create", "either") and num and not object_step_ran(o):
-                creates.setdefault(num, (name, o.get("file") or ""))
+                creates.setdefault(num, (name, o.get("file") or "", h.object))
+                if h.object == "create":
+                    only_creates.setdefault(num, (name, o.get("file") or ""))
             if o.get("idnum") and not media_created(o):
                 ids.setdefault(o["idnum"], (name, o.get("file") or ""))
     out: dict[int, list[dict]] = {}
@@ -915,11 +925,21 @@ def collision_checks(tenant: Tenant, rows: list[dict], ahead: list[tuple[dict, l
         looked = (r.get("lookups") or {}).get("object") or {}
         exists_now = looked.get("value") == num and bool(looked.get("csids"))  # then object_checks blocks it already
         if h and h.object == "create" and num in creates and not object_step_ran(r) and not exists_now:
-            name, file = creates[num]
-            fix = f"To link to that object, choose {relink}; otherwise" if relink else "Wait until that job has run, or"
+            name, file, _ = creates[num]
+            # beside a "create" document, a "find or create" one can't join the queue either (see joining)
+            wait = "Submit this job after that one has run, or" if joining else "Wait until that job has run, or"
+            fix = f"To link to that object, choose {relink}; otherwise" if relink and not (joining and num in only_creates) else wait
             found.append({"level": "block", "text": f"Job “{name}”, ahead of this one in the job queue, creates object {num} "
                           f"({file}). When this job runs the object will exist, and “Create new object + link” only "
                           f"creates a new object, so this document would fail. {fix} correct the object number."})
+        elif (joining and h and h.object == "either" and num in only_creates and not object_step_ran(r) and not exists_now
+              and looked.get("value") == num):
+            name, file = only_creates[num]
+            found.append({"level": "block", "text": f"Job “{name}”, in the job queue, creates object {num} with “Create new "
+                          f"object + link” ({file}). If this job were moved ahead of it, this document would create the "
+                          "object and that job's document would fail, so the two can't wait in the queue together. Submit "
+                          "this job after that one has run, change that job's document to "
+                          f"{relink or 'a handling that links to the object'}, or correct the object number."})
         idn = r.get("idnum") or ""
         seen = (r.get("lookups") or {}).get("media") or {}
         in_cspace = seen.get("value") == idn and bool(seen.get("csids"))  # then check_rows warns about it already

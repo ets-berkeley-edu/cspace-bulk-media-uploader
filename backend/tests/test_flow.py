@@ -4,7 +4,7 @@ from bmu.storage import now
 
 def new_job(api, name="Test job"):
     r = api.post("/api/jobs", json={"name": name})
-    assert r.status_code == 200
+    assert r.status_code == 200, r.text
     return r.json()["id"]
 
 
