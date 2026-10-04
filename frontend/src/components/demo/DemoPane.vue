@@ -327,57 +327,60 @@
                 Browser uploads at full speed
               </v-btn>
             </div>
-            <div v-if="!isConfirmingDeleteAll" class="demo-inline">
+            <div v-if="!confirming" class="demo-inline">
               <v-btn
                 id="demo-delete-all-btn"
                 :disabled="isBusy"
                 size="small"
                 variant="outlined"
-                @click="isConfirmingDeleteAll = true"
+                @click="confirming = 'jobs'"
               >
                 Delete all jobs…
+              </v-btn>
+              <v-btn
+                v-if="sim"
+                id="demo-reset-everything-btn"
+                :disabled="isBusy"
+                size="small"
+                variant="outlined"
+                @click="confirming = 'everything'"
+              >
+                Reset everything…
               </v-btn>
             </div>
             <v-alert
               v-else
-              id="demo-delete-all-confirm"
+              :id="`demo-${confirming === 'jobs' ? 'delete-all' : 'reset-everything'}-confirm`"
               density="compact"
               role="alert"
               type="warning"
               variant="tonal"
             >
-              Delete every job in this tenant (drafts, queued and finished), except running ones? Their files are
-              removed from the BMU; records already created in CollectionSpace stay.
+              {{ CONFIRM_TEXT[confirming] }}
               <div class="demo-inline mt-2">
                 <v-btn
-                  id="demo-delete-all-confirm-btn"
+                  :id="`demo-${confirming === 'jobs' ? 'delete-all' : 'reset-everything'}-confirm-btn`"
                   color="error"
                   :disabled="isBusy"
                   size="small"
-                  @click="() => deleteAllJobs(false)"
+                  @click="confirmed"
                 >
-                  Delete all jobs
+                  {{ confirming === 'jobs' ? 'Delete all jobs' : 'Reset everything' }}
                 </v-btn>
                 <v-btn
-                  id="demo-delete-all-reset-btn"
-                  color="error"
-                  :disabled="isBusy"
-                  size="small"
-                  @click="() => deleteAllJobs(true)"
-                >
-                  Delete all jobs and reset everything
-                </v-btn>
-                <v-btn
-                  id="demo-delete-all-cancel-btn"
+                  id="demo-confirm-cancel-btn"
                   size="small"
                   variant="outlined"
-                  @click="isConfirmingDeleteAll = false"
+                  @click="confirming = null"
                 >
                   Cancel
                 </v-btn>
               </div>
             </v-alert>
-            <p class="text-caption text-medium-emphasis">Resetting the simulator also forgets the records earlier runs created in it.</p>
+            <p class="text-caption text-medium-emphasis">
+              Resetting the simulator also forgets the records earlier runs created in it. Reset everything puts the
+              prototype back to how it starts.
+            </p>
           </v-card>
         </div>
 
@@ -477,7 +480,14 @@ const isOff = ref(false)
 const isBusy = ref(false)
 const message = ref('')
 const error = ref('')
-const isConfirmingDeleteAll = ref(false)
+// Which of the Reset box's two questions is open
+const confirming = ref<'jobs' | 'everything' | null>(null)
+const CONFIRM_TEXT = {
+  jobs: 'Delete every job in this tenant (drafts, queued and finished), except running ones? Their files are removed from the BMU; '
+    + 'records already created in CollectionSpace stay.',
+  everything: 'Delete every job, draft, uploaded file and audit entry in the BMU, put the job schedule back to its default, and reset the '
+    + 'simulated CollectionSpace and the upload speeds? This can\'t be undone. You stay signed in.'
+}
 const objects = ref<{objectNumber: string, note: string, deleted: boolean, sensitivity?: unknown}[] | null>(null)
 const copied = ref('')
 
@@ -568,17 +578,21 @@ const resetSim = () => run(
   'The simulated CollectionSpace is reset: its records, terms, failures and speeds are back to the start.'
 )
 
-const deleteAllJobs = async (andReset: boolean) => {
-  isConfirmingDeleteAll.value = false
-  await run(async () => {
-    const r = await demoApi.deleteAllJobs()
-    if (andReset) {
-      await demoApi.sim('reset')
-      await demoApi.browserUpload(0)
-    }
-    const kept = r.skipped.length ? ` Kept ${r.skipped.length} running: ${r.skipped.join(', ')}.` : ''
-    emit('jobsDeleted', `Demo tools deleted ${r.deleted} job${r.deleted === 1 ? '' : 's'}.${kept}`)
-  }, andReset ? 'Everything is reset: no jobs, and the simulator and upload speeds are back to the start.' : 'Jobs deleted.')
+const deleteAllJobs = () => run(async () => {
+  const r = await demoApi.deleteAllJobs()
+  const kept = r.skipped.length ? ` Kept ${r.skipped.length} running: ${r.skipped.join(', ')}.` : ''
+  emit('jobsDeleted', `Demo tools deleted ${r.deleted} job${r.deleted === 1 ? '' : 's'}.${kept}`)
+}, 'Jobs deleted.')
+
+const resetEverything = () => run(async () => {
+  await demoApi.resetEverything()
+  emit('jobsDeleted', 'Demo tools reset everything: no jobs, drafts, files or audit entries, and the schedule is back to its default.')
+}, 'Everything is reset: the prototype is as it starts.')
+
+const confirmed = () => {
+  const what = confirming.value
+  confirming.value = null
+  return what === 'jobs' ? deleteAllJobs() : resetEverything()
 }
 
 const loadObjects = async (event: Event) => {

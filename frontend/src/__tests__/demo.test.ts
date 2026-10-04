@@ -95,6 +95,35 @@ describe('Demo tools', () => {
     expect(w.emitted('jobsDeleted')![0][0]).toBe('Demo tools deleted 3 jobs. Kept 1 running: Running one.')
   })
 
+  it('resets everything only after confirming, and tells the app', async () => {
+    stub((url) => ({body: url.includes('reset-everything') ? {items: 12, objects: 3} : status()}))
+    const w = mount(DemoPane)
+    await flushPromises()
+    await w.find('#demo-reset-everything-btn').trigger('click')
+    expect(w.find('#demo-reset-everything-confirm').text()).toContain('audit entry')
+    expect(calls.some((c) => c.url.includes('reset-everything'))).toBe(false)
+    await w.find('#demo-confirm-cancel-btn').trigger('click')
+    expect(w.find('#demo-reset-everything-confirm').exists()).toBe(false)
+    await w.find('#demo-reset-everything-btn').trigger('click')
+    await w.find('#demo-reset-everything-confirm-btn').trigger('click')
+    await flushPromises()
+    expect(calls.filter((c) => c.url === '/api/_demo/reset-everything' && c.method === 'POST')).toHaveLength(1)
+    expect(w.emitted('jobsDeleted')![0][0]).toContain('Demo tools reset everything')
+    expect(w.find('#demo-message').text()).toBe('Everything is reset: the prototype is as it starts.')
+  })
+
+  it('shows the server\'s reason when the reset is refused', async () => {
+    stub((url) => (url.includes('reset-everything') ? {status: 409, body: {detail: '“Spring batch” is running. Cancel the run or wait for it to end, then reset.'}}
+      : {body: status()}))
+    const w = mount(DemoPane)
+    await flushPromises()
+    await w.find('#demo-reset-everything-btn').trigger('click')
+    await w.find('#demo-reset-everything-confirm-btn').trigger('click')
+    await flushPromises()
+    expect(w.find('#demo-error').text()).toContain('“Spring batch” is running')
+    expect(w.emitted('jobsDeleted')).toBeUndefined()
+  })
+
   it('names changed terms by their display names, and says what a failure does', async () => {
     stub(() => ({body: status({sim: {...sim, term_renames: {LeslieFreund1: 'L. Freund'}}})}))
     const w = mount(DemoPane)

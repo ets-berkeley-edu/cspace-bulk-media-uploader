@@ -857,6 +857,33 @@ class Storage:
                 self.delete_object(failed)  # raises if it really can't be deleted
 
 
+    # ---- Demo tools only (bmu.demo): never called in production ------------------------------------------
+    def wipe_everything(self) -> dict:
+        """Delete everything the BMU holds except who is signed in: every job with its documents and runs, the
+        saved sign-ins of queued jobs, the job schedule (which returns to its defaults), the audit log with its
+        CSID index, and every object in the bucket (staged files, thumbnails, audit files; all versions). Nothing
+        in CollectionSpace is touched. Returns how many items and objects were deleted."""
+        counts = {"items": 0, "objects": 0}
+        for table, keys in ((self.jobs, ("PK", "SK")), (self.credentials, ("PK",)), (self.audit_table, ("PK", "SK"))):
+            kw: dict[str, Any] = {"ProjectionExpression": ", ".join(keys)}
+            with table.batch_writer() as batch:
+                while True:
+                    page = table.scan(**kw)
+                    for item in page["Items"]:
+                        batch.delete_item(Key={k: item[k] for k in keys})
+                        counts["items"] += 1
+                    if "LastEvaluatedKey" not in page:
+                        break
+                    kw["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+        pages = self.s3.get_paginator("list_object_versions").paginate(Bucket=self.s.s3_bucket)
+        found = [{"Key": v["Key"], "VersionId": v["VersionId"]} for page in pages
+                 for v in page.get("Versions", []) + page.get("DeleteMarkers", [])]
+        for i in range(0, len(found), 1000):
+            self.s3.delete_objects(Bucket=self.s.s3_bucket, Delete={"Objects": found[i:i + 1000], "Quiet": True})
+        counts["objects"] = len(found)
+        return counts
+
+
 def _strip(item: dict) -> dict:
     return {k: v for k, v in item.items() if k not in ("PK", "SK")}
 

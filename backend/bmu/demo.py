@@ -161,6 +161,23 @@ def register(app: FastAPI) -> None:
         log.info("demo: %s deleted %d jobs (%d skipped)", sess.user, deleted, len(skipped))
         return {"deleted": deleted, "skipped": skipped}
 
+    @app.post("/api/_demo/reset-everything")
+    def reset_everything(sess: Session = Depends(current_session), s: Services = Depends(demo_on)):
+        """Put the prototype back to how it starts: every job, draft, file and audit entry deleted, the job schedule
+        back to its defaults, the simulated CollectionSpace reset and browser uploads at full speed. Whoever is signed
+        in stays signed in. Only with the simulated CollectionSpace: against a real server the audit log is the record
+        of what the BMU created there, and is never deleted. Refused while a job is running (the worker is writing)."""
+        sim_call(s, "GET", "/_fake/settings")  # 502 with the reason unless the CollectionSpace is the simulator
+        running = [j.get("name") or "Untitled job" for j in s.storage.list_jobs(sess.tenant) if j.get("status") == "Running"]
+        if running:
+            raise HTTPException(409, f"“{running[0]}” is running. Cancel the run or wait for it to end, then reset.")
+        counts = s.storage.wipe_everything()
+        s.queue_rows.clear()
+        s.demo.browser_upload_mbps = 0.0
+        sim_call(s, "POST", "/_fake/reset")
+        log.info("demo: %s reset everything (%d items, %d objects)", sess.user, counts["items"], counts["objects"])
+        return counts
+
     @app.post(UPLOAD_PATH)
     async def s3_upload(request: Request, sess: Session = Depends(current_session), s: Services = Depends(demo_on)):
         """A browser upload (the presigned POST form, unchanged) passed on to S3 at the demo upload speed."""

@@ -148,6 +148,10 @@ and your browser remembers that. From it you can:
 - delete, "merge away" (404) or rename a sample Person or Organization, and remove or rename a language;
 - reset the simulator, put browser uploads back to full speed, and delete every job in the tenant (except running
   ones) to start a demo afresh;
+- **Reset everything:** put the prototype back to how it starts. Every job, draft, uploaded file and audit entry in
+  the BMU is deleted, the job schedule returns to its default, and the simulator and upload speeds are reset; you stay
+  signed in. It is refused while a job is running, and it only works with the simulated CollectionSpace: against a
+  real server the audit log is the record of what the BMU created there;
 - see the simulator's sample objects, and copy the commands for the check scripts, the simulator and the tests.
 
 It is off everywhere else, twice over. The pane is only in demo builds: `npm run dev` and `npm run build:demo` include
