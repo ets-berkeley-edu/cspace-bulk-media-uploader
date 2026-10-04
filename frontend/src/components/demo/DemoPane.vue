@@ -129,36 +129,47 @@
             variant="outlined"
           >
             <h3 class="text-body-2 font-weight-bold">Make CollectionSpace fail</h3>
+            <p class="text-caption text-medium-emphasis">
+              Choose what should fail, then click Add failure. It applies to requests made after that.
+            </p>
             <div class="demo-inline">
-              <label for="demo-fail-step-select">Step</label>
-              <select id="demo-fail-step-select" v-model="fail.step" class="native-select">
-                <option v-for="step in sim.steps" :key="step" :value="step">{{ step }}</option>
-              </select>
-              <label for="demo-fail-status-select">With</label>
-              <select id="demo-fail-status-select" v-model.number="fail.status" class="native-select">
-                <option v-for="[code, label] in STATUSES" :key="code" :value="code">{{ label }}</option>
-              </select>
-              <label for="demo-fail-count-input">Times</label>
-              <input
-                id="demo-fail-count-input"
-                v-model.number="fail.count"
-                class="demo-num native-input"
-                max="99"
-                min="0"
-                title="0: until cleared"
-                type="number"
-              >
+              <span class="demo-pair">
+                <label for="demo-fail-step-select">Step</label>
+                <select id="demo-fail-step-select" v-model="fail.step" class="native-select">
+                  <option v-for="step in sim.steps" :key="step" :value="step">{{ step }}</option>
+                </select>
+              </span>
+              <span class="demo-pair">
+                <label for="demo-fail-status-select">With</label>
+                <select id="demo-fail-status-select" v-model.number="fail.status" class="native-select">
+                  <option v-for="[code, label] in STATUSES" :key="code" :value="code">{{ label }}</option>
+                </select>
+              </span>
+              <span class="demo-pair">
+                <label for="demo-fail-count-input">Times</label>
+                <input
+                  id="demo-fail-count-input"
+                  v-model.number="fail.count"
+                  class="demo-num native-input"
+                  max="99"
+                  min="0"
+                  title="0: until cleared"
+                  type="number"
+                >
+              </span>
             </div>
             <div class="demo-inline">
-              <label for="demo-fail-match-input">Only if it mentions</label>
-              <input
-                id="demo-fail-match-input"
-                v-model="fail.match"
-                class="demo-text native-input"
-                placeholder="any document"
-                title="Part of an identification number, filename, object number, group title or term"
-                type="text"
-              >
+              <span class="demo-pair">
+                <label for="demo-fail-match-input">Only if it mentions</label>
+                <input
+                  id="demo-fail-match-input"
+                  v-model="fail.match"
+                  class="demo-text native-input"
+                  placeholder="any document"
+                  title="Part of an identification number, filename, object number, group title or term"
+                  type="text"
+                >
+              </span>
               <select
                 id="demo-fail-client-select"
                 v-model="fail.client"
@@ -178,6 +189,9 @@
               >
                 Add failure
               </v-btn>
+            </div>
+            <div id="demo-failures-set" class="font-weight-medium text-caption">
+              {{ sim.rules.length ? 'Failures set:' : 'No failures set.' }}
             </div>
             <ul v-if="sim.rules.length" id="demo-failure-list" class="demo-list text-caption">
               <li v-for="(rule, index) in sim.rules" :key="index">{{ ruleText(rule) }}</li>
@@ -649,6 +663,13 @@ onBeforeUnmount(() => clearInterval(timer))
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+/* A label stays with its control when the line wraps. */
+.demo-pair {
+  align-items: center;
+  display: inline-flex;
+  gap: 4px;
+  white-space: nowrap;
 }
 .demo-num {
   width: 64px;

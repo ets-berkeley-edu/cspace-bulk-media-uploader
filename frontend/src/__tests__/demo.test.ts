@@ -75,10 +75,12 @@ describe('Demo tools', () => {
     })
     const w = mount(DemoPane)
     await flushPromises()
+    expect(w.find('#demo-failures-set').text()).toBe('No failures set.') // choosing the values alone sets nothing
     await w.find('#demo-add-failure-btn').trigger('click')
     await flushPromises()
     expect(calls.find((c) => c.url === '/api/_demo/sim/fail')?.body).toEqual({params: {step: 'upload', status: 500, match: '', count: 1, client: 'worker'}})
     expect(w.find('#demo-message').text()).toBe('The next “upload” request fails with 500.')
+    expect(w.find('#demo-failures-set').text()).toBe('Failures set:')
     expect(w.find('#demo-failure-list').text()).toContain('upload → 500, 1 of 1 left')
   })
 
