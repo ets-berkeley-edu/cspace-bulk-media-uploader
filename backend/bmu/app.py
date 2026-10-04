@@ -5,6 +5,7 @@ import copy
 import hashlib
 import logging
 import secrets
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -23,7 +24,7 @@ from .crypto import Crypto, make_crypto
 from .cspace import CSpaceClient, CSpaceError
 from .failures import catalog
 from .filetypes import content_type, unsupported
-from .rows import (PROBLEM_TEXT, apply_edit, can_replace_file, check_rows, clean_filename, created_records,
+from .rows import (PROBLEM_TEXT, apply_edit, can_replace_file, check_rows, clean_filename, collision_checks, created_records,
                    describe_deletion, edit_problem, is_locked, media_created, new_row, worst)
 from .storage import RowChanged, Storage, draft_expiry, expiry_of, now
 from .thumbnails import MAX_BROWSER_BYTES, TIFF_EXTENSIONS, NotAnImage, make_thumbnail, tiff_thumbnail_step
@@ -74,6 +75,8 @@ class Services:
         # The time the job schedule is judged by (design: Job scheduling); tests replace it to move time.
         self.clock: Callable[[], float] = clock or now
         self.demo = demo.DemoState(settings)  # Demo tools (BMU_DEMO only); tests replace its HTTP clients
+        # The queued and running jobs with their rows, by tenant, kept a few seconds (see _queue_rows)
+        self.queue_rows: dict[str, tuple[float, list[tuple[dict, list[dict]]]]] = {}
 
 
 def create_app(services: Services | None = None) -> FastAPI:
@@ -674,6 +677,7 @@ def _routes(app: FastAPI) -> None:
         """Change a queued job's place in the queue (BMU schedulers only; design: Job scheduling). Running jobs
         stay first and can't be moved."""
         job = _job_or_404(s, sess, job_id)
+        s.queue_rows.pop(sess.tenant, None)  # the queue is about to change: read it again (see _queue_rows)
         if job["status"] != "Queued":
             raise HTTPException(409, "Only queued jobs can be moved.")
         queued = sorted((j for j in s.storage.list_jobs(sess.tenant) if j["status"] == "Queued"), key=sched.queue_key)
@@ -695,6 +699,7 @@ def _routes(app: FastAPI) -> None:
         """Edit a queued job: it leaves the queue for Drafts, locked to you, and its saved sign-in is deleted.
         It goes to the end of the queue when it is scheduled again."""
         job = _job_or_404(s, sess, job_id)
+        s.queue_rows.pop(sess.tenant, None)  # the queue is about to change: read it again (see _queue_rows)
         if not s.storage.update_job(job_id, {"status": "Draft", "queuePos": None, "note": "", "lastSavedBy": sess.user,
                                              "lastSavedAt": now(), **draft_expiry(job, now() + _draft_days(s, job) * 86400)},
                                     expect_status="Queued"):
@@ -785,6 +790,7 @@ def _routes(app: FastAPI) -> None:
         job (cancel it first) or a draft someone else is editing. Allowed even if its runs created records:
         they stay in CollectionSpace (the BMU never deletes them) and the audit entry lists them."""
         job = _job_or_404(s, sess, job_id)
+        s.queue_rows.pop(sess.tenant, None)  # the queue is about to change: read it again (see _queue_rows)
         if job["status"] == "Running":
             raise HTTPException(409, "This job is running. Cancel the run first.")
         if job["status"] == "Completed":
@@ -1069,6 +1075,7 @@ def _routes(app: FastAPI) -> None:
     @app.post("/api/jobs/{job_id}/schedule")
     def schedule(job_id: str, sess: Session = Depends(editor_session), s: Services = Depends(svc)):
         job = _job_or_404(s, sess, job_id)
+        s.queue_rows.pop(sess.tenant, None)  # the queue is about to change: read it again (see _queue_rows)
         if job["status"] not in RESCHEDULABLE:
             raise HTTPException(409, f"The job is {job['status']} and can't be submitted.")
         if job["status"] == "Draft":
@@ -1100,6 +1107,7 @@ def _routes(app: FastAPI) -> None:
                 list(RESCHEDULABLE), sess.key):
             raise HTTPException(409, "The job changed while submitting it; reload and try again.")
         s.storage.close_draft(job_id, sess.key)  # it leaves Drafts
+        s.queue_rows.pop(sess.tenant, None)  # the queue has a new job: read it again (see _queue_rows)
         s.storage.audit(sess.tenant, "Submitted", sess.user, job_id, f"Submitted “{job['name']}” with {len(work)} documents.")
         return _public(s.storage.get_job(job_id), sess, s)  # with its plan: when it runs (design: Job scheduling)
 
@@ -1146,6 +1154,7 @@ def _routes(app: FastAPI) -> None:
 
     def _queue_action(s: Services, sess: Session, job_id: str, fields: dict, audit_type: str, detail: str) -> dict:
         """Set a scheduler's setting on a queued job, only if it is still Queued (one conditional write)."""
+        s.queue_rows.pop(sess.tenant, None)  # the order may change: read the queue again (see _queue_rows)
         job = _job_or_404(s, sess, job_id)
         if job["status"] != "Queued" or not s.storage.update_job(job_id, fields, expect_status="Queued"):
             now_status = (s.storage.get_job(job_id) or {}).get("status", "gone")
@@ -1225,6 +1234,11 @@ def _recheck(s: Services, sess: Session, job_id: str, targets: set[int] | None, 
         raise _cspace_http(e)
     finally:
         client.close()
+    # Design (Jobs that collide in the queue): what the jobs that run before this one will have changed by then
+    collisions = _collisions(s, sess.tenant, job, rows, fresh=refresh)
+    for r in rows:
+        if r["n"] in collisions:
+            r["checks"] = (r.get("checks") or []) + collisions[r["n"]]
     changed = []
     for r in rows:
         if r["n"] in partial:  # checked without its lookups: keep what it had
@@ -1257,6 +1271,35 @@ def _recheck(s: Services, sess: Session, job_id: str, targets: set[int] | None, 
         if w in counts and r.get("include"):
             counts[w] += 1
     return {"rows": rows, "changed": changed, "counts": counts}
+
+
+QUEUE_ROWS_SECONDS = 5  # how long _queue_rows keeps a tenant's queued jobs' rows
+
+
+def _queue_rows(s: Services, tenant: str, fresh: bool = False) -> list[tuple[dict, list[dict]]]:
+    """The tenant's Queued and Running jobs, each with its rows. Kept for a few seconds per web process: the editor
+    re-checks a draft on every change, and the Job queue page checks every queued job at once. fresh (Submit)
+    reads them again, so a submission is always judged by the queue as it is."""
+    kept = s.queue_rows.get(tenant)
+    if kept and not fresh and time.monotonic() - kept[0] < QUEUE_ROWS_SECONDS:
+        return kept[1]
+    jobs = [j for j in s.storage.list_jobs(tenant) if j.get("status") in ("Queued", "Running")]
+    out = [(j, s.storage.get_rows(j["id"])) for j in jobs]
+    s.queue_rows[tenant] = (time.monotonic(), out)
+    return out
+
+
+def _collisions(s: Services, tenant: str, job: dict, rows: list[dict], fresh: bool = False) -> dict[int, list[dict]]:
+    """The checks a job's documents get from the jobs that run before it (rows.collision_checks). A draft is
+    judged against every queued and running job; a queued job against the ones the worker picks first."""
+    if job.get("status") not in ("Draft", "Queued"):
+        return {}
+    queue = _queue_rows(s, tenant, fresh)
+    if not queue:
+        return {}
+    ids = {j["id"] for j in sched.ahead_of([j for j, _ in queue], job, sched.load(s.storage, tenant), s.clock(),
+                                           s.settings.always_run_time)}
+    return collision_checks(s.tenant, rows, [(j, rs) for j, rs in queue if j["id"] in ids])
 
 
 def _note_protected(s: Services, job_id: str, rows: list[dict]) -> None:

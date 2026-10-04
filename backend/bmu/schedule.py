@@ -203,6 +203,37 @@ def _planned_at(job: dict, schedule: dict, now: float, always_run_time: bool) ->
     return next_start(schedule, now)
 
 
+def _order(queued: list[dict], schedule: dict, now: float, always_run_time: bool) -> dict[str, tuple]:
+    """The key the worker's order sorts the queued jobs by (queued: already in queue order): Run now jobs first
+    in queue order, then by planned start, jobs that are due now counting as starting now."""
+    order = {}
+    for i, j in enumerate(queued):
+        if j.get("runNow"):
+            order[j["id"]] = (0, 0.0, i)
+        else:
+            at = _planned_at(j, schedule, now, always_run_time)
+            order[j["id"]] = (1, max(at, now) if at is not None else float("inf"), i)
+    return order
+
+
+def ahead_of(jobs: list[dict], job: dict, schedule: dict, now: float, always_run_time: bool = False) -> list[dict]:
+    """The jobs that run before this one, as far as the queue says now: the Running job, and the queued jobs the
+    worker picks first (the order plans() counts "ahead" by). A held job runs after the jobs that aren't held. A
+    job that isn't in the queue (a draft) joins its end when submitted, so every queued job is ahead of it; a
+    Running job has none ahead."""
+    if job.get("status") == "Running":
+        return []
+    running = [j for j in jobs if j.get("status") == "Running" and j["id"] != job["id"]]
+    queued = [j for j in sorted((j for j in jobs if j.get("status") == "Queued"), key=queue_key)]
+    if job.get("status") != "Queued":
+        return running + [j for j in queued if j["id"] != job["id"]]
+    order = _order(queued, schedule, now, always_run_time)
+    key = {j["id"]: (bool(j.get("held")), order[j["id"]]) for j in queued}
+    if job["id"] not in key:
+        return running
+    return running + [j for j in queued if j["id"] != job["id"] and key[j["id"]] < key[job["id"]]]
+
+
 def plans(jobs: list[dict], schedule: dict, now: float, always_run_time: bool = False) -> dict[str, dict]:
     """The plan of every Queued or Running job, by job id: {kind, at, ahead, signInExpiresFirst}.
 
@@ -211,13 +242,7 @@ def plans(jobs: list[dict], schedule: dict, now: float, always_run_time: bool = 
     it, in the worker's order (pick_next): Run now jobs first in queue order, then by planned start, jobs that
     are due now counting as starting now, so due jobs go in queue order. A paused queue plans as if resumed."""
     queued = [j for j in sorted((j for j in jobs if j.get("status") == "Queued"), key=queue_key)]
-    order = {}
-    for i, j in enumerate(queued):
-        if j.get("runNow"):
-            order[j["id"]] = (0, 0.0, i)
-        else:
-            at = _planned_at(j, schedule, now, always_run_time)
-            order[j["id"]] = (1, max(at, now) if at is not None else float("inf"), i)
+    order = _order(queued, schedule, now, always_run_time)
     out: dict[str, dict] = {}
     for j in jobs:
         if j.get("status") == "Running":
