@@ -68,7 +68,7 @@ describe('signing in', () => {
     stubApi((url, method) => {
       if (url === '/api/login' && method === 'POST') { signedIn = me; return me }
     })
-    const w = await mountApp('/queue', {ThumbCell: true})
+    const w = await mountApp('/queue')
     expect(router.currentRoute.value.path).toBe('/login')
     expect(router.currentRoute.value.query.redirect).toBe('/queue')
     expect(w.find('#page-title').text()).toBe('Bulk Media Uploader')
@@ -142,7 +142,7 @@ describe('the environment label', () => {
 
   it('is in the app bar when signed in, without the warning for the simulator', async () => {
     stubApi()
-    const w = await mountApp('/drafts', {ThumbCell: true})
+    const w = await mountApp('/drafts')
     const chip = w.find('#app-bar #environment-label')
     expect(chip.text()).toBe('Local · simulated CollectionSpace')
     expect(chip.classes()).not.toContain('bg-warning')
@@ -165,7 +165,7 @@ describe('the environment label', () => {
 describe('the signed-in page', () => {
   it('shows the tenant and the user, and each tab is a page with its own address and heading', async () => {
     stubApi()
-    const w = await mountApp('/', {ThumbCell: true, JobEditor: EditorStub})
+    const w = await mountApp('/', {JobEditor: EditorStub})
     expect(w.find('#tenant-name').text()).toBe('PAHMA')
     expect(w.find('#btn-main-menu').attributes('aria-label')).toBe('Signed in as admin. Menu')
     expect(w.findAll('.v-tab').map(t => t.text())).toEqual(['Create / edit job', 'Drafts', 'Job queue', 'Finished jobs'])
@@ -190,7 +190,7 @@ describe('the signed-in page', () => {
 
   it('Sign out ends the session and returns to the sign-in page', async () => {
     stubApi()
-    const w = await mountApp('/drafts', {ThumbCell: true})
+    const w = await mountApp('/drafts')
     await w.find('#btn-main-menu').trigger('click')
     await settle()
     inBody('#menu-item-sign-out')!.click()
@@ -204,7 +204,7 @@ describe('the signed-in page', () => {
 
   it('a session that ended while working returns to the sign-in page with the reason', async () => {
     stubApi()
-    const w = await mountApp('/drafts', {ThumbCell: true})
+    const w = await mountApp('/drafts')
     signedIn = null
     window.dispatchEvent(new CustomEvent('bmu-signed-out', {detail: 'You were signed out after 30 minutes without activity.'}))
     await settle()
@@ -217,7 +217,7 @@ describe('the signed-in page', () => {
   it('without Media permissions, New job is off and Create / edit job explains why', async () => {
     signedIn = {...me, perms: {...perms, media: false}}
     stubApi()
-    const w = await mountApp('/', {ThumbCell: true})
+    const w = await mountApp('/')
     expect(w.find('#btn-new-job').attributes('disabled')).toBeDefined()
     expect(w.find('#new-job').attributes('title')).toContain('can\'t create and update Media records')
     expect(w.find('#view-only').text()).toContain('View only')
@@ -237,7 +237,7 @@ describe('the job being worked on, across the tabs', () => {
 
   it('previewing a draft doesn\'t close the draft open in Create / edit job, and Back returns to the list', async () => {
     stubApi(routes)
-    const w = await mountApp('/drafts', {ThumbCell: true, JobEditor: EditorStub})
+    const w = await mountApp('/drafts', {JobEditor: EditorStub})
     const rowOf = (name: string) => w.findAll('tbody').find(r => r.text().includes(name))!
     await rowOf('My draft').findAll('button').find(b => b.text() === 'Continue editing')!.trigger('click')
     await settle()
@@ -262,7 +262,7 @@ describe('the job being worked on, across the tabs', () => {
     stubApi()
     let created = 0
     const Editor = defineComponent({created() { created++ }, template: '<div class="editor-stub">editor</div>'})
-    const w = await mountApp('/job', {JobEditor: Editor, ThumbCell: true})
+    const w = await mountApp('/job', {JobEditor: Editor})
     await router.push('/queue')
     await settle()
     expect(w.find('.editor-stub').exists()).toBe(false)
@@ -277,7 +277,7 @@ describe('the job being worked on, across the tabs', () => {
     stubApi()
     const Editor = defineComponent({emits: ['scheduled'],
       data: () => ({job: job({status: 'Queued', plan})}), template: '<button class="fake-submit" @click="$emit(\'scheduled\', job)">Submit job</button>'})
-    const w = await mountApp('/job', {JobEditor: Editor, ThumbCell: true})
+    const w = await mountApp('/job', {JobEditor: Editor})
     await w.find('.fake-submit').trigger('click')
     await settle()
     const notice = w.find('#notice')
@@ -294,7 +294,7 @@ describe('the job being worked on, across the tabs', () => {
       stubApi(url => (url === '/api/schedule' ? {...schedule, nextRunAt: null, windowOpen: true, alwaysRunTime} : undefined))
       const Editor = defineComponent({emits: ['scheduled'],
         data: () => ({job: job({status: 'Queued', plan: {...plan, ...p}})}), template: '<button class="fake-submit" @click="$emit(\'scheduled\', job)">Submit job</button>'})
-      const w = await mountApp('/job', {JobEditor: Editor, ThumbCell: true})
+      const w = await mountApp('/job', {JobEditor: Editor})
       await w.find('.fake-submit').trigger('click')
       await settle()
       const text = w.find('#notice').text()
@@ -307,7 +307,7 @@ describe('the job being worked on, across the tabs', () => {
 
   it('the open draft is in the address, so a reload or a bookmark reopens it (with the real editor)', async () => {
     stubApi(routes)
-    const w = await mountApp('/job/d1', {ThumbCell: true, DocumentThumbnail: true})
+    const w = await mountApp('/job/d1', {DocumentThumbnail: true})
     expect(router.currentRoute.value.path).toBe('/job/d1')
     expect(useJobEditSessionStore().jobId).toBe('d1')
     expect((w.find('#job-name').element as HTMLInputElement).value).toBe('My draft')
@@ -318,7 +318,7 @@ describe('the job being worked on, across the tabs', () => {
 
   it('the tab leads back to the open draft, and an address without it doesn\'t close it', async () => {
     stubApi(routes)
-    const w = await mountApp('/job/d1', {ThumbCell: true, JobEditor: EditorStub})
+    const w = await mountApp('/job/d1', {JobEditor: EditorStub})
     expect(w.find('.editor-stub').text()).toBe('editing d1')
     await router.push('/drafts')
     await settle()
@@ -333,7 +333,7 @@ describe('the job being worked on, across the tabs', () => {
 
   it('an address that names another draft opens it and leaves the one that was open', async () => {
     stubApi(routes)
-    const w = await mountApp('/job/d1', {ThumbCell: true, JobEditor: EditorStub})
+    const w = await mountApp('/job/d1', {JobEditor: EditorStub})
     await router.push('/job/d2')
     await settle()
     expect(w.find('.editor-stub').text()).toBe('editing d2')
@@ -344,7 +344,7 @@ describe('the job being worked on, across the tabs', () => {
   it('a job created in the editor gets its address, without a new entry in the browser\'s history', async () => {
     stubApi()
     const Editor = defineComponent({emits: ['opened'], template: '<button class="fake-create" @click="$emit(\'opened\', \'n7\')">create</button>'})
-    const w = await mountApp('/job', {JobEditor: Editor, ThumbCell: true})
+    const w = await mountApp('/job', {JobEditor: Editor})
     const replace = vi.spyOn(router, 'replace')
     await w.find('.fake-create').trigger('click')
     await settle()
@@ -356,7 +356,7 @@ describe('the job being worked on, across the tabs', () => {
 
   it('an address whose job isn\'t there says so and starts a new job', async () => {
     stubApi(url => (url.endsWith('/api/jobs/gone') ? {status: 404, body: {detail: 'No such job'}} : undefined))
-    const w = await mountApp('/job/gone', {ThumbCell: true, DocumentThumbnail: true})
+    const w = await mountApp('/job/gone', {DocumentThumbnail: true})
     expect(router.currentRoute.value.path).toBe('/job')
     expect(useJobEditSessionStore().jobId).toBeNull()
     expect(w.find('#notice').text()).toContain('The job at that address isn\'t there')
@@ -367,7 +367,7 @@ describe('the job being worked on, across the tabs', () => {
   it('without Media permissions, an address with a draft still only explains', async () => {
     signedIn = {...me, perms: {...perms, media: false}}
     stubApi(routes)
-    const w = await mountApp('/job/d1', {ThumbCell: true})
+    const w = await mountApp('/job/d1')
     expect(router.currentRoute.value.path).toBe('/job')
     expect(w.find('#edit-blocked').exists()).toBe(true)
     expect(calls.some(c => c.url.endsWith('/open'))).toBe(false)
@@ -376,7 +376,7 @@ describe('the job being worked on, across the tabs', () => {
 
   it('New job leaves the open draft, so others can edit it', async () => {
     stubApi()
-    const w = await mountApp('/drafts', {JobEditor: EditorStub, ThumbCell: true})
+    const w = await mountApp('/drafts', {JobEditor: EditorStub})
     useJobEditSessionStore().jobId = 'd1'
     await w.find('#btn-new-job').trigger('click')
     await settle()
@@ -394,12 +394,12 @@ describe('light and dark mode (as Damien does it)', () => {
   it('starts from the system setting', async () => {
     stubApi()
     systemPrefersDark(true)
-    let w = await mountApp('/drafts', {ThumbCell: true})
+    let w = await mountApp('/drafts')
     expect(isDark()).toBe(true)
     expect(w.find('.v-application').classes()).toContain('v-theme--dark')
     w.unmount()
     systemPrefersDark(false)
-    w = await mountApp('/drafts', {ThumbCell: true})
+    w = await mountApp('/drafts')
     expect(isDark()).toBe(false)
     w.unmount()
   })
@@ -407,7 +407,7 @@ describe('light and dark mode (as Damien does it)', () => {
   it('the menu\'s item switches it and the choice is remembered in this browser, over the system setting', async () => {
     stubApi()
     systemPrefersDark(false)
-    let w = await mountApp('/drafts', {ThumbCell: true})
+    let w = await mountApp('/drafts')
     await w.find('#btn-main-menu').trigger('click')
     await settle()
     expect(inBody('#menu-item-dark-mode')!.textContent).toContain('Dark mode')
@@ -416,7 +416,7 @@ describe('light and dark mode (as Damien does it)', () => {
     expect(isDark()).toBe(true)
     expect(window.localStorage.getItem('prefersDarkMode')).toBe('true')
     w.unmount()
-    w = await mountApp('/drafts', {ThumbCell: true})
+    w = await mountApp('/drafts')
     expect(isDark()).toBe(true)
     w.unmount()
     window.localStorage.setItem('prefersDarkMode', 'false')

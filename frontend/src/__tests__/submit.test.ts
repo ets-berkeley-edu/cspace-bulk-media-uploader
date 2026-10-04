@@ -37,7 +37,7 @@ describe('Submit job (design: Job scheduling)', () => {
       if (url.endsWith('/api/failures')) return {failures: {}}
       return {}
     })
-    const w = mount(JobEditor, {props: {me, jobId: 'j1'}, global: {stubs: {DocumentThumbnail: true, ThumbCell: true}}})
+    const w = mount(JobEditor, {props: {me, jobId: 'j1'}, global: {stubs: {DocumentThumbnail: true}}})
     await flushPromises()
     const submit = w.findAll('button').find((b) => b.text() === 'Submit job')!
     expect(w.findAll('button').some((b) => b.text() === 'Schedule job')).toBe(false)
@@ -72,7 +72,7 @@ describe('the job\'s Group title (user decision: never derived from the job name
     vi.useFakeTimers({toFake: ['Date']})
     vi.setSystemTime(new Date(Date.UTC(2026, 8, 30, 20, 1, 2))) // 1:01:02 PM Pacific
     try {
-      const w = mount(JobEditor, {props: {me, jobId: 'j1'}, global: {stubs: {DocumentThumbnail: true, ThumbCell: true}}})
+      const w = mount(JobEditor, {props: {me, jobId: 'j1'}, global: {stubs: {DocumentThumbnail: true}}})
       await flushPromises()
       const title = w.find('input[aria-label="Group title"]')
       const btn = (t: string) => w.findAll('button').find((b) => b.text() === t)!

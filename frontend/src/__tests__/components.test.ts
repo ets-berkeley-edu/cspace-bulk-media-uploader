@@ -224,11 +224,11 @@ describe('RepeatingSelect (design: repeating media type and language)', () => {
   })
 })
 
-describe('SortTh', () => {
+describe('SortableColumnHeader', () => {
   it('shows its hover description on the column heading', async () => {
-    const {default: SortTh} = await import('../components/SortTh.vue')
+    const {default: SortableColumnHeader} = await import('@/components/util/SortableColumnHeader.vue')
     const {tableState} = await import('../lib/table')
-    const w = mount({components: {SortTh}, template: '<table><thead><tr><SortTh v-bind=\'p\'/></tr></thead></table>',
+    const w = mount({components: {SortableColumnHeader}, template: '<table><thead><tr><SortableColumnHeader v-bind=\'p\'/></tr></thead></table>',
       data: () => ({p: {state: tableState(), sortKey: 'include', label: 'Exclude', title: 'To exclude a document from a job, check the box.'}})})
     const th = w.find('th')
     expect(th.text()).toContain('Exclude')

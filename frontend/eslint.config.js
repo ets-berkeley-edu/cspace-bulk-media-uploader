@@ -16,16 +16,7 @@ import vueParser from 'vue-eslint-parser'
 // the conversion is finished when the list is empty.
 const notYetConverted = [
   'src/components/ChevronIcon.vue',
-  'src/components/DeleteJobConfirm.vue',
-  'src/components/DemoPane.vue',
-  'src/components/ErrorBox.vue',
-  'src/components/FinishedJobs.vue',
-  'src/components/JobDocsTable.vue',
-  'src/components/JobResults.vue',
-  'src/components/PagerBar.vue',
-  'src/components/SortTh.vue',
-  'src/components/ThumbCell.vue',
-  'src/components/TrashIcon.vue'
+  'src/components/DemoPane.vue'
 ]
 
 const vueLanguageOptions = {

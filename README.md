@@ -270,13 +270,19 @@ with `QueueSchedule.vue` (the schedule banner, Schedule settings, Pause and Resu
 a confirmation (Delete, Take over, Edit, Cancel run) opens in a full-width row under the job. Every control has an id
 built from the job's id (`job-<id>-edit-btn`, `job-<id>-status`), which the browser tests planned for later will use.
 
+Finished jobs is converted too (`views/Finished.vue`): `FinishedJobs.vue` (the list, and a job's results in the same
+page), `JobResults.vue` (run history and every document's steps) and `FinishedJobActions.vue` (View results, Fix and
+reschedule or Reschedule, Delete), in `components/job/`. The list is built like the other two, and a job's ids follow
+the same pattern (`job-<id>-view-results-btn`, `job-<id>-fix-btn`, `job-<id>-outcome`); in the results, each document
+is `result-<n>` and each run `run-<n>`.
+
 Light or dark follows Damien: the system's setting until the user picks one in the menu, which is then remembered in
 the browser (`prefersDarkMode`). Both are Vuetify themes in `src/plugins/vuetify.ts`.
 
-Screens not yet converted are listed in `eslint.config.js` (`notYetConverted`). They keep their old look from
-`src/assets/styles/legacy.scss`, which applies only inside an element with the class `legacy` and undoes Vuetify's
-style reset there. Take a screen off the list when it is converted. `legacy.scss` itself is pruned in the last part
-of the conversion: the lists and previews still share most of its rules.
+Only the demo tools (`components/DemoPane.vue`, shown in the simulator) are not yet converted; they are listed in
+`eslint.config.js` (`notYetConverted`) and keep their old look from `src/assets/styles/legacy.scss`, which applies only
+inside an element with the class `legacy` and undoes Vuetify's style reset there. The next part of the conversion
+converts them and removes `legacy.scss`.
 
 ## Checking against the real CollectionSpace
 
