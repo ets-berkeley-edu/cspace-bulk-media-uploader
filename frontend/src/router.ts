@@ -33,7 +33,8 @@ const routes: RouteRecordRaw[] = [
     beforeEnter: requiresAuthenticated,
     children: [
       {
-        path: '/job',
+        // The draft open in the editor is part of the address, so a reload or a bookmark reopens it.
+        path: '/job/:id?',
         component: EditJob,
         name: 'Create / edit job'
       },

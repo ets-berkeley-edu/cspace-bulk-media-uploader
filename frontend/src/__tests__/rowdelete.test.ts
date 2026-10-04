@@ -100,6 +100,25 @@ describe('the Delete column of a document row', () => {
   })
 })
 
+describe('while a deletion is on its way', () => {
+  it('the document says Deleting… and its trash button is off', () => {
+    const w = mountRow({deleting: true})
+    expect(w.find('#document-1-status').text()).toBe('Deleting…')
+    expect(w.find('#document-1-status .v-progress-circular').exists()).toBe(true)
+    expect(w.find('tr.document-row').attributes('aria-busy')).toBe('true')
+    expect(trash(w).attributes('disabled')).toBeDefined()
+    expect(mountRow({}).find('tr.document-row').attributes('aria-busy')).toBe('false')
+  })
+
+  it('the panel\'s button says Deleting…', () => {
+    const props = {rows: [row()], selected: new Set([1]), tenant, perms, readonly: false}
+    const busy = mount(BulkPanel, {props: {...props, busy: true, deleting: true}}).find('#bulk-delete-btn')
+    expect(busy.text()).toBe('Deleting…')
+    expect(busy.attributes('disabled')).toBeDefined()
+    expect(mount(BulkPanel, {props: {...props, busy: false}}).find('#bulk-delete-btn').text()).toBe('Delete selected')
+  })
+})
+
 describe('Delete selected in the bulk-change panel', () => {
   const panel = (rows: Row[], selected: number[], p: Record<string, unknown> = {}) =>
     mount(BulkPanel, {props: {rows, selected: new Set(selected), tenant, perms, readonly: false, busy: false, ...p}})
@@ -168,6 +187,31 @@ describe('the editor deletes documents', () => {
     await flushPromises()
     return w
   }
+
+  it('the editor marks the documents until the server answers, then removes them', async () => {
+    let answer: (r: Response) => void = () => undefined
+    const rows = [row(), row({n: 2, file: '3-1001_1.jpg'})]
+    vi.stubGlobal('fetch', vi.fn((url: string, init?: RequestInit) => {
+      const json = (body: unknown) => new Response(JSON.stringify(body), {status: 200, headers: {'content-type': 'application/json'}})
+      if (url.endsWith('/rows/delete')) return new Promise<Response>(resolve => { answer = resolve })
+      if (url.endsWith('/api/jobs/j1') && (init?.method ?? 'GET') === 'GET') return Promise.resolve(json({job: draft, rows, runs: [], created: {}}))
+      if (url.endsWith('/check')) return Promise.resolve(json({rows, counts: {block: 0, warn: 0}}))
+      return Promise.resolve(json(url.includes('/vocabularies/') ? {terms: []} : url.endsWith('/api/failures') ? {failures: {}} : {}))
+    }))
+    const w = await editor()
+    await w.find('input[aria-label="Select 3-1001_1.jpg"]').setValue(true)
+    await button(w, 'Delete selected')!.trigger('click')
+    await button(w, 'Delete 1 document')!.trigger('click')
+    await flushPromises()
+    expect(w.find('#document-2-status').text()).toBe('Deleting…')
+    expect(w.find('#document-1-status').text()).not.toBe('Deleting…')
+    expect(w.find('#bulk-delete-btn').text()).toBe('Deleting…')
+    answer(new Response(JSON.stringify({deleted: [2], skipped: [], others: []}), {status: 200, headers: {'content-type': 'application/json'}}))
+    await flushPromises()
+    expect(w.find('#document-2').exists()).toBe(false)
+    expect(w.find('#bulk-delete-btn').text()).toBe('Delete selected')
+    w.unmount()
+  })
 
   it('has a Delete column, labelled for screen readers, only while the job can be edited', async () => {
     stub(draft, [row(), row({n: 2, file: '3-1001_1.jpg'})], () => ({}))

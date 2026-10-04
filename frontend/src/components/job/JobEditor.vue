@@ -265,6 +265,7 @@
       <BulkPanel
         ref="bulkPanel"
         :busy="isBusy"
+        :deleting="isBusy && deleting.size > 0"
         :group-on="!!job?.groupOn"
         :languages="languages"
         :perms="me.perms"
@@ -408,6 +409,7 @@
             v-for="row in view.shown"
             :key="row.n"
             :checking="checking.has(row.n)"
+            :deleting="deleting.has(row.n)"
             :expanded="expanded.has(row.n)"
             :group-on="!!job?.groupOn"
             :job-id="job?.id"
@@ -509,6 +511,7 @@ import {OUTCOME, failureOf, loadFailures} from '@/lib/results'
 import {groupTimestampTitle} from '@/lib/schedule'
 import {alertType, jobCounts, worstLevel} from '@/lib/status'
 import {editorColumns, tableState, tableView} from '@/lib/table'
+import {alertScreenReader} from '@/lib/utils'
 import {ApiError, api} from '@/api'
 
 /**
@@ -537,7 +540,7 @@ const props = defineProps({
     type: Number as PropType<number | null>
   }
 })
-const emit = defineEmits<{scheduled: [job: Job], opened: [id: string], close: []}>()
+const emit = defineEmits<{scheduled: [job: Job], opened: [id: string], close: [], missing: []}>()
 
 const job = ref<Job | null>(null)
 const rows = ref<Row[]>([])
@@ -547,6 +550,7 @@ const previews = reactive(new Map<number, string>())
 const message = ref<{ cls: string; text: string } | null>(null)
 const isBusy = ref(false)
 const checking = reactive(new Set<number>()) // rows waiting for a CollectionSpace check
+const deleting = reactive(new Set<number>()) // rows whose deletion was sent; they stay, marked, until the answer
 const selected = reactive(new Set<number>())
 // The languages vocabulary, for the repeating Language pickers (loaded once, from CollectionSpace).
 const languages = ref<Option[]>([])
@@ -750,7 +754,12 @@ function apply(change: RowChange) {
   replace(change.row)
   change.others.forEach((o) => replace(o))
 }
-watch(() => props.jobId, (id) => (id && id === job.value?.id ? undefined : load(id).catch((e) => (message.value = {cls: 'msg-block', text: e.message}))), {immediate: true})
+// A job that isn't there (deleted, expired, or a mistyped address) is reported, so the page can start a new job.
+function loadFailed(e: unknown) {
+  if (e instanceof ApiError && e.status === 404) emit('missing')
+  else message.value = {cls: 'msg-block', text: (e as Error).message}
+}
+watch(() => props.jobId, (id) => (id && id === job.value?.id ? undefined : load(id).catch(loadFailed)), {immediate: true})
 onBeforeUnmount(() => previews.forEach((u) => URL.revokeObjectURL(u)))
 
 // One job per editor, even if naming it and dropping files race each other.
@@ -942,10 +951,17 @@ async function edit(row: Row, changes: Partial<Row>) {
 }
 
 async function remove(row: Row) {
-  if (!job.value) return
-  const r = await api.deleteRow(job.value.id, row.n).catch(failed)
-  if (!r) return
-  await removed([row.n], r)
+  if (!job.value || deleting.has(row.n)) return
+  deleting.add(row.n)
+  alertScreenReader(`Deleting ${row.file}`)
+  try {
+    const r = await api.deleteRow(job.value.id, row.n).catch(failed)
+    if (!r) return
+    await removed([row.n], r)
+    alertScreenReader(`Deleted ${row.file}`)
+  } finally {
+    deleting.delete(row.n)
+  }
 }
 
 /** Delete selected (the bulk-change panel): the server deletes those it may and skips the others. */
@@ -953,6 +969,8 @@ async function removeMany(targets: number[]) {
   if (!job.value || !targets.length) return
   isBusy.value = true
   message.value = null
+  targets.forEach((n) => deleting.add(n))
+  alertScreenReader(`Deleting ${targets.length} document${targets.length === 1 ? '' : 's'}`)
   try {
     const r = await api.deleteRows(job.value.id, targets)
     const k = r.deleted.length
@@ -968,6 +986,7 @@ async function removeMany(targets: number[]) {
   } catch (e) {
     await failed(e)
   } finally {
+    targets.forEach((n) => deleting.delete(n))
     isBusy.value = false
   }
 }
