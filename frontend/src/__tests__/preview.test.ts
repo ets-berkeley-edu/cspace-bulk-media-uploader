@@ -44,7 +44,7 @@ describe('expanded job documents (design: Job lists; UI mockup jobDocsTable)', (
       row({n: 3, file: 'bad.jpg', protected: {reason: 'culturally sensitive', hides: true},
         checks: [{level: 'warn', text: 'Minor'}, {level: 'block', text: 'No object 15-1234'}]}),
     ]
-    const w = mount(JobDocsTable, {props: {job: job(), rows, tenant, kind: 'drafts'}, global: {stubs: {ThumbCell: true}}})
+    const w = mount(JobDocsTable, {props: {job: job(), rows, tenant, kind: 'drafts'}, global: {stubs: {DocumentThumbnail: true, ThumbCell: true}}})
     expect(w.findAll('th').map((t) => t.text().replace(/[↕▲▼]/g, '').trim()))
       .toEqual(['Preview', 'Document', 'Handling', 'Identification number', 'Status', 'Most important issue'])
     const trs = w.findAll('tbody tr')
@@ -60,7 +60,7 @@ describe('expanded job documents (design: Job lists; UI mockup jobDocsTable)', (
 
   it('shows the 10 most important and says so when there are more', () => {
     const rows = Array.from({length: 12}, (_, i) => row({n: i + 1, file: `f${i + 1}.jpg`, checks: i === 11 ? [{level: 'block', text: 'x'}] : []}))
-    const w = mount(JobDocsTable, {props: {job: job(), rows, tenant, kind: 'queue'}, global: {stubs: {ThumbCell: true}}})
+    const w = mount(JobDocsTable, {props: {job: job(), rows, tenant, kind: 'queue'}, global: {stubs: {DocumentThumbnail: true, ThumbCell: true}}})
     expect(w.findAll('tbody tr')).toHaveLength(10)
     expect(cells(w.findAll('tbody tr')[0])[1]).toBe('f12.jpg')
     expect(w.text()).toContain('Showing the 10 most important of 12 documents.')
@@ -68,7 +68,7 @@ describe('expanded job documents (design: Job lists; UI mockup jobDocsTable)', (
 
   it('a running job lists each document\'s run state', () => {
     const rows = [row({n: 1, file: 'a.jpg', result: {state: 'Done'}}), row({n: 2, file: 'b.jpg', result: {state: 'In progress'}})]
-    const w = mount(JobDocsTable, {props: {job: job({status: 'Running'}), rows, tenant, kind: 'queue'}, global: {stubs: {ThumbCell: true}}})
+    const w = mount(JobDocsTable, {props: {job: job({status: 'Running'}), rows, tenant, kind: 'queue'}, global: {stubs: {DocumentThumbnail: true, ThumbCell: true}}})
     expect(cells(w.findAll('tbody tr')[0]).slice(1, 2).concat(cells(w.findAll('tbody tr')[0])[4])).toEqual(['b.jpg', 'In progress'])
   })
 
@@ -81,7 +81,7 @@ describe('expanded job documents (design: Job lists; UI mockup jobDocsTable)', (
         steps: {media: {s: 'done', csid: 'm'}, upload: {s: 'failed', code: 'upload_too_large'}}}}),
       row({n: 3, file: 'off.jpg', include: false, disabledBy: 'jdoe'}),
     ]
-    const w = mount(JobDocsTable, {props: {job: job({status: 'NeedsAttention'}), rows, tenant, kind: 'history'}, global: {stubs: {ThumbCell: true}}})
+    const w = mount(JobDocsTable, {props: {job: job({status: 'NeedsAttention'}), rows, tenant, kind: 'history'}, global: {stubs: {DocumentThumbnail: true, ThumbCell: true}}})
     expect(w.findAll('th').map((t) => t.text().replace(/[↕▲▼]/g, '').trim()).slice(4)).toEqual(['Result', 'What happened'])
     const trs = w.findAll('tbody tr')
     expect(cells(trs[0]).slice(1)).toEqual(['big.jpg', 'Link to existing object', '15-1234', 'Partial',
@@ -157,7 +157,7 @@ describe('JobPreview (design: Drafts; UI mockup renderPreview)', () => {
   it('shows a read-only draft inside its tab with its checks and only the actions that apply', async () => {
     const rows = [row({n: 1, file: 'bad.jpg', checks: [{level: 'block', text: 'No object 15-1234'}]}), row({n: 2, file: 'ok.jpg'})]
     const calls = stubFetch((url) => (url.endsWith('/check') ? {rows, counts: {block: 1, warn: 0}} : {job: job({rowCount: 2}), rows, runs: [], created: {}}))
-    const w = mount(JobPreview, {props: {jobId: 'j1', from: 'drafts', tenant}, global: {stubs: {ThumbCell: true}}})
+    const w = mount(JobPreview, {props: {jobId: 'j1', from: 'drafts', tenant}, global: {stubs: {DocumentThumbnail: true, ThumbCell: true}}})
     await flushPromises()
     expect(w.text()).toContain('← Back to Drafts')
     expect(w.text()).toContain('Read-only preview.')
@@ -178,7 +178,7 @@ describe('JobPreview (design: Drafts; UI mockup renderPreview)', () => {
   it('a running job\'s preview offers Cancel run, and shows each document\'s run state', async () => {
     const rows = [row({n: 1, file: 'a.jpg', result: {state: 'In progress'}})]
     stubFetch(() => ({job: job({status: 'Running', progress: {total: 1, done: 0, failed: 0}}), rows, runs: [], created: {}}))
-    const w = mount(JobPreview, {props: {jobId: 'j1', from: 'queue', tenant, user: 'admin', scheduler: true}, global: {stubs: {ThumbCell: true}}})
+    const w = mount(JobPreview, {props: {jobId: 'j1', from: 'queue', tenant, user: 'admin', scheduler: true}, global: {stubs: {DocumentThumbnail: true, ThumbCell: true}}})
     await flushPromises()
     expect(w.text()).toContain('← Back to Job queue')
     expect(w.find('.schedule-bar').findAll('button').map((b) => b.text())).toEqual(['Cancel run', 'Delete'])

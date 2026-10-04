@@ -26,7 +26,7 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
-    setupFiles: ['./src/__tests__/setup.ts'],
+    setupFiles: ['./src/__tests__/browser.ts', './src/__tests__/setup.ts'],
     server: {deps: {inline: ['vuetify']}}
   }
 })

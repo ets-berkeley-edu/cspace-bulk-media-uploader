@@ -1,6 +1,5 @@
 import {afterEach, describe, expect, it, vi} from 'vitest'
 import {flushPromises, mount} from '@vue/test-utils'
-import DocumentRow from '../components/DocumentRow.vue'
 import ErrorBox from '../components/ErrorBox.vue'
 import FinishedJobs from '../components/FinishedJobs.vue'
 import JobResults from '../components/JobResults.vue'
@@ -9,6 +8,7 @@ import {
   stepList, stepNote,
 } from '../lib/results'
 import type {Failure, Job, Perms, Row, Run, TenantInfo} from '../types'
+import DocumentRow from '@/components/job/DocumentRow.vue'
 
 afterEach(() => { vi.restoreAllMocks() })
 
@@ -182,7 +182,7 @@ describe('JobResults', () => {
 })
 
 describe('DocumentRow after a run', () => {
-  const mountRow = (r: Row) => mount({components: {DocumentRow}, template: '<table><tbody><DocumentRow v-bind=\'p\'/></tbody></table>',
+  const mountRow = (r: Row) => mount({components: {DocumentRow}, template: '<table><DocumentRow v-bind=\'p\'/></table>',
     data: () => ({p: {row: r, tenant, perms, expanded: true, readonly: false}})})
 
   it('a Partial document offers only what the rerun needs: a replacement file', () => {
@@ -200,7 +200,7 @@ describe('DocumentRow after a run', () => {
     expect((w.find('input[aria-label="Object number"]').element as HTMLInputElement).disabled).toBe(false)
     const stop = w.findAll('label').find((l) => l.text().includes('Stop linking'))!
     await stop.find('input').setValue(true)
-    expect(w.findComponent(DocumentRow).emitted('edit')?.[0]).toEqual([{skipLink: true}])
+    expect(w.findComponent(DocumentRow).emitted('edit')?.[0]).toEqual([expect.anything(), {skipLink: true}])
   })
 
   it('a Failed document whose object step ran keeps its object number and handling', () => {

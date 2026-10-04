@@ -71,3 +71,18 @@ export function cycleSort(st: TableState, key: string): void {
 export function editorColumns(groupOn: boolean, deletable: boolean): number {
   return 9 + (groupOn ? 1 : 0) + (deletable ? 1 : 0)
 }
+
+/** The pager's controls (components/util/Pagination.vue). Each returns to the first page where the list changes. */
+export function goToPage(st: TableState, page: number, pages: number): void {
+  st.page = Math.min(Math.max(1, page), pages)
+}
+
+export function setFilter(st: TableState, filter: string): void {
+  st.filter = filter
+  st.page = 1
+}
+
+export function setPageSize(st: TableState, size: number): void {
+  st.size = size
+  st.page = 1
+}

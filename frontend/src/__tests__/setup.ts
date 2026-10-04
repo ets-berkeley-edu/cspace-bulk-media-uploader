@@ -5,7 +5,9 @@
  */
 import axios, {AxiosError} from 'axios'
 import type {AxiosResponse, InternalAxiosRequestConfig} from 'axios'
+import {config} from '@vue/test-utils'
 import {initializeAxios} from '@/lib/axios-utils'
+import vuetify from '@/plugins/vuetify'
 
 axios.defaults.adapter = async (config: InternalAxiosRequestConfig): Promise<AxiosResponse> => {
   const res = await fetch(config.url as string, {
@@ -29,24 +31,7 @@ axios.defaults.adapter = async (config: InternalAxiosRequestConfig): Promise<Axi
 
 initializeAxios(axios)
 
-// What Vuetify's layout components and the colour scheme choice need from a browser, which jsdom doesn't have.
-class ResizeObserverStub {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-}
-globalThis.ResizeObserver = globalThis.ResizeObserver || ResizeObserverStub
-window.matchMedia = window.matchMedia || ((query: string) => ({
-  matches: false,
-  media: query,
-  onchange: null,
-  addEventListener: () => {},
-  removeEventListener: () => {},
-  addListener: () => {},
-  removeListener: () => {},
-  dispatchEvent: () => false
-}) as MediaQueryList)
-// Vuetify places a menu using the visual viewport.
-globalThis.visualViewport = globalThis.visualViewport || Object.assign(new EventTarget(), {
-  height: 768, offsetLeft: 0, offsetTop: 0, pageLeft: 0, pageTop: 0, scale: 1, width: 1024, onresize: null, onscroll: null, onscrollend: null
-}) as VisualViewport
+// Every component under test may use Vuetify's components.
+config.global.plugins = [vuetify]
+// v-lazy draws its content when it scrolls into view. A test has no view, and reads the page at once: draw it at once.
+config.global.stubs = {VLazy: {template: '<div><slot /></div>'}}

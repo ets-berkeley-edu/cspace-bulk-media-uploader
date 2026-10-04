@@ -1,8 +1,8 @@
 import {describe, expect, it} from 'vitest'
 import {mount} from '@vue/test-utils'
-import DocumentRow from '../components/DocumentRow.vue'
 import {portalOf} from '../lib/portal'
 import type {Perms, Row, TenantInfo} from '../types'
+import DocumentRow from '@/components/job/DocumentRow.vue'
 
 const tenant = {
   key: 'pahma', name: 'PAHMA', filenameHint: '', filenamePattern: '^(?P<obj>.+)$', mediaTypes: [], languageDefault: '', authorityFields: {},
@@ -27,11 +27,11 @@ describe('Public portal column (design: How the UI shows them)', () => {
 })
 
 describe('protected files in the document table', () => {
-  const mountRow = (r: Row, preview?: string) => mount({components: {DocumentRow}, template: '<table><tbody><DocumentRow v-bind=\'p\'/></tbody></table>',
+  const mountRow = (r: Row, preview?: string) => mount({components: {DocumentRow}, template: '<table><DocumentRow v-bind=\'p\'/></table>',
     data: () => ({p: {row: r, tenant, perms, expanded: false, readonly: false, preview}})})
   it('shows a Protected badge and, without the local preview, a locked placeholder', () => {
     const w = mountRow(row({restricted: true, protected: {reason: 'NAGPRA status on the object', hides: false}}))
-    expect(w.text()).toContain('🔒 Protected')
+    expect(w.text()).toContain('Protected')
     expect(w.find('.thumb.locked').exists()).toBe(true)
     expect(w.text()).toContain('Hidden: image restricted')
     const own = mountRow(row({protected: {reason: 'x', hides: false}}), 'blob:preview')

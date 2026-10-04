@@ -1,8 +1,8 @@
 import {describe, expect, it} from 'vitest'
 import {mount} from '@vue/test-utils'
-import DocumentRow from '../components/DocumentRow.vue'
 import {filenameProblems, idLabel, objectLabel} from '../lib/filenames'
 import type {Perms, Row, TenantInfo} from '../types'
+import DocumentRow from '@/components/job/DocumentRow.vue'
 
 const tenant: TenantInfo = {
   key: 'pahma', name: 'PAHMA', filenameHint: 'Object number, optionally followed by _ and a suffix',
@@ -39,8 +39,8 @@ describe('filename rules (design: Editable numbers and names)', () => {
 
 describe('DocumentRow filename field', () => {
   function mountRow(r: Row) {
-    return mount({components: {DocumentRow}, template: '<table><tbody><DocumentRow v-bind=\'p\'/></tbody></table>',
-      data: () => ({p: {row: r, tenant, perms, expanded: true, readonly: false, otherNames: ['1-2345_1.jpg']}})})
+    return mount({components: {DocumentRow}, template: '<table><DocumentRow v-bind=\'p\'/></table>',
+      data: () => ({p: {row: r, tenant, perms, expanded: true, readonly: false, otherNames: () => ['1-2345_1.jpg']}})})
   }
   it('shows problems as you type and renames only once the name passes', async () => {
     const w = mountRow(row({file: 'IMG 4411.jpg', fileOriginal: 'IMG 4411.jpg', parseOk: false, obj: '', objParsed: '', idnum: ''}))
@@ -52,13 +52,13 @@ describe('DocumentRow filename field', () => {
     expect(w.findComponent(DocumentRow).emitted('edit')).toBeUndefined()
     await input.setValue('1-2345_3.jpg')
     await input.trigger('blur')
-    expect(w.findComponent(DocumentRow).emitted('edit')?.[0]).toEqual([{file: '1-2345_3.jpg'}])
+    expect(w.findComponent(DocumentRow).emitted('edit')?.[0]).toEqual([expect.anything(), {file: '1-2345_3.jpg'}])
   })
   it('marks a renamed document and offers the original name back', async () => {
     const w = mountRow(row({file: '1-2345_3.jpg', fileOriginal: 'IMG 4411.jpg'}))
     expect(w.text()).toContain('Renamed')
     expect(w.text()).toContain('(renamed — original IMG 4411.jpg)')
     await w.findAll('button').find((b) => b.text() === 'Use original filename')!.trigger('click')
-    expect(w.findComponent(DocumentRow).emitted('edit')?.[0]).toEqual([{file: 'IMG 4411.jpg'}])
+    expect(w.findComponent(DocumentRow).emitted('edit')?.[0]).toEqual([expect.anything(), {file: 'IMG 4411.jpg'}])
   })
 })

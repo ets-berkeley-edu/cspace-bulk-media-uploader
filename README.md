@@ -249,12 +249,25 @@ page with its own address (`/job`, `/drafts`, `/queue`, `/finished`; `src/router
 What the tabs share about the job being worked on is in `src/stores/job-edit-session.ts`. Create / edit job stays
 alive behind the other tabs, so its uploads go on.
 
+Create / edit job is converted too (`views/EditJob.vue`, `components/job/`): `JobEditor.vue`, one `DocumentRow.vue`
+per document, `BulkPanel.vue`, and shared pieces in `components/util/` (`AuthorityInput`, `DateInput`,
+`RepeatingSelect`, `Pagination`, `SortableColumnHeader`, `DocumentThumbnail`, `FailureAlert`). Three things there are
+deliberate, because a page can hold 100 documents:
+
+- Each row's checkboxes and its handling list are native elements, as in BOA's and Damien's tables; a Vuetify
+  component for each would be drawn hundreds of times a page.
+- A document's expanded fields are inside `v-lazy`, so they are drawn when scrolled into view. "Expand all" on 100
+  rows would otherwise take seconds.
+- `JobEditor` gives every row the same handler functions (`@edit="edit"`, and the row passes itself back), and the
+  list of other file names as a function. A handler written inline per row makes every row redraw on any change.
+
 Light or dark follows Damien: the system's setting until the user picks one in the menu, which is then remembered in
 the browser (`prefersDarkMode`). Both are Vuetify themes in `src/plugins/vuetify.ts`.
 
 Screens not yet converted are listed in `eslint.config.js` (`notYetConverted`). They keep their old look from
 `src/assets/styles/legacy.scss`, which applies only inside an element with the class `legacy` and undoes Vuetify's
-style reset there. Take a screen off the list, and its rules out of `legacy.scss`, when it is converted.
+style reset there. Take a screen off the list when it is converted. `legacy.scss` itself is pruned in the last part
+of the conversion: the lists and previews still share most of its rules.
 
 ## Checking against the real CollectionSpace
 
