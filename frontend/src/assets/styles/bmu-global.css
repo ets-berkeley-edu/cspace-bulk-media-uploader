@@ -35,6 +35,43 @@ h1[tabindex="-1"]:focus {
   width: auto !important;
   z-index: 2000;
 }
+/* Keyboard focus: a solid outline on Vuetify's buttons, tabs and list items, on expansion panels and on links, as in
+   Damien. Vuetify's own mark is a tint, which is faint on filled buttons and on column headings (it draws an outline only in
+   the system's high-contrast mode). The class is doubled
+   so that these rules win over Vuetify's, whichever stylesheet loads first. */
+.v-btn.v-btn:focus-visible::after,
+.v-list-item.v-list-item:focus-visible::after {
+  border-width: 0;
+  opacity: 1;
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+/* A filled button's text colour would vanish against the page: outline it in the page's text colour. */
+.v-btn.v-btn[class*='bg-']:focus-visible::after {
+  outline-color: rgb(var(--v-theme-on-surface));
+}
+/* Where there is no room around the control, the outline goes inside it. */
+.v-btn.v-btn--icon:focus-visible::after,
+.v-list-item.v-list-item:focus-visible::after {
+  outline-offset: -2px;
+}
+/* A tab is outlined on the tab itself, inside its edges. */
+.v-btn.v-tab:focus-visible::after {
+  outline: none;
+}
+.v-btn.v-tab:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: -2px;
+}
+.v-expansion-panel-title:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: -2px;
+}
+a:focus-visible {
+  border-radius: 1px;
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
 /* A native checkbox in a table row or a form line, as in BOA: cheap enough for a hundred rows. */
 .checkbox {
   accent-color: rgb(var(--v-theme-primary));

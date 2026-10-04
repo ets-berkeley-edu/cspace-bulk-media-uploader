@@ -121,7 +121,19 @@
           <th class="actions-col" scope="col"><span class="sr-only">Actions</span></th>
         </tr>
       </thead>
-      <tbody v-if="!jobs.length">
+      <tbody v-if="!isLoaded">
+        <tr v-if="!error">
+          <td
+            id="queue-loading"
+            aria-busy="true"
+            class="py-5 text-center text-medium-emphasis"
+            colspan="9"
+          >
+            Loading the job queue…
+          </td>
+        </tr>
+      </tbody>
+      <tbody v-else-if="!jobs.length">
         <tr>
           <td id="queue-empty" class="py-5 text-center text-medium-emphasis" colspan="9">
             No jobs in the queue. Create one in Create / edit job and submit it.
@@ -249,20 +261,20 @@
               <v-btn
                 :id="`job-${job.id}-move-up-btn`"
                 :aria-label="`Move ${job.name} up`"
-                density="compact"
+                density="comfortable"
                 :disabled="isSortedView || queued.indexOf(job) === 0"
                 :icon="mdiArrowUp"
-                size="x-small"
+                size="small"
                 variant="text"
                 @click="() => move(job, queued.indexOf(job) - 1)"
               />
               <v-btn
                 :id="`job-${job.id}-move-down-btn`"
                 :aria-label="`Move ${job.name} down`"
-                density="compact"
+                density="comfortable"
                 :disabled="isSortedView || queued.indexOf(job) === queued.length - 1"
                 :icon="mdiArrowDown"
-                size="x-small"
+                size="small"
                 variant="text"
                 @click="() => move(job, queued.indexOf(job) + 1)"
               />
@@ -331,14 +343,14 @@
                   <v-btn
                     :id="`job-${job.id}-run-at-save-btn`"
                     color="primary"
-                    size="x-small"
+                    size="small"
                     @click="() => saveRunAt(job)"
                   >
                     Save
                   </v-btn>
                   <v-btn
                     :id="`job-${job.id}-run-at-clear-btn`"
-                    size="x-small"
+                    size="small"
                     title="Return the job to the tenant’s schedule"
                     variant="outlined"
                     @click="() => clearRunAt(job)"
@@ -347,7 +359,7 @@
                   </v-btn>
                   <v-btn
                     :id="`job-${job.id}-run-at-cancel-btn`"
-                    size="x-small"
+                    size="small"
                     variant="outlined"
                     @click="runAtEdit = null"
                   >
@@ -501,6 +513,8 @@ const props = defineProps({
 const emit = defineEmits<{open: [id: string, mode: 'edit' | 'preview', takeOverSince?: number]}>()
 
 const jobs = ref<Job[]>([])
+// The first answer from the server has arrived: until then the list is loading, not empty.
+const isLoaded = ref(false)
 const schedule = ref<Schedule | null>(null)
 const docs = reactive(new Map<string, Row[]>())
 const expanded = reactive(new Set<string>())
@@ -583,6 +597,7 @@ const refresh = async (runChecks = false) => {
     jobs.value = r.jobs.filter(j => j.status === 'Running' || j.status === 'Queued')
     schedule.value = s
     error.value = ''
+    isLoaded.value = true
   } catch (e) {
     error.value = (e as Error).message
   }

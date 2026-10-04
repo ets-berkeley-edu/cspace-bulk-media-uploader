@@ -125,7 +125,19 @@
             <th class="actions-col" scope="col"><span class="sr-only">Actions</span></th>
           </tr>
         </thead>
-        <tbody v-if="!sorted.length">
+        <tbody v-if="!isLoaded">
+          <tr v-if="!error">
+            <td
+              id="finished-loading"
+              aria-busy="true"
+              class="py-5 text-center text-medium-emphasis"
+              colspan="6"
+            >
+              Loading finished jobs…
+            </td>
+          </tr>
+        </tbody>
+        <tbody v-else-if="!sorted.length">
           <tr>
             <td id="finished-empty" class="py-5 text-center text-medium-emphasis" colspan="6">
               No finished jobs yet.
@@ -251,6 +263,8 @@ const FINISHED = ['Completed', 'NeedsAttention', 'Failed']
 const OUT_RANK: Record<string, number> = {Failed: 0, NeedsAttention: 1, Completed: 2}
 
 const jobs = ref<Job[]>([])
+// The first answer from the server has arrived: until then the list is loading, not empty.
+const isLoaded = ref(false)
 const error = ref('')
 const flash = ref('')
 const details = reactive(new Map<string, {rows: Row[], runs: Run[], created: Created}>())
@@ -315,6 +329,7 @@ const refresh = async (runChecks = false) => {
   try {
     jobs.value = (await api.jobs(!runChecks)).jobs.filter(j => FINISHED.includes(j.status))
     error.value = ''
+    isLoaded.value = true
     for (const id of [...expanded, ...(resultsId.value ? [resultsId.value] : [])]) {
       if (jobs.value.some(j => j.id === id)) {
         await load(id, !runChecks)

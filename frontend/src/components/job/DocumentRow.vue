@@ -144,7 +144,6 @@
             <v-btn
               :id="`document-${row.n}-retry-btn`"
               class="mr-1"
-              density="compact"
               size="small"
               variant="outlined"
               @click="() => emit('retry', row)"
@@ -153,7 +152,6 @@
             </v-btn>
             <v-btn
               :id="`document-${row.n}-remove-btn`"
-              density="compact"
               size="small"
               variant="outlined"
               @click="isConfirmingRemove = true"
@@ -167,7 +165,6 @@
               :id="`document-${row.n}-remove-confirm-btn`"
               class="mr-1"
               color="error"
-              density="compact"
               size="small"
               variant="outlined"
               @click="confirmRemove"
@@ -176,7 +173,6 @@
             </v-btn>
             <v-btn
               :id="`document-${row.n}-remove-cancel-btn`"
-              density="compact"
               size="small"
               variant="outlined"
               @click="isConfirmingRemove = false"

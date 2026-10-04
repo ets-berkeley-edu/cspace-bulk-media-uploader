@@ -103,6 +103,9 @@ Built like the team's other apps (BOA, Damien, Diablo); `README.md`, Frontend, h
 - Use axios only for the BMU API (it sends the `X-BMU` header by default); files go to S3 with their own request.
 - In tables that can hold 100 rows, checkboxes and short lists are native elements (`.checkbox`, `.native-select`
   in `assets/styles/bmu-global.css`), and handlers are shared functions, not written inline per row.
+- Nothing clickable is smaller than 24 pixels: no `size="x-small"` or `density="compact"` on a button (column
+  headings set their own height). Keyboard focus is a solid outline, set in `bmu-global.css`.
+- A list that loads from the server shows "Loading…" until the first answer, never its empty message.
 - `npm audit` stays clean; don't add a package that breaks it.
 
 ### Tests
