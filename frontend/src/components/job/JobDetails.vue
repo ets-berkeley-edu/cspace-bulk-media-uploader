@@ -20,7 +20,7 @@
             {{ checksText(job.checksAtSchedule) }}
           </dd>
         </div>
-        <div v-if="(job.run ?? 0) > 0"><dt>Run</dt><dd>rerun (run {{ (job.run ?? 0) + (job.status === 'Running' ? 0 : 1) }})</dd></div>
+        <div><dt>Run</dt><dd :id="`job-${job.id}-run`">{{ runName(job) }}</dd></div>
       </template>
     </dl>
     <p v-if="!rows" class="text-medium-emphasis">Loading…</p>
@@ -50,7 +50,7 @@ import type {PropType} from 'vue'
 import type {Job, Row, TenantInfo} from '@/types'
 import JobDocumentsTable from '@/components/job/JobDocumentsTable.vue'
 import {formatTime} from '@/lib/files'
-import {checksText, handlingMix} from '@/lib/status'
+import {checksText, handlingMix, runName} from '@/lib/status'
 
 /**
  * An expanded job in the Drafts or Job queue list (design: Job lists): the job's details and its 10 most

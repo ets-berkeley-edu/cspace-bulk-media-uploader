@@ -277,7 +277,7 @@ import Pagination from '@/components/util/Pagination.vue'
 import SortableColumnHeader from '@/components/util/SortableColumnHeader.vue'
 import {formatTime} from '@/lib/files'
 import type {Tone} from '@/lib/status'
-import {checksColor, checksText, chipColor, handlingMix, worstLevel} from '@/lib/status'
+import {checksColor, checksText, chipColor, handlingMix, runName, runNumber, worstLevel} from '@/lib/status'
 import {tableState, tableView} from '@/lib/table'
 import {ApiError, api} from '@/api'
 
@@ -340,7 +340,7 @@ const isDraft = computed(() => job.value?.status === 'Draft')
 const inTab = computed(() => !!job.value && (props.from === 'drafts' ? isDraft.value : ['Queued', 'Running'].includes(job.value.status)))
 const statusText = computed(() => {
   const j = job.value!
-  return j.status === 'Queued' && (j.run ?? 0) > 0 ? `Queued — rerun (run ${(j.run ?? 0) + 1})` : j.status
+  return j.status === 'Queued' && runNumber(j) > 1 ? `Queued — ${runName(j)}` : j.status
 })
 const editingText = computed(() => {
   const j = job.value!

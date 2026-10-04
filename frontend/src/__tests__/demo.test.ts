@@ -66,6 +66,22 @@ describe('Demo tools', () => {
     expect(w.text()).toContain('File uploads to CollectionSpace in job runs: 5 MB/s.')
   })
 
+  it('adds a failure with the step, status, times and scope chosen, and lists it', async () => {
+    const rule = {step: 'upload', match: '', status: 500, effect: '', count: 1, left: 1, client: 'worker'}
+    let rules: typeof rule[] = []
+    stub((url) => {
+      if (url.includes('/sim/fail')) rules = [rule]
+      return {body: url.includes('/sim/') ? {...sim, rules} : status({sim: {...sim, rules}})}
+    })
+    const w = mount(DemoPane)
+    await flushPromises()
+    await w.find('#demo-add-failure-btn').trigger('click')
+    await flushPromises()
+    expect(calls.find((c) => c.url === '/api/_demo/sim/fail')?.body).toEqual({params: {step: 'upload', status: 500, match: '', count: 1, client: 'worker'}})
+    expect(w.find('#demo-message').text()).toBe('The next “upload” request fails with 500.')
+    expect(w.find('#demo-failure-list').text()).toContain('upload → 500, 1 of 1 left')
+  })
+
   it('deletes all jobs only after confirming, and tells the app', async () => {
     stub((url) => ({body: url.includes('delete-all') ? {deleted: 3, skipped: ['Running one']} : status()}))
     const w = mount(DemoPane)

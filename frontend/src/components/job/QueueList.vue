@@ -171,7 +171,7 @@
           </td>
           <td>
             <div :id="`job-${job.id}-name`" class="font-weight-medium">{{ nameOf(job) }}</div>
-            <div v-if="(job.run ?? 0) > 1" class="text-caption text-medium-emphasis">rerun (run {{ job.run }})</div>
+            <div v-if="runNumber(job) > 1" class="text-caption text-medium-emphasis">{{ runName(job) }}</div>
           </td>
           <td>{{ job.rowCount }}</td>
           <td><span class="text-medium-emphasis">—</span></td>
@@ -282,7 +282,7 @@
           </td>
           <td>
             <div :id="`job-${job.id}-name`" class="font-weight-medium">{{ nameOf(job) }}</div>
-            <div v-if="(job.run ?? 0) > 0" class="text-caption text-medium-emphasis">rerun (run {{ (job.run ?? 0) + 1 }})</div>
+            <div v-if="runNumber(job) > 1" class="text-caption text-medium-emphasis">{{ runName(job) }}</div>
           </td>
           <td>{{ job.rowCount }}</td>
           <td>
@@ -478,7 +478,7 @@ import QueueSchedule from '@/components/job/QueueSchedule.vue'
 import SortableColumnHeader from '@/components/util/SortableColumnHeader.vue'
 import {formatTime} from '@/lib/files'
 import {absLabel, parsePtInput, ptInputValue, runsAt} from '@/lib/schedule'
-import {checksColor, checksText} from '@/lib/status'
+import {checksColor, checksText, runName, runNumber} from '@/lib/status'
 import {tableState, tableView} from '@/lib/table'
 import {api} from '@/api'
 

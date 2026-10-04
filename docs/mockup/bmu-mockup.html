@@ -2680,7 +2680,7 @@ function statusBadge(j) {
       '<div style="height:4px;background:var(--border);border-radius:2px;margin-top:3px;display:flex;overflow:hidden"><div style="width:' + (100 * done / n) + '%;background:var(--text-success)"></div><div style="width:' + (100 * failed / n) + '%;background:var(--text-danger)"></div></div>' +
       (cur ? '<div class="run-now" data-run="' + j.id + '">' + runNowHtml(cur) + "</div>" : "");
   }
-  var extra = j.run > 1 && j.status === "Queued" ? " — rerun (run " + j.run + ")" : "";
+  var extra = j.run > 1 && j.status === "Queued" ? " — " + runName(j.run) : "";
   return '<span class="badge ' + cls + '">' + esc(j.status) + esc(extra) + "</span>";
 }
 function checksCell(j) {
@@ -2690,6 +2690,12 @@ function checksCell(j) {
   var changed = j.atSubmit && (c.block !== j.atSubmit.block || c.warn !== j.atSubmit.warn);
   return '<span class="badge ' + (c.block ? "badge-danger" : (c.warn ? "badge-warning" : "badge-success")) + '">' + esc(txt.join(" · ")) + "</span>" +
     (changed ? '<div class="changed">Changed since submitted</div>' : "");
+}
+/* Which run of a job, in words: "first run", "second run", … and "run 11" beyond the tenth. */
+function runName(n) {
+  var words = ["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth"];
+  n = Math.max(1, n || 1);
+  return n <= words.length ? words[n - 1] + " run" : "run " + n;
 }
 function lockedByOther(j) { return j.editingBy && j.editingBy !== "you"; }
 /* A job's open confirmation (Delete, Edit, Cancel run, Take over), or "" when none is open. In the lists it is shown
@@ -2808,7 +2814,7 @@ function jobDetailRow(j, kind, cols) {
   else if (kind === "queue")
     m += meta("Submitted", esc((j.submittedAt || "—") + " by " + (j.submittedBy || "—"))) +
       meta("At submission", esc((j.atSubmit.block ? j.atSubmit.block + " need fixing" : "nothing to fix") + (j.atSubmit.warn ? " · " + j.atSubmit.warn + (j.atSubmit.warn === 1 ? " warning" : " warnings") : ""))) +
-      (j.run > 1 ? meta("Run", "rerun (run " + j.run + ")") : "");
+      meta("Run", runName(j.run));
   else
     m += meta("Run", "run " + j.run + " · run by " + esc(j.runBy)) + meta("Documents", esc(countsText(j))) +
       (j.jobError ? meta("Job stopped", esc(ERRORS[j.jobError].title)) : "") +

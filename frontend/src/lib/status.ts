@@ -1,5 +1,18 @@
 import type {Handling, Perms, Row, TenantInfo} from '../types'
 
+const ORDINALS = ['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth', 'tenth']
+
+/** Which run of the job this is, or will be once it starts: 1 for a job that has never run. */
+export function runNumber(job: {run?: number, status?: string}): number {
+  return Math.max(1, (job.run ?? 0) + (job.status === 'Running' ? 0 : 1))
+}
+
+/** The run in words: "first run", "second run", … and "run 11" beyond the tenth. */
+export function runName(job: {run?: number, status?: string}): string {
+  const n = runNumber(job)
+  return n <= ORDINALS.length ? `${ORDINALS[n - 1]} run` : `run ${n}`
+}
+
 /** A status's tone: a Vuetify theme colour, or neutral for the plain grey chip. */
 export type Tone = 'success' | 'warning' | 'error' | 'info' | 'neutral'
 
