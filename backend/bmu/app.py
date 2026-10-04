@@ -25,6 +25,7 @@ from .cspace import CSpaceClient, CSpaceError
 from .failures import catalog
 from .filetypes import content_type, unsupported
 from .rows import (PROBLEM_TEXT, apply_edit, can_replace_file, check_rows, clean_filename, collision_checks, created_records,
+                   object_plans,
                    describe_deletion, edit_problem, is_locked, media_created, new_row, worst)
 from .storage import RowChanged, Storage, draft_expiry, expiry_of, now
 from .thumbnails import MAX_BROWSER_BYTES, TIFF_EXTENSIONS, NotAnImage, make_thumbnail, tiff_thumbnail_step
@@ -483,6 +484,7 @@ class RowList(BaseModel):
 
 class MoveJob(BaseModel):
     toIndex: int = Field(ge=0)  # new place among the queued jobs, 0 = next to run
+    confirm: bool = False  # go ahead although the new order makes a document fail (see _guard)
 
 
 class OpenDraft(BaseModel):
@@ -506,10 +508,12 @@ class PauseBody(BaseModel):
 
 class OnOff(BaseModel):
     on: bool
+    confirm: bool = False  # go ahead although the new order makes a document fail (see _guard)
 
 
 class RunAt(BaseModel):
     at: float | None  # epoch seconds, or None to clear the job's own run time
+    confirm: bool = False  # go ahead although the new order makes a document fail (see _guard)
 
 
 
@@ -684,6 +688,7 @@ def _routes(app: FastAPI) -> None:
         order = [j for j in queued if j["id"] != job_id]
         place = min(body.toIndex, len(order))
         order.insert(place, job)
+        _guard(s, sess.tenant, [{**j, "queuePos": i} for i, j in enumerate(order, start=1)], body.confirm)
         for i, j in enumerate(order, start=1):  # positions 1..n in the new order
             if j.get("queuePos") != i:
                 s.storage.update_job(j["id"], {"queuePos": i}, expect_status="Queued")
@@ -1152,10 +1157,15 @@ def _routes(app: FastAPI) -> None:
                             f"Resumed the job queue (paused by {was.get('by')}: {was.get('reason')}).")
         return _schedule_view(s, sess.tenant)
 
-    def _queue_action(s: Services, sess: Session, job_id: str, fields: dict, audit_type: str, detail: str) -> dict:
-        """Set a scheduler's setting on a queued job, only if it is still Queued (one conditional write)."""
+    def _queue_action(s: Services, sess: Session, job_id: str, fields: dict, audit_type: str, detail: str,
+                      confirm: bool = False) -> dict:
+        """Set a scheduler's setting on a queued job, only if it is still Queued (one conditional write). A setting
+        that would make a document fail is refused until the scheduler confirms (see _guard)."""
         s.queue_rows.pop(sess.tenant, None)  # the order may change: read the queue again (see _queue_rows)
         job = _job_or_404(s, sess, job_id)
+        if job["status"] == "Queued":
+            _guard(s, sess.tenant, [{**job, **fields}], confirm)
+            s.queue_rows.pop(sess.tenant, None)
         if job["status"] != "Queued" or not s.storage.update_job(job_id, fields, expect_status="Queued"):
             now_status = (s.storage.get_job(job_id) or {}).get("status", "gone")
             raise HTTPException(409, f"The job is {now_status}; only queued jobs can be changed this way.")
@@ -1166,14 +1176,17 @@ def _routes(app: FastAPI) -> None:
     def run_now(job_id: str, body: OnOff, sess: Session = Depends(scheduler_session), s: Services = Depends(svc)):
         """Run now: the job goes first, as soon as no job is running, whatever the run times (not while paused)."""
         if body.on:
-            return _queue_action(s, sess, job_id, {"runNow": True}, "Run now", "“{name}” runs next, as soon as no job is running.")
-        return _queue_action(s, sess, job_id, {"runNow": False}, "Run now undone", "“{name}” runs at its run time again.")
+            return _queue_action(s, sess, job_id, {"runNow": True}, "Run now", "“{name}” runs next, as soon as no job is running.",
+                                 body.confirm)
+        return _queue_action(s, sess, job_id, {"runNow": False}, "Run now undone", "“{name}” runs at its run time again.",
+                             body.confirm)
 
     @app.post("/api/jobs/{job_id}/run-at")
     def run_at(job_id: str, body: RunAt, sess: Session = Depends(scheduler_session), s: Services = Depends(svc)):
         """The job's own run time, instead of the schedule's; from now until its saved sign-in expires."""
         if body.at is None:
-            return _queue_action(s, sess, job_id, {"runAt": None}, "Run time cleared", "“{name}” runs at the next scheduled run time again.")
+            return _queue_action(s, sess, job_id, {"runAt": None}, "Run time cleared",
+                                 "“{name}” runs at the next scheduled run time again.", body.confirm)
         job = _job_or_404(s, sess, job_id)
         t = s.clock()
         # a minute's grace: the browser's date-time field has minutes only, so "now" is already past
@@ -1183,15 +1196,37 @@ def _routes(app: FastAPI) -> None:
             raise HTTPException(422, "The run time is after the job's saved sign-in expires; choose an earlier time, or "
                                      "have the job submitted again.")
         when = datetime.fromtimestamp(body.at, sched.TZ).strftime("%a %b %-d, %-I:%M %p")
-        return _queue_action(s, sess, job_id, {"runAt": body.at}, "Run time set", f"“{{name}}” runs at {when} (Pacific time).")
+        return _queue_action(s, sess, job_id, {"runAt": body.at}, "Run time set", f"“{{name}}” runs at {when} (Pacific time).",
+                             body.confirm)
 
     @app.post("/api/jobs/{job_id}/hold")
     def hold(job_id: str, body: OnOff, sess: Session = Depends(scheduler_session), s: Services = Depends(svc)):
         """Hold: the job keeps its place but doesn't start until it is released."""
         if body.on:
             return _queue_action(s, sess, job_id, {"held": {"by": sess.user, "at": now()}}, "Job held",
-                                 "Held “{name}”: it doesn't start until it is released.")
-        return _queue_action(s, sess, job_id, {"held": None}, "Job released", "Released “{name}”.")
+                                 "Held “{name}”: it doesn't start until it is released.", body.confirm)
+        return _queue_action(s, sess, job_id, {"held": None}, "Job released", "Released “{name}”.", body.confirm)
+
+    @app.get("/api/queue/collisions")
+    def queue_collisions(sess: Session = Depends(current_session), s: Services = Depends(svc)):
+        """The documents that would fail in the queue's order as it is, and how a reorder would avoid that
+        (see _repair_plan). Everyone signed in sees it; only a scheduler can apply it."""
+        return _repair_plan(s, sess.tenant)
+
+    @app.post("/api/queue/reorder-to-avoid-failures")
+    def reorder_to_avoid_failures(sess: Session = Depends(scheduler_session), s: Services = Depends(svc)):
+        """Reorder to avoid failures (BMU schedulers only): put the queued jobs in the order of _repair_plan, with
+        one "Queue reordered" audit entry. Only places in the queue change, never a job's Run now, run time or hold."""
+        plan = _repair_plan(s, sess.tenant)
+        if not plan["changes"]:
+            raise HTTPException(409, "Reordering the queue wouldn't avoid any failure." if plan["problems"]
+                                else "No document would fail in this order: there is nothing to reorder.")
+        for i, job_id in enumerate(plan["order"], start=1):
+            s.storage.update_job(job_id, {"queuePos": i}, expect_status="Queued")
+        s.queue_rows.pop(sess.tenant, None)
+        s.storage.audit(sess.tenant, "Queue reordered", sess.user, plan["order"][0],
+                        "Reordered the queue to avoid failures: moved " + "; ".join(plan["moves"]) + ".")
+        return _repair_plan(s, sess.tenant)
 
 
 def _refresh_permissions(s: Services, sess: Session) -> Session:
@@ -1299,8 +1334,104 @@ def _collisions(s: Services, tenant: str, job: dict, rows: list[dict], fresh: bo
         return {}
     ids = {j["id"] for j in sched.ahead_of([j for j, _ in queue], job, sched.load(s.storage, tenant), s.clock(),
                                            s.settings.always_run_time)}
-    return collision_checks(s.tenant, rows, [(j, rs) for j, rs in queue if j["id"] in ids],
-                            joining=job.get("status") != "Queued")
+    return collision_checks(s.tenant, rows, [(j, rs) for j, rs in queue if j["id"] in ids])
+
+
+def _queue_failures(s: Services, tenant: str, queue: list[tuple[dict, list[dict]]], jobs: list[dict] | None = None) -> list[dict]:
+    """The documents of queued jobs that would fail because of a job that runs before them, in the queue's order as
+    it is, or as it would be with these jobs (the same jobs with other positions or settings):
+    [{job, name, n, file, other (the job that runs first: id), otherName, object}]."""
+    jobs = [j for j, _ in queue] if jobs is None else jobs
+    rows_of = {j["id"]: rs for j, rs in queue}
+    schedule, t = sched.load(s.storage, tenant), s.clock()
+    out = []
+    for job in jobs:
+        if job.get("status") != "Queued":
+            continue
+        ahead = sched.ahead_of(jobs, job, schedule, t, s.settings.always_run_time)
+        found = collision_checks(s.tenant, rows_of[job["id"]], [(a, rows_of[a["id"]]) for a in ahead])
+        files = {r["n"]: r.get("file") or "" for r in rows_of[job["id"]]}
+        for n, checks in sorted(found.items()):
+            for c in checks:
+                if c["level"] == "block":
+                    out.append({"job": job["id"], "name": job.get("name") or "Untitled job", "n": n, "file": files[n],
+                                "other": c["collides"]["job"], "otherName": c["collides"]["name"], "object": c["collides"]["object"]})
+    return out
+
+
+def _failure_text(p: dict) -> str:
+    return f"“{p['file']}” in “{p['name']}”: “{p['otherName']}” would create object {p['object']} first"
+
+
+def _guard(s: Services, tenant: str, changed: list[dict], confirm: bool) -> None:
+    """Design (Jobs that collide in the queue): before a scheduler's change to the queue's order takes effect, say
+    which documents it would make fail. changed: the jobs as they would be. Refused with 409 would_fail unless the
+    scheduler confirmed; a change that makes nothing new fail goes through."""
+    if confirm:
+        return
+    queue = _queue_rows(s, tenant, fresh=True)
+    before = {(p["job"], p["n"]) for p in _queue_failures(s, tenant, queue)}
+    by_id = {j["id"]: j for j in changed}
+    after = _queue_failures(s, tenant, queue, [by_id.get(j["id"], j) for j, _ in queue])
+    new = [p for p in after if (p["job"], p["n"]) not in before]
+    if new:
+        count = f"{len(new)} document{'' if len(new) == 1 else 's'}"
+        raise HTTPException(409, {"code": "would_fail", "problems": new,
+                                  "message": f"This would make {count} fail when the queue runs: "
+                                             + "; ".join(_failure_text(p) for p in new[:5])
+                                             + (f"; and {len(new) - 5} more" if len(new) > 5 else "") + "."})
+
+
+def _repair_plan(s: Services, tenant: str) -> dict:
+    """How to reorder the queue so that no document fails because of a job ahead of it (design: Jobs that collide in
+    the queue). A "create" job has to run before every "find or create" job for the same new object number: the
+    queued jobs are put in an order that respects that, moving as few as possible (each job keeps its place among
+    the jobs that needn't move). Only places in the queue change. Returns {problems: the documents that would
+    fail now, order: the job ids in the new order, moves: what would move, as text, remaining: what a reorder
+    can't fix, as text, changes: whether applying it helps}."""
+    queue = _queue_rows(s, tenant, fresh=True)
+    problems = _queue_failures(s, tenant, queue)
+    rows_of = {j["id"]: rs for j, rs in queue}
+    queued = sorted((j for j, _ in queue if j.get("status") == "Queued"), key=sched.queue_key)
+    name = {j["id"]: j.get("name") or "Untitled job" for j in queued}
+    plans = {j["id"]: object_plans(s.tenant, rows_of[j["id"]]) for j in queued}
+    before: dict[str, set[str]] = {j["id"]: set() for j in queued}  # job -> the jobs that must run before it
+    for c in queued:
+        for e in queued:
+            if c["id"] != e["id"] and plans[c["id"]]["create"] & plans[e["id"]]["either"]:
+                before[e["id"]].add(c["id"])
+    order, left = [], [j["id"] for j in queued]
+    while left:
+        ready = next((i for i in left if not before[i] & set(left)), None)
+        if ready is None:  # each of these has to run before another of them: no order works
+            order = [j["id"] for j in queued]
+            break
+        order.append(ready)
+        left.remove(ready)
+    place = {j["id"]: i for i, j in enumerate(queued)}
+    moves = [f"“{name[c]}” ahead of “{name[e]}”" for e in order for c in sorted(before[e], key=order.index)
+             if place[c] > place[e]] if not left else []
+    by_id = {j["id"]: {**j, "queuePos": order.index(j["id"]) + 1} for j in queued}
+    after = _queue_failures(s, tenant, queue, [by_id.get(j["id"], j) for j, _ in queue])
+    jobs = {j["id"]: j for j, _ in queue}
+    remaining = []
+    for p in after:
+        other, job = jobs.get(p["other"], {}), jobs[p["job"]]
+        if other.get("status") == "Running":
+            why = f"“{p['otherName']}” is running now"
+        elif other.get("runNow"):
+            why = f"“{p['otherName']}” has Run now, so it runs first whatever its place; undo Run now to change that"
+        elif other.get("runAt") is not None:
+            why = f"“{p['otherName']}” has its own run time, which decides when it runs; clear it to change that"
+        elif job.get("held"):
+            why = f"“{p['name']}” is on hold, so it runs after the others; release it to change that"
+        elif job.get("runAt") is not None:
+            why = f"“{p['name']}” has its own run time, which decides when it runs; clear it to change that"
+        else:
+            why = "no order avoids it: edit one of the two jobs"
+        remaining.append(f"{_failure_text(p)} ({why}).")
+    return {"problems": problems, "order": order, "moves": moves, "remaining": remaining,
+            "changes": bool(moves) and len(after) < len(problems)}
 
 
 def _note_protected(s: Services, job_id: str, rows: list[dict]) -> None:

@@ -37,11 +37,15 @@ deployment is built (`deploy/README.md`); what it leaves for later is listed the
 - **Jobs that collide in the queue:** a job that runs first can change CollectionSpace so that a later job's
   document fails. Each job is also checked against the jobs ahead of it in the queue (a draft against every queued
   and running job), without asking CollectionSpace. "Must fix": a "Create new object + link" document whose Object an
-  earlier job creates first; the message names that job and offers "Link to object (create if missing)", which can't
-  collide. A "Link to object (create if missing)" document is "Must fix" too when a queued job creates the
-  same Object with "Create new object + link": that order would work, but a scheduler who reversed it would make the
-  queued job's document fail, so no queue that Submit accepts can be broken by reordering it. "Warning": a document with
-  the same identification number as one in an earlier job (both Media records would be created). The Job queue shows the same checks, following the queue's order as a scheduler changes it.
+  earlier job creates first; the message names that job and offers "Link to object (create if missing)". "Warning": a
+  document with the same identification number as one in an earlier job (both Media records would be created). The
+  other order, "Create new object + link" ahead of "Link to object (create if missing)", works and is allowed.
+  **Changing the order:** before a scheduler's move, Run now, Hold or run time takes effect, the BMU works out the new
+  order; if it would make a document fail, it says which and asks ("Move anyway" or Cancel). If they go ahead, the
+  job is marked "needs fixing" at once in "Checks now", for everyone looking at the queue; it still runs, and the
+  worker fails that document before creating anything for it. **Reorder to avoid failures** (schedulers) puts the
+  queue in an order where nothing fails, moving as few jobs as possible, after showing what will move. It changes
+  places only: when a Run now, a run time or a hold decides the order, or no order works, it says so instead.
 - **Drafts:** every change is saved as it's made. Anyone in the tenant can open a draft, one person at a time,
   with take-over. Drafts expire 30 days after they were last saved (7 if a document is a protected file).
 - **Submit job** (only when nothing needs fixing) checks the whole job again with fresh permissions and adds it

@@ -879,45 +879,60 @@ STEP_TEXT = {"values": "check the document in CollectionSpace", "media": "create
              "addToGroup": "add the object to the job's group"}
 
 
-def collision_checks(tenant: Tenant, rows: list[dict], ahead: list[tuple[dict, list[dict]]],
-                     joining: bool = False) -> dict[int, list[dict]]:
+def _pending(r: dict) -> bool:
+    """A document the next run still works on."""
+    return bool(r.get("include")) and (r.get("result") or {}).get("state") != "Done"
+
+
+def object_plans(tenant: Tenant, rows: list[dict]) -> dict[str, set[str]]:
+    """What a job's documents will do about Objects that don't exist yet, by object number: {"create": the numbers a
+    "create" document makes, "either": the numbers a "find or create" document makes or links to}. A document whose
+    Object already exists, as far as its last check knows, isn't counted: nothing about it depends on other jobs."""
+    out: dict[str, set[str]] = {"create": set(), "either": set()}
+    for r in rows:
+        h = tenant.handling_by_id(r.get("handling") or "")
+        num = (r.get("obj") or "").strip()
+        if not _pending(r) or not h or h.object not in out or not num or object_step_ran(r):
+            continue
+        looked = (r.get("lookups") or {}).get("object") or {}
+        if looked.get("value") == num and looked.get("csids"):
+            continue
+        out[h.object].add(num)
+    return out
+
+
+def collision_checks(tenant: Tenant, rows: list[dict], ahead: list[tuple[dict, list[dict]]]) -> dict[int, list[dict]]:
     """Design (Jobs that collide in the queue): what the jobs that run before this one will have changed in
     CollectionSpace by the time it runs. ahead: (job, rows) of each of those jobs, in any order. Returns the extra
     checks by row number; nothing is asked of CollectionSpace.
 
     Must fix: a "create" document whose Object an earlier job creates first (its own "create", or "find or
     create" when the Object doesn't exist yet): this job's check just before the document would find the Object
-    and fail it. Warning: a document whose identification number an earlier job's document also has: both Media
-    records are created. A document CollectionSpace already blocks or warns about for the same reason isn't told
-    twice.
+    and fail it. The check carries "collides": {job, name, object}, the earlier job and the object number.
+    Warning: a document whose identification number an earlier job's document also has: both Media records are
+    created. A document CollectionSpace already blocks or warns about for the same reason isn't told twice.
 
-    joining: the job isn't in the queue yet (a draft). Then one more pair is Must fix: a "find or create" document
-    whose Object a queued job creates with "create". In that order nothing fails, but a scheduler who put this job
-    first would make the queued job's document fail. Refusing the pair at Submit means no queue that Submit lets
-    someone build can be broken by reordering it. A job already in the queue isn't told this: its order is known,
-    and the first rule covers it."""
-    creates: dict[str, tuple[str, str, str]] = {}  # object number -> (job name, file, behavior) of the first that creates it
-    only_creates: dict[str, tuple[str, str]] = {}  # object number -> (job name, file), for "create" documents alone
-    ids: dict[str, tuple[str, str]] = {}      # identification number -> the same
+    The other order of a "create" and a "find or create" job works (the first creates the Object, the second links
+    to it), so it is allowed; a scheduler who reverses it is warned first, and the job is flagged (app._guard)."""
+    creates: dict[str, tuple[dict, str]] = {}  # object number -> (job, file) of the first job that creates it
+    ids: dict[str, tuple[dict, str]] = {}      # identification number -> the same
     for job, others in ahead:
-        name = job.get("name") or "Untitled job"
         for o in others:
-            if not o.get("include") or (o.get("result") or {}).get("state") == "Done":
+            if not _pending(o):
                 continue
             h = tenant.handling_by_id(o.get("handling") or "")
             num = (o.get("obj") or "").strip()
             if h and h.object in ("create", "either") and num and not object_step_ran(o):
-                creates.setdefault(num, (name, o.get("file") or "", h.object))
-                if h.object == "create":
-                    only_creates.setdefault(num, (name, o.get("file") or ""))
+                creates.setdefault(num, (job, o.get("file") or ""))
             if o.get("idnum") and not media_created(o):
-                ids.setdefault(o["idnum"], (name, o.get("file") or ""))
+                ids.setdefault(o["idnum"], (job, o.get("file") or ""))
     out: dict[int, list[dict]] = {}
     if not creates and not ids:
         return out
     relink = _labels(tenant, ("either",))
+    title = lambda job: job.get("name") or "Untitled job"  # noqa: E731
     for r in rows:
-        if not r.get("include") or (r.get("result") or {}).get("state") == "Done":
+        if not _pending(r):
             continue
         found: list[dict] = []
         h = tenant.handling_by_id(r.get("handling") or "")
@@ -925,27 +940,18 @@ def collision_checks(tenant: Tenant, rows: list[dict], ahead: list[tuple[dict, l
         looked = (r.get("lookups") or {}).get("object") or {}
         exists_now = looked.get("value") == num and bool(looked.get("csids"))  # then object_checks blocks it already
         if h and h.object == "create" and num in creates and not object_step_ran(r) and not exists_now:
-            name, file, _ = creates[num]
-            # beside a "create" document, a "find or create" one can't join the queue either (see joining)
-            wait = "Submit this job after that one has run, or" if joining else "Wait until that job has run, or"
-            fix = f"To link to that object, choose {relink}; otherwise" if relink and not (joining and num in only_creates) else wait
-            found.append({"level": "block", "text": f"Job “{name}”, ahead of this one in the job queue, creates object {num} "
+            job, file = creates[num]
+            fix = f"To link to that object, choose {relink}; otherwise" if relink else "Wait until that job has run, or"
+            found.append({"level": "block", "collides": {"job": job["id"], "name": title(job), "object": num},
+                          "text": f"Job “{title(job)}”, ahead of this one in the job queue, creates object {num} "
                           f"({file}). When this job runs the object will exist, and “Create new object + link” only "
                           f"creates a new object, so this document would fail. {fix} correct the object number."})
-        elif (joining and h and h.object == "either" and num in only_creates and not object_step_ran(r) and not exists_now
-              and looked.get("value") == num):
-            name, file = only_creates[num]
-            found.append({"level": "block", "text": f"Job “{name}”, in the job queue, creates object {num} with “Create new "
-                          f"object + link” ({file}). If this job were moved ahead of it, this document would create the "
-                          "object and that job's document would fail, so the two can't wait in the queue together. Submit "
-                          "this job after that one has run, change that job's document to "
-                          f"{relink or 'a handling that links to the object'}, or correct the object number."})
         idn = r.get("idnum") or ""
         seen = (r.get("lookups") or {}).get("media") or {}
         in_cspace = seen.get("value") == idn and bool(seen.get("csids"))  # then check_rows warns about it already
         if idn in ids and not media_created(r) and not in_cspace:
-            name, file = ids[idn]
-            found.append({"level": "warn", "text": f"Job “{name}”, ahead of this one in the job queue, also has a document "
+            job, file = ids[idn]
+            found.append({"level": "warn", "text": f"Job “{title(job)}”, ahead of this one in the job queue, also has a document "
                           f"with ID {idn} ({file}). Both Media records would be created."})
         if found:
             out[r["n"]] = found

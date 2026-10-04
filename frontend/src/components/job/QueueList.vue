@@ -36,6 +36,66 @@
       {{ message }}
     </v-alert>
     <v-alert
+      v-if="plan?.problems.length"
+      id="queue-collisions"
+      class="mb-2"
+      density="compact"
+      role="alert"
+      type="warning"
+      variant="tonal"
+    >
+      <div id="queue-collisions-summary" class="font-weight-medium">{{ collisionsSummary }}</div>
+      <ul class="collision-list">
+        <li v-for="problem in plan.problems.slice(0, 5)" :key="`${problem.job}-${problem.n}`">{{ problemText(problem) }}</li>
+        <li v-if="plan.problems.length > 5">and {{ plan.problems.length - 5 }} more</li>
+      </ul>
+      <div v-if="plan.changes">
+        <div v-if="!isConfirmingReorder">
+          <v-btn
+            v-if="scheduler"
+            id="queue-reorder-btn"
+            color="warning"
+            :disabled="isReordering"
+            size="small"
+            @click="isConfirmingReorder = true"
+          >
+            Reorder to avoid failures…
+          </v-btn>
+          <span v-else id="queue-reorder-why">A BMU scheduler can reorder the queue to avoid this.</span>
+        </div>
+        <div v-else id="queue-reorder-confirm">
+          <div>This moves {{ plan.moves.join('; ') }}. Every other job keeps its place among the rest.</div>
+          <div class="mt-2">
+            <v-btn
+              id="queue-reorder-confirm-btn"
+              class="mr-2"
+              color="warning"
+              :disabled="isReordering"
+              size="small"
+              @click="reorder"
+            >
+              {{ isReordering ? 'Reordering…' : 'Reorder' }}
+            </v-btn>
+            <v-btn
+              id="queue-reorder-cancel-btn"
+              :disabled="isReordering"
+              size="small"
+              variant="outlined"
+              @click="isConfirmingReorder = false"
+            >
+              Cancel
+            </v-btn>
+          </div>
+        </div>
+      </div>
+      <div v-if="!plan.changes || plan.remaining.length" id="queue-collisions-remaining" class="mt-1">
+        <div>{{ plan.changes ? 'A reorder can’t fix:' : 'Reordering the queue can’t fix this:' }}</div>
+        <ul class="collision-list">
+          <li v-for="text in plan.remaining" :key="text">{{ text }}</li>
+        </ul>
+      </div>
+    </v-alert>
+    <v-alert
       v-if="isSortedView"
       id="queue-sorted-view"
       class="mb-2"
@@ -208,8 +268,42 @@
             />
           </td>
         </tr>
-        <tr v-show="confirming.has(job.id)" class="job-confirm-row">
-          <td :ref="cell => setConfirmCell(job.id, cell as HTMLElement | null)" class="pb-3" colspan="9" />
+        <tr v-show="confirming.has(job.id) || pending?.jobId === job.id" class="job-confirm-row">
+          <td :ref="cell => setConfirmCell(job.id, cell as HTMLElement | null)" class="pb-3" colspan="9">
+            <v-alert
+              v-if="pending?.jobId === job.id"
+              :id="`job-${job.id}-order-confirm`"
+              class="text-left"
+              density="compact"
+              role="alert"
+              type="warning"
+              variant="tonal"
+            >
+              <div>{{ pending.text }}</div>
+              <div>If you go ahead, that job is marked “needs fixing” until the order is changed back or the job is edited.</div>
+              <div class="mt-2">
+                <v-btn
+                  :id="`job-${job.id}-order-confirm-btn`"
+                  class="mr-2"
+                  color="warning"
+                  :disabled="pending.busy"
+                  size="small"
+                  @click="goAhead"
+                >
+                  {{ pending.label }}
+                </v-btn>
+                <v-btn
+                  :id="`job-${job.id}-order-cancel-btn`"
+                  :disabled="pending.busy"
+                  size="small"
+                  variant="outlined"
+                  @click="pending = null"
+                >
+                  Cancel
+                </v-btn>
+              </div>
+            </v-alert>
+          </td>
         </tr>
         <tr v-if="expanded.has(job.id)" class="job-details-row">
           <td colspan="9">
@@ -447,8 +541,42 @@
             />
           </td>
         </tr>
-        <tr v-show="confirming.has(job.id)" class="job-confirm-row">
-          <td :ref="cell => setConfirmCell(job.id, cell as HTMLElement | null)" class="pb-3" colspan="9" />
+        <tr v-show="confirming.has(job.id) || pending?.jobId === job.id" class="job-confirm-row">
+          <td :ref="cell => setConfirmCell(job.id, cell as HTMLElement | null)" class="pb-3" colspan="9">
+            <v-alert
+              v-if="pending?.jobId === job.id"
+              :id="`job-${job.id}-order-confirm`"
+              class="text-left"
+              density="compact"
+              role="alert"
+              type="warning"
+              variant="tonal"
+            >
+              <div>{{ pending.text }}</div>
+              <div>If you go ahead, that job is marked “needs fixing” until the order is changed back or the job is edited.</div>
+              <div class="mt-2">
+                <v-btn
+                  :id="`job-${job.id}-order-confirm-btn`"
+                  class="mr-2"
+                  color="warning"
+                  :disabled="pending.busy"
+                  size="small"
+                  @click="goAhead"
+                >
+                  {{ pending.label }}
+                </v-btn>
+                <v-btn
+                  :id="`job-${job.id}-order-cancel-btn`"
+                  :disabled="pending.busy"
+                  size="small"
+                  variant="outlined"
+                  @click="pending = null"
+                >
+                  Cancel
+                </v-btn>
+              </div>
+            </v-alert>
+          </td>
         </tr>
         <tr v-if="expanded.has(job.id)" class="job-details-row">
           <td colspan="9">
@@ -470,7 +598,7 @@
 import type {PropType} from 'vue'
 import {computed, onBeforeUnmount, onMounted, reactive, ref} from 'vue'
 import {mdiAlert, mdiArrowDown, mdiArrowUp, mdiChevronRight, mdiDragVertical} from '@mdi/js'
-import type {Job, Row, Schedule, TenantInfo} from '@/types'
+import type {Job, QueuePlan, QueueProblem, Row, Schedule, TenantInfo} from '@/types'
 import CurrentDocument from '@/components/job/CurrentDocument.vue'
 import JobActions from '@/components/job/JobActions.vue'
 import JobDetails from '@/components/job/JobDetails.vue'
@@ -480,7 +608,7 @@ import {formatTime} from '@/lib/files'
 import {absLabel, parsePtInput, ptInputValue, runsAt} from '@/lib/schedule'
 import {checksColor, checksText, runName, runNumber} from '@/lib/status'
 import {tableState, tableView} from '@/lib/table'
-import {api} from '@/api'
+import {ApiError, api} from '@/api'
 
 /**
  * The Job queue page (design: The job queue; Job scheduling): running jobs first, then queued jobs in the order
@@ -520,6 +648,14 @@ const docs = reactive(new Map<string, Row[]>())
 const expanded = reactive(new Set<string>())
 // The progress an expanded running job's documents were last read at
 const runSeen = new Map<string, string>()
+// Design (Jobs that collide in the queue): the documents that would fail in this order, and how a reorder avoids it
+const plan = ref<QueuePlan | null>(null)
+const isConfirmingReorder = ref(false)
+const isReordering = ref(false)
+// A scheduler's change that would make a document fail, waiting for "go ahead" under the job it was made on
+const pending = ref<{jobId: string, text: string, label: string, done: string, busy: boolean, run: (confirm: boolean) => Promise<unknown>} | null>(null)
+// The order and the settings that decide it, as last seen: when someone else changes them, the checks are run again
+let orderSeen = ''
 const checks = reactive(new Map<string, {block: number, warn: number}>())
 const error = ref('')
 const message = ref('')
@@ -600,6 +736,10 @@ const refresh = async (runChecks = false) => {
     jobs.value = r.jobs.filter(j => j.status === 'Running' || j.status === 'Queued')
     schedule.value = s
     error.value = ''
+    const order = jobs.value.map(j => `${j.id}:${j.status}:${j.queuePos}:${!!j.runNow}:${j.runAt ?? ''}:${!!j.held}`).join('|')
+    // Someone changed the order (or a job joined, left or started): what would fail may have changed with it
+    runChecks = runChecks || (isLoaded.value && order !== orderSeen)
+    orderSeen = order
     isLoaded.value = true
   } catch (e) {
     error.value = (e as Error).message
@@ -613,13 +753,19 @@ const refresh = async (runChecks = false) => {
     }
   }
   if (runChecks) {
-    // Design: checks are re-run against CollectionSpace each time the queue is shown.
+    // Design: checks are re-run against CollectionSpace each time the queue is shown, and when its order changes.
     for (const job of queued.value) {
       api.check(job.id).then(r => {
         checks.set(job.id, r.counts)
         docs.set(job.id, r.rows)
       }).catch(() => undefined)
     }
+    api.queueCollisions(true).then(p => {
+      plan.value = Array.isArray(p?.problems) ? p : null
+      if (!plan.value?.changes) {
+        isConfirmingReorder.value = false
+      }
+    }).catch(() => undefined)
   }
 }
 
@@ -629,16 +775,38 @@ onMounted(() => {
 })
 onBeforeUnmount(() => clearInterval(timer))
 
-const act = async (fn: () => Promise<unknown>, done = '') => {
+/**
+ * A scheduler's change to the queue. The server refuses one that would make a document fail (409 would_fail) until it
+ * is confirmed: the question opens under the job, and goAhead sends the change again, confirmed. Afterwards the
+ * checks are run again, so a job that would now fail is marked at once.
+ */
+const change = async (job: Job, run: (confirm: boolean) => Promise<unknown>, done: string, label: string, confirm = false) => {
   try {
-    await fn()
-    await refresh()
+    await run(confirm)
+    pending.value = null
+    await refresh(true)
     message.value = done
     error.value = ''
     return true
   } catch (e) {
-    error.value = (e as Error).message
+    const detail = e instanceof ApiError ? e.detail as {code?: string} | null : null
+    if (!confirm && detail?.code === 'would_fail') {
+      pending.value = {jobId: job.id, text: (e as Error).message, label, done, busy: false, run}
+      error.value = ''
+    } else {
+      pending.value = null
+      error.value = (e as Error).message
+    }
     return false
+  }
+}
+
+const goAhead = async () => {
+  const asked = pending.value
+  const job = jobs.value.find(j => j.id === asked?.jobId)
+  if (asked && job) {
+    asked.busy = true
+    await change(job, asked.run, asked.done, asked.label, true)
   }
 }
 
@@ -656,17 +824,26 @@ const scheduleChanged = async (s: Schedule, text: string) => {
   await refresh()
 }
 
-const move = (job: Job, to: number) => act(
-  () => api.moveJob(job.id, Math.max(0, to)),
-  `Moved ${quoted(job)} to position ${running.value.length + Math.max(0, to) + 1}.`
+const move = (job: Job, to: number) => change(
+  job,
+  confirm => api.moveJob(job.id, Math.max(0, to), confirm),
+  `Moved ${quoted(job)} to position ${running.value.length + Math.max(0, to) + 1}.`,
+  'Move anyway'
 )
 
 // ---- per-job run controls (BMU schedulers) ----
-const runNow = (job: Job, on: boolean) => act(() => api.runNow(job.id, on), on
-  ? `${quoted(job)} ${schedule.value?.paused ? 'runs next once the queue is resumed.' : 'runs next, as soon as no job is running.'}`
-  : `${quoted(job)} waits for its turn again.`)
-const hold = (job: Job, on: boolean) => act(() => api.hold(job.id, on), on
-  ? `${quoted(job)} is held and will be skipped until it is released.` : `${quoted(job)} was released.`)
+const runNow = (job: Job, on: boolean) => change(
+  job,
+  confirm => api.runNow(job.id, on, confirm),
+  on ? `${quoted(job)} ${schedule.value?.paused ? 'runs next once the queue is resumed.' : 'runs next, as soon as no job is running.'}` : `${quoted(job)} waits for its turn again.`,
+  on ? 'Run now anyway' : 'Undo Run now anyway'
+)
+const hold = (job: Job, on: boolean) => change(
+  job,
+  confirm => api.hold(job.id, on, confirm),
+  on ? `${quoted(job)} is held and will be skipped until it is released.` : `${quoted(job)} was released.`,
+  on ? 'Hold anyway' : 'Release anyway'
+)
 const nowInput = () => ptInputValue(Date.now() / 1000)
 const untilOf = (job: Job) => job.credentialExpires ?? Date.now() / 1000 + 72 * 3600
 
@@ -684,21 +861,21 @@ const saveRunAt = async (job: Job) => {
     edit.error = 'Choose a date and time, or use Clear to return the job to the schedule.'
     return
   }
-  try {
-    await api.runAt(job.id, at)
+  const text = `${quoted(job)} runs at ${absLabel(at)} (Pacific time)${schedule.value?.paused ? ', if the queue has been resumed by then' : ''}.`
+  const before = error.value
+  if (await change(job, confirm => api.runAt(job.id, at, confirm), text, 'Set run time anyway') || pending.value) {
     runAtEdit.value = null
-    message.value = `${quoted(job)} runs at ${absLabel(at)} (Pacific time)${schedule.value?.paused ? ', if the queue has been resumed by then' : ''}.`
-    error.value = ''
-    await refresh()
-  } catch (e) {
-    edit.error = (e as Error).message
+  } else {
+    // Refused for another reason (a time in the past, after the sign-in expires): shown beside the field
+    edit.error = error.value
+    error.value = before
   }
 }
 
 const clearRunAt = async (job: Job) => {
   runAtEdit.value = null
   if (job.runAt) {
-    await act(() => api.runAt(job.id, null), `${quoted(job)} follows the schedule again.`)
+    await change(job, confirm => api.runAt(job.id, null, confirm), `${quoted(job)} follows the schedule again.`, 'Clear run time anyway')
   }
 }
 
@@ -732,6 +909,29 @@ const onDrop = () => {
   dragEnded()
 }
 
+// ---- Reorder to avoid failures (design: Jobs that collide in the queue) ----
+const collisionsSummary = computed(() => {
+  const n = plan.value?.problems.length ?? 0
+  return `${n} document${n === 1 ? '' : 's'} would fail in this order, because a job that runs first creates ${n === 1 ? 'its' : 'their'} object:`
+})
+const problemText = (p: QueueProblem) => `“${p.file}” in “${p.name}”: “${p.otherName}” would create object ${p.object} first`
+
+const reorder = async () => {
+  isReordering.value = true
+  try {
+    plan.value = await api.reorderToAvoidFailures()
+    isConfirmingReorder.value = false
+    await refresh(true)
+    message.value = 'Reordered the queue to avoid failures.'
+    error.value = ''
+  } catch (e) {
+    error.value = (e as Error).message
+    await refresh(true)
+  } finally {
+    isReordering.value = false
+  }
+}
+
 const signIn = (job: Job) => {
   if (!job.credentialExpires) {
     return null
@@ -751,6 +951,9 @@ const percent = (job: Job, key: 'done' | 'failed') => (job.progress?.total ? (10
 </script>
 
 <style scoped>
+.collision-list {
+  padding-left: 18px;
+}
 .toggle-col {
   width: 40px;
 }
