@@ -518,6 +518,8 @@ const isLoaded = ref(false)
 const schedule = ref<Schedule | null>(null)
 const docs = reactive(new Map<string, Row[]>())
 const expanded = reactive(new Set<string>())
+// The progress an expanded running job's documents were last read at
+const runSeen = new Map<string, string>()
 const checks = reactive(new Map<string, {block: number, warn: number}>())
 const error = ref('')
 const message = ref('')
@@ -575,6 +577,7 @@ const shownQueued = computed(() => tableView(queued.value, table, {
 const toggle = (job: Job) => {
   if (expanded.has(job.id)) {
     expanded.delete(job.id)
+    runSeen.delete(job.id)
   } else {
     expanded.add(job.id)
     if (!docs.has(job.id)) {
@@ -600,6 +603,14 @@ const refresh = async (runChecks = false) => {
     isLoaded.value = true
   } catch (e) {
     error.value = (e as Error).message
+  }
+  // An expanded running job shows each document's run state: read its documents again whenever its progress moved.
+  for (const job of running.value) {
+    const at = `${job.progress?.done}/${job.progress?.failed}/${job.currentFile}/${job.currentStep}`
+    if (expanded.has(job.id) && runSeen.get(job.id) !== at) {
+      runSeen.set(job.id, at)
+      api.job(job.id, true).then(r => docs.set(job.id, r.rows)).catch(() => runSeen.delete(job.id))
+    }
   }
   if (runChecks) {
     // Design: checks are re-run against CollectionSpace each time the queue is shown.
