@@ -1,14 +1,14 @@
 import {afterEach, describe, expect, it, vi} from 'vitest'
 import {flushPromises, mount} from '@vue/test-utils'
-import ErrorBox from '../components/ErrorBox.vue'
-import FinishedJobs from '../components/FinishedJobs.vue'
-import JobResults from '../components/JobResults.vue'
 import {
   canReplaceFile, countsText, createdSomething, createdText, failures, fixFields, importantRows, needsFix, resultCounts, resultState,
   stepList, stepNote,
 } from '../lib/results'
 import type {Failure, Job, Perms, Row, Run, TenantInfo} from '../types'
 import DocumentRow from '@/components/job/DocumentRow.vue'
+import FinishedJobs from '@/components/job/FinishedJobs.vue'
+import JobResults from '@/components/job/JobResults.vue'
+import FailureAlert from '@/components/util/FailureAlert.vue'
 
 afterEach(() => { vi.restoreAllMocks() })
 
@@ -123,22 +123,22 @@ describe('a value that no longer exists when the job ran (value_missing)', () =>
     renamed.result = {...renamed.result!, notices: [{code: 'term_renamed', detail: 'Creator “Leslie Freund” → “Leslie F. Freund”'}]}
     const job = {id: 'j', name: 'batch', status: 'NeedsAttention', run: 1, code: ''} as Job
     const w = mount(JobResults, {props: {job, rows: [valueMissing, renamed], runs: [], tenant}})
-    const [bad, good] = w.findAll('tbody tr').map((r) => r.text())
+    const [bad, good] = w.findAll('#results-table tbody tr').map((r) => r.text())
     expect(bad).toContain('✗ Check the document in CollectionSpace')
     expect(bad).toContain('A value no longer exists in CollectionSpace.')
     expect(good).toContain('A name changed in CollectionSpace.')
   })
 })
 
-describe('ErrorBox', () => {
+describe('FailureAlert', () => {
   it('shows the title, explanation and what to do, with the technical detail on request', async () => {
-    const w = mount(ErrorBox, {props: {code: 'upload_too_large', detail: 'PUT media/m2/blob returned 413'}})
+    const w = mount(FailureAlert, {props: {code: 'upload_too_large', detail: 'PUT media/m2/blob returned 413'}})
     expect(w.text()).toContain('File too large for CollectionSpace.')
     expect(w.text()).toContain('What to do: Do this for File too large')
     expect(w.text()).not.toContain('413')
     await w.find('button').trigger('click')
     expect(w.text()).toContain('returned 413')
-    expect(mount(ErrorBox, {props: {code: 'something_new'}}).text()).toContain('Unexpected problem')
+    expect(mount(FailureAlert, {props: {code: 'something_new'}}).text()).toContain('Unexpected problem')
   })
 })
 
@@ -150,15 +150,15 @@ describe('JobResults', () => {
   ]
   it('lists runs newest first and filters documents by result', async () => {
     const w = mount(JobResults, {props: {job, rows: [done(1, 'a.jpg'), tooLarge, gone, notRun, disabled], runs, tenant}})
-    const history = w.findAll('.runs .msg').map((m) => m.text())
+    const history = w.findAll('#run-history .run').map((m) => m.text())
     expect(history[0]).toContain('Run 2: Needs attention')
     expect(history[0]).toContain('9-9999.jpg excluded by jdoe')
     expect(history[1]).toContain('Run 1: Failed — Sign-in failed')
-    expect(w.findAll('tbody tr')).toHaveLength(5)
-    await w.find('select').setValue('partial')
-    expect(w.findAll('tbody tr').map((r) => r.text()).join()).toContain('1-2345.jpg')
-    expect(w.findAll('tbody tr')).toHaveLength(2)
-    await w.find('select').setValue('excluded')
+    expect(w.findAll('#results-table tbody tr')).toHaveLength(5)
+    await w.find('#results-filter-select').setValue('partial')
+    expect(w.findAll('#results-table tbody tr').map((r) => r.text()).join()).toContain('1-2345.jpg')
+    expect(w.findAll('#results-table tbody tr')).toHaveLength(2)
+    await w.find('#results-filter-select').setValue('excluded')
     expect(w.text()).toContain('Excluded by jdoe')
   })
 
@@ -170,14 +170,14 @@ describe('JobResults', () => {
     ]
     for (const [code, codeDetail] of cases) {
       const w = mount(JobResults, {props: {job: {...job, status: 'Failed', code, codeDetail}, rows: [notRun], runs: [], tenant}})
-      const box = w.findComponent(ErrorBox)
+      const box = w.findComponent(FailureAlert)
       expect(box.props('detail')).toBe(codeDetail)
-      await box.find('button.link').trigger('click')
+      await box.find('button.link-btn').trigger('click')
       expect(box.text()).toContain(`${code} · ${codeDetail}`)
     }
     // a job that ended before codeDetail was stored still shows who cancelled it
     const old = mount(JobResults, {props: {job: {...job, code: 'cancelled', cancelledBy: 'jdoe'}, rows: [notRun], runs: [], tenant}})
-    expect(old.findComponent(ErrorBox).props('detail')).toBe('Cancel requested by jdoe')
+    expect(old.findComponent(FailureAlert).props('detail')).toBe('Cancel requested by jdoe')
   })
 })
 
@@ -236,13 +236,13 @@ describe('Finished jobs tab', () => {
       return Promise.resolve(new Response(JSON.stringify(body), {status: 200, headers: {'content-type': 'application/json'}}))
     }))
   }
-  const rowOf = (w: ReturnType<typeof mount>, name: string) => w.findAll('tbody tr').find((r) => r.text().includes(name))!
+  const rowOf = (w: ReturnType<typeof mount>, name: string) => w.findAll('tbody').find((r) => r.text().includes(name))!
 
   it('shows outcomes newest first with Fix and reschedule or Reschedule', async () => {
     mockApi()
     const w = mount(FinishedJobs, {props: {tenant}})
     await flushPromises()
-    const text = w.findAll('tbody tr').map((r) => r.text())
+    const text = w.findAll('tr.job-row').map((r) => r.text())
     expect(text[0]).toContain('needs a fix')
     expect(text.join()).not.toContain('a draft')
     expect(rowOf(w, 'needs a fix').text()).toContain('1 done · 1 partial')
@@ -258,15 +258,73 @@ describe('Finished jobs tab', () => {
     mockApi()
     const w = mount(FinishedJobs, {props: {tenant}})
     await flushPromises()
-    await rowOf(w, 'needs a fix').findAll('button').find((b) => b.text() === 'Delete')!.trigger('click')
+    await rowOf(w, 'needs a fix').find('button[aria-label="Delete"]').trigger('click')
     await flushPromises()
     expect(w.text()).toContain('Its runs created 2 Media records (1 with its file) and 4 Relations, including 1 unfinished document')
     expect(w.text()).toContain('They stay in CollectionSpace')
-    await w.findAll('button').find((b) => b.text() === 'Cancel')!.trigger('click')
+    expect(w.find('#job-a .job-confirm-row').isVisible()).toBe(true)
+    expect(w.find('#job-a .job-confirm-row #job-a-delete-confirm').exists()).toBe(true)
+    await w.find('#job-a-delete-cancel-btn').trigger('click')
     await rowOf(w, 'needs a fix').findAll('button').find((b) => b.text() === 'Fix and reschedule')!.trigger('click')
     await flushPromises()
     expect(calls).toContain('POST /api/jobs/a/fix')
     expect(w.emitted('open')?.[0]).toEqual(['a'])
+    w.unmount()
+  })
+
+  it('shows a job\'s results with the same actions, and goes back to the list', async () => {
+    mockApi()
+    const w = mount(FinishedJobs, {props: {tenant}, global: {stubs: {DocumentThumbnail: true}}})
+    await flushPromises()
+    await w.find('#job-a-view-results-btn').trigger('click')
+    await flushPromises()
+    expect(w.find('#finished-table').exists()).toBe(false)
+    expect(w.find('#results-title').text()).toContain('needs a fix')
+    expect(w.find('#results-outcome').text()).toBe('Needs attention')
+    expect(w.findAll('#results-table tbody tr')).toHaveLength(2)
+    expect(w.find('#job-a-view-results-btn').exists()).toBe(false)
+    expect(w.find('#job-a-fix-btn').text()).toBe('Fix and reschedule')
+    // In the results the confirmation takes the place of the buttons
+    await w.find('#job-a-delete-btn').trigger('click')
+    expect(w.find('#results-actions #job-a-delete-confirm').exists()).toBe(true)
+    expect(w.find('#job-a-fix-btn').exists()).toBe(false)
+    await w.find('#job-a-delete-cancel-btn').trigger('click')
+    await w.find('#results-back-btn').trigger('click')
+    expect(w.find('#finished-table').exists()).toBe(true)
+    w.unmount()
+  })
+
+  it('an expanded job lists its most important documents with what happened', async () => {
+    mockApi()
+    const w = mount(FinishedJobs, {props: {tenant}, global: {stubs: {DocumentThumbnail: true}}})
+    await flushPromises()
+    const toggle = w.find('#job-a-toggle-btn')
+    expect(toggle.attributes('aria-expanded')).toBe('false')
+    await toggle.trigger('click')
+    await flushPromises()
+    expect(toggle.attributes('aria-expanded')).toBe('true')
+    const details = w.find('#job-a-details')
+    expect(details.text()).toContain('Run 1 submitted by jdoe')
+    expect(details.text()).toContain('1-2345.jpg')
+    expect(details.text()).toContain('File too large for CollectionSpace')
+    await w.find('#job-a-all-results-btn').trigger('click')
+    expect(w.find('#results-title').exists()).toBe(true)
+    w.unmount()
+  })
+
+  it('deleting says what stays in CollectionSpace, and the job leaves the list', async () => {
+    mockApi()
+    const w = mount(FinishedJobs, {props: {tenant}})
+    await flushPromises()
+    await w.find('#job-b-delete-btn').trigger('click')
+    await flushPromises()
+    jobs.splice(1, 1)
+    await w.find('#job-b-delete-confirm-btn').trigger('click')
+    await flushPromises()
+    expect(calls).toContain('DELETE /api/jobs/b')
+    expect(w.find('#finished-message').text()).toContain('Deleted “sign-in failed” from the BMU. Records its runs created stay in CollectionSpace')
+    expect(w.find('#job-b').exists()).toBe(false)
+    expect(w.find('.job-confirm-row #job-b-delete-confirm').exists()).toBe(false)
     w.unmount()
   })
 })

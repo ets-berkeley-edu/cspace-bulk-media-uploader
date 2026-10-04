@@ -131,7 +131,7 @@ describe('expanded job documents (design: every table sorts)', () => {
     const JobDetails = (await import('@/components/job/JobDetails.vue')).default
     const mk = (n: number, file: string) => ({n, file, handling: 'link', include: true, checks: [], upload: {s: 'done'}, result: null}) as never
     const w = mount(JobDetails, {props: {job: {id: 'j', name: 'x', status: 'Queued', rowCount: 2} as never, rows: [mk(1, 'b.jpg'), mk(2, 'a.jpg')],
-      tenant, kind: 'queue'}, global: {stubs: {DocumentThumbnail: true, ThumbCell: true}}})
+      tenant, kind: 'queue'}, global: {stubs: {DocumentThumbnail: true}}})
     const names = () => w.findAll('tbody tr').map((t) => t.findAll('td')[1].text())
     expect(names()).toEqual(['b.jpg', 'a.jpg'])
     await w.find('button[aria-label="Sort by Document"]').trigger('click')

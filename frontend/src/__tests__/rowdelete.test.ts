@@ -183,7 +183,7 @@ describe('the editor deletes documents', () => {
     return calls
   }
   const editor = async () => {
-    const w = mount(JobEditor, {props: {me, jobId: 'j1'}, global: {stubs: {DocumentThumbnail: true, ThumbCell: true}}})
+    const w = mount(JobEditor, {props: {me, jobId: 'j1'}, global: {stubs: {DocumentThumbnail: true}}})
     await flushPromises()
     return w
   }

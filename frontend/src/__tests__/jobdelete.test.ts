@@ -4,6 +4,7 @@ import {resolve} from 'node:path'
 import {describe, expect, it} from 'vitest'
 import {mount} from '@vue/test-utils'
 import type {Job} from '../types'
+import FinishedJobActions from '@/components/job/FinishedJobActions.vue'
 import JobActions from '@/components/job/JobActions.vue'
 
 const job = (p: Partial<Job> = {}) => ({id: 'j1', name: 'Spring batch', status: 'Draft', createdBy: 'jlee', rowCount: 1, run: 0, ...p}) as Job
@@ -35,8 +36,17 @@ describe('a job\'s Delete button', () => {
   })
 
   it('Finished jobs uses it in the list and in the results view', () => {
-    const src = readFileSync(resolve(__dirname, '../components/FinishedJobs.vue'), 'utf8')
-    expect(src.match(/class="job-del"/g)).toHaveLength(2)
-    expect(src).not.toMatch(/>Delete<\/button>/)
+    const finished = job({status: 'NeedsAttention', run: 1})
+    for (const inResults of [false, true]) {
+      const w = mount(FinishedJobActions, {props: {job: finished, fixLabel: 'Reschedule', inResults}})
+      const b = del(w)
+      expect(b.find('svg').exists()).toBe(true)
+      expect(b.attributes('aria-label')).toBe('Delete')
+      expect(b.attributes('id')).toBe('job-j1-delete-btn')
+      expect(w.find('#job-j1-view-results-btn').exists()).toBe(!inResults)
+    }
+    // Both places use the one component
+    const src = readFileSync(resolve(__dirname, '../components/job/FinishedJobs.vue'), 'utf8')
+    expect(src.match(/<FinishedJobActions/g)).toHaveLength(2)
   })
 })

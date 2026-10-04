@@ -3464,9 +3464,10 @@ function errorBox(key, id, detail) {
     '<button class="link-btn err-toggle" data-key="' + id + '">' + (open ? "Hide technical details" : "Show technical details") + "</button>" +
     (open ? '<div class="sub" style="font-family:ui-monospace,monospace">' + esc(detail || e.detail) + "</div>" : "") + "</div>";
 }
-function historyActions(j) {
+/* inList: the delete confirmation is shown in a full-width row under the job (confirmRow), as in Drafts and Job queue. */
+function historyActions(j, inList) {
   if (confirmDeleteId === j.id)
-    return deleteConfirmHtml(j);
+    return inList ? "" : deleteConfirmHtml(j);
   var html = '<button class="h-results" data-id="' + j.id + '">View results</button>';
   if (j.status !== "Completed" && !canEdit()) html += '<button class="q-edit" data-id="' + j.id + '" disabled title="' + esc(NO_EDIT_WHY) + '">' + (needsFix(j) ? "Fix and reschedule" : "Reschedule") + '</button><button class="q-del" data-id="' + j.id + '" disabled title="' + esc(NO_EDIT_WHY) + '">' + JOB_DEL_INNER + '</button>';
   else if (j.status !== "Completed") html += '<button class="q-edit" data-id="' + j.id + '" title="' + (needsFix(j) ? "Opens the job in Drafts to fix the documents that need it, then submit it again" : "Nothing needs changing; opens the job in Drafts so you can submit it again") + '">' + (needsFix(j) ? "Fix and reschedule" : "Reschedule") + '</button><button class="q-del" data-id="' + j.id + '" title="Delete job">' + JOB_DEL_INNER + '</button>';
@@ -3490,7 +3491,7 @@ function renderHistory() {
     }).forEach(function (j) {
       html += '<tr class="job-row' + (openJobs[j.id] ? " open" : "") + '"><td>' + jobToggle(j) + '</td><td class="job-name"><span class="nm">' + esc(j.name) + "</span>" + (j.run > 1 ? ' <span class="sub">(run ' + j.run + ")</span>" : "") + "</td>" +
         '<td title="' + esc(j.jobError ? ERRORS[j.jobError].title : "") + '">' + outcomeBadge(j) + "</td><td>" + esc(countsText(j)) +
-        '</td><td title="run by ' + esc(j.runBy) + '">' + esc(j.finishedAt) + '<div class="sub">by ' + esc(j.runBy || j.submittedBy || "—") + "</div></td>" + '<td><div class="actions">' + historyActions(j) + "</div></td></tr>" + jobDetailRow(j, "history", 6);
+        '</td><td title="run by ' + esc(j.runBy) + '">' + esc(j.finishedAt) + '<div class="sub">by ' + esc(j.runBy || j.submittedBy || "—") + "</div></td>" + '<td><div class="actions">' + historyActions(j, true) + "</div></td></tr>" + confirmRow(j, 6) + jobDetailRow(j, "history", 6);
     });
     html += "</tbody></table></div>";
   }

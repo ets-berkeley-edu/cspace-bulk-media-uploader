@@ -1,10 +1,10 @@
 import {describe, expect, it} from 'vitest'
 import {flushPromises, mount} from '@vue/test-utils'
-import PagerBar from '../components/PagerBar.vue'
-import SortTh from '../components/SortTh.vue'
-import JobResults from '../components/JobResults.vue'
 import {cycleSort, tableState, tableView} from '../lib/table'
 import type {Job, Row, TenantInfo} from '../types'
+import JobResults from '@/components/job/JobResults.vue'
+import Pagination from '@/components/util/Pagination.vue'
+import SortableColumnHeader from '@/components/util/SortableColumnHeader.vue'
 
 const items = Array.from({length: 60}, (_, i) => ({id: i, name: `doc ${i % 7}`, odd: i % 2 === 1}))
 const keys = {name: (x: (typeof items)[number]) => x.name, id: (x: (typeof items)[number]) => x.id}
@@ -47,14 +47,14 @@ describe('paging, sorting and filtering (design: Large jobs)', () => {
 
   it('the pager and sortable headings change the table state', async () => {
     const st = tableState()
-    const p = mount(PagerBar, {props: {state: st, total: 60, of: 80, pages: 3, start: 0, noun: 'documents', filters: [['all', 'All'], ['odd', 'Odd']]}})
+    const p = mount(Pagination, {props: {state: st, total: 60, of: 80, pages: 3, start: 0, noun: 'documents', filters: [['all', 'All'], ['odd', 'Odd']]}})
     expect(p.text()).toContain('1–25 of 60 documents (filtered from 80)')
     await p.find('button[aria-label="Next page"]').trigger('click')
     expect(st.page).toBe(2)
     await p.find('select[aria-label="Documents per page"]').setValue('50')
     expect(st.size).toBe(50)
     expect(st.page).toBe(1)
-    const h = mount({components: {SortTh}, template: '<table><tr><SortTh :state=\'st\' sort-key=\'name\' label=\'Document\'/></tr></table>', data: () => ({st})})
+    const h = mount({components: {SortableColumnHeader}, template: '<table><tr><SortableColumnHeader :state=\'st\' sort-key=\'name\' label=\'Document\'/></tr></table>', data: () => ({st})})
     await h.find('button').trigger('click')
     expect(st.sort).toBe('name')
     expect(h.find('th').attributes('aria-sort')).toBe('ascending')
@@ -68,7 +68,7 @@ describe('results view pages its documents', () => {
   it('shows 25 per page and sorts by result', async () => {
     const w = mount(JobResults, {props: {job: {id: 'j', run: 1} as Job, rows, runs: [], tenant}})
     expect(w.findAll('tbody tr')).toHaveLength(25)
-    await w.findAll('.sort-btn').find((b) => b.text().startsWith('Result'))!.trigger('click')
+    await w.findAll('.sort-col-btn').find((b) => b.text().startsWith('Result'))!.trigger('click')
     await flushPromises()
     expect(w.find('tbody tr').text()).toContain('Partial')
     await w.findAll('button[aria-label="Next page"]')[0].trigger('click')
