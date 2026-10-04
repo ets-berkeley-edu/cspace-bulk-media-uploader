@@ -173,7 +173,15 @@
             variant="outlined"
             @click="askDelete"
           >
-            Delete selected
+            <v-progress-circular
+              v-if="deleting"
+              aria-hidden="true"
+              class="mr-2"
+              indeterminate
+              size="14"
+              width="2"
+            />
+            {{ deleting ? 'Deleting…' : 'Delete selected' }}
           </v-btn>
           <v-alert
             v-else
@@ -251,6 +259,11 @@ import {putFocusNextTick} from '@/lib/utils'
 const props = defineProps({
   busy: {
     required: true,
+    type: Boolean
+  },
+  // Delete selected was sent and the answer hasn't come back yet.
+  deleting: {
+    required: false,
     type: Boolean
   },
   groupOn: {

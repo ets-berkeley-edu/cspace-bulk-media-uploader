@@ -247,7 +247,9 @@ The conversion goes screen by screen. Done so far: sign-in (`views/Login.vue`), 
 (`views/BaseView.vue`): the app bar with the user menu (Dark or Light mode, Sign out), and the four tabs, each now a
 page with its own address (`/job`, `/drafts`, `/queue`, `/finished`; `src/router.ts`, guards in `src/auth.ts`).
 What the tabs share about the job being worked on is in `src/stores/job-edit-session.ts`. Create / edit job stays
-alive behind the other tabs, so its uploads go on.
+alive behind the other tabs, so its uploads go on. The draft open there is part of the address (`/job/<job id>`), so a
+reload, a bookmark or Back reopens it; `/job` alone is a new, empty job. The store's `jobPath` is that address, and
+`views/EditJob.vue` keeps the address and the open draft in agreement.
 
 Create / edit job is converted too (`views/EditJob.vue`, `components/job/`): `JobEditor.vue`, one `DocumentRow.vue`
 per document, `BulkPanel.vue`, and shared pieces in `components/util/` (`AuthorityInput`, `DateInput`,

@@ -144,12 +144,13 @@ const router = useRouter()
 const session = useJobEditSessionStore()
 const theme = useTheme()
 
-const tabs = [
-  {id: 'job', title: 'Create / edit job', path: '/job'},
+// Create / edit job's tab leads back to the draft that is open there.
+const tabs = computed(() => [
+  {id: 'job', title: 'Create / edit job', path: session.jobPath},
   {id: 'drafts', title: 'Drafts', path: '/drafts'},
   {id: 'queue', title: 'Job queue', path: '/queue'},
   {id: 'finished', title: 'Finished jobs', path: '/finished'}
-]
+])
 
 // Without create and update on Media the user can view jobs but not create or edit them (design: Permissions in the UI).
 const editWhy = computed(() => editBlocked(currentUser.perms))

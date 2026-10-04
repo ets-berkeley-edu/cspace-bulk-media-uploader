@@ -241,7 +241,7 @@ describe('the job being worked on, across the tabs', () => {
     const rowOf = (name: string) => w.findAll('tbody tr').find(r => r.text().includes(name))!
     await rowOf('My draft').findAll('button').find(b => b.text() === 'Continue editing')!.trigger('click')
     await settle()
-    expect(router.currentRoute.value.path).toBe('/job')
+    expect(router.currentRoute.value.path).toBe('/job/d1')
     expect(w.find('.editor-stub').text()).toBe('editing d1')
     await router.push('/drafts')
     await settle()
@@ -303,6 +303,75 @@ describe('the job being worked on, across the tabs', () => {
     }
     expect(await run({kind: 'paused'}, false)).toContain('The queue is paused, so it waits until a BMU scheduler resumes it.')
     expect(await run({at: Date.now() / 1000, ahead: 0}, true)).toContain('Development setting: every moment counts as run time, so it starts now.')
+  })
+
+  it('the open draft is in the address, so a reload or a bookmark reopens it (with the real editor)', async () => {
+    stubApi(routes)
+    const w = await mountApp('/job/d1', {ThumbCell: true, DocumentThumbnail: true})
+    expect(router.currentRoute.value.path).toBe('/job/d1')
+    expect(useJobEditSessionStore().jobId).toBe('d1')
+    expect((w.find('#job-name').element as HTMLInputElement).value).toBe('My draft')
+    expect(w.text()).toContain('15-1234_a.jpg')
+    expect(calls.some(c => c.url === '/api/jobs/d1' && c.method === 'GET')).toBe(true)
+    w.unmount()
+  })
+
+  it('the tab leads back to the open draft, and an address without it doesn\'t close it', async () => {
+    stubApi(routes)
+    const w = await mountApp('/job/d1', {ThumbCell: true, JobEditor: EditorStub})
+    expect(w.find('.editor-stub').text()).toBe('editing d1')
+    await router.push('/drafts')
+    await settle()
+    expect(tabOf(w, 'Create / edit job').attributes('href')).toBe('/job/d1')
+    await router.push('/job')
+    await settle()
+    expect(router.currentRoute.value.path).toBe('/job/d1')
+    expect(w.find('.editor-stub').text()).toBe('editing d1')
+    expect(calls.some(c => c.url.endsWith('/close'))).toBe(false)
+    w.unmount()
+  })
+
+  it('an address that names another draft opens it and leaves the one that was open', async () => {
+    stubApi(routes)
+    const w = await mountApp('/job/d1', {ThumbCell: true, JobEditor: EditorStub})
+    await router.push('/job/d2')
+    await settle()
+    expect(w.find('.editor-stub').text()).toBe('editing d2')
+    expect(calls.some(c => c.url === '/api/jobs/d1/close' && c.method === 'POST')).toBe(true)
+    w.unmount()
+  })
+
+  it('a job created in the editor gets its address, without a new entry in the browser\'s history', async () => {
+    stubApi()
+    const Editor = defineComponent({emits: ['opened'], template: '<button class="fake-create" @click="$emit(\'opened\', \'n7\')">create</button>'})
+    const w = await mountApp('/job', {JobEditor: Editor, ThumbCell: true})
+    const replace = vi.spyOn(router, 'replace')
+    await w.find('.fake-create').trigger('click')
+    await settle()
+    expect(router.currentRoute.value.path).toBe('/job/n7')
+    expect(replace).toHaveBeenCalledWith('/job/n7')
+    expect(useJobEditSessionStore().jobId).toBe('n7')
+    w.unmount()
+  })
+
+  it('an address whose job isn\'t there says so and starts a new job', async () => {
+    stubApi(url => (url.endsWith('/api/jobs/gone') ? {status: 404, body: {detail: 'No such job'}} : undefined))
+    const w = await mountApp('/job/gone', {ThumbCell: true, DocumentThumbnail: true})
+    expect(router.currentRoute.value.path).toBe('/job')
+    expect(useJobEditSessionStore().jobId).toBeNull()
+    expect(w.find('#notice').text()).toContain('The job at that address isn\'t there')
+    expect((w.find('#job-name').element as HTMLInputElement).value).toBe('')
+    w.unmount()
+  })
+
+  it('without Media permissions, an address with a draft still only explains', async () => {
+    signedIn = {...me, perms: {...perms, media: false}}
+    stubApi(routes)
+    const w = await mountApp('/job/d1', {ThumbCell: true})
+    expect(router.currentRoute.value.path).toBe('/job')
+    expect(w.find('#edit-blocked').exists()).toBe(true)
+    expect(calls.some(c => c.url.endsWith('/open'))).toBe(false)
+    w.unmount()
   })
 
   it('New job leaves the open draft, so others can edit it', async () => {

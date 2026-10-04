@@ -1,6 +1,6 @@
 <template>
   <tbody :id="`document-${row.n}`" class="document">
-    <tr class="document-row" :class="{'row-excluded': !row.include}">
+    <tr :aria-busy="deleting" class="document-row" :class="{'row-deleting': deleting, 'row-excluded': !row.include}">
       <td class="thumb-col">
         <DocumentThumbnail :job-id="jobId" :preview="preview" :row="row" />
       </td>
@@ -207,7 +207,7 @@
             class="row-del"
             :color="isConfirmingDelete ? 'error' : undefined"
             density="comfortable"
-            :disabled="!deletable"
+            :disabled="!deletable || deleting"
             :icon="mdiTrashCanOutline"
             size="small"
             :title="deleteTitle"
@@ -552,6 +552,11 @@ const props = defineProps({
     required: false,
     type: Boolean
   },
+  // Its deletion was sent and the answer hasn't come back yet.
+  deleting: {
+    required: false,
+    type: Boolean
+  },
   expanded: {
     required: true,
     type: Boolean
@@ -712,6 +717,9 @@ const status = computed(() => {
     const state = props.row.result?.state ?? 'Not started'
     return {text: state, cls: RUN_BADGE[state] ?? 'b-muted', spin: state === 'In progress'}
   }
+  if (props.deleting) {
+    return {text: 'Deleting…', cls: 'b-muted', spin: true}
+  }
   return stalled.value && props.row.include ? {text: 'Upload not finished', cls: 'b-danger'} : rowStatus(props.row, props.tenant, props.checking)
 })
 const hasWarnings = computed(() => props.row.include && worstLevel(props.row) === 'warn')
@@ -747,6 +755,9 @@ const text = (field: keyof Row, event: Event) => {
 
 <style scoped>
 .document-row.row-excluded > td:not(.keep) {
+  opacity: 0.5;
+}
+.document-row.row-deleting > td {
   opacity: 0.5;
 }
 .thumb-col {

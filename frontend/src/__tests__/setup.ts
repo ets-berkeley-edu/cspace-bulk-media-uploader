@@ -6,6 +6,8 @@
 import axios, {AxiosError} from 'axios'
 import type {AxiosResponse, InternalAxiosRequestConfig} from 'axios'
 import {config} from '@vue/test-utils'
+import {createPinia, setActivePinia} from 'pinia'
+import {beforeEach} from 'vitest'
 import {initializeAxios} from '@/lib/axios-utils'
 import vuetify from '@/plugins/vuetify'
 
@@ -33,5 +35,7 @@ initializeAxios(axios)
 
 // Every component under test may use Vuetify's components.
 config.global.plugins = [vuetify]
+// A component mounted on its own still finds the stores (the screen reader's alerts are in one).
+beforeEach(() => setActivePinia(createPinia()))
 // v-lazy draws its content when it scrolls into view. A test has no view, and reads the page at once: draw it at once.
 config.global.stubs = {VLazy: {template: '<div><slot /></div>'}}
