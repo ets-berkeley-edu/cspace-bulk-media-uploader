@@ -95,7 +95,7 @@ describe('Job queue (design: The job queue)', () => {
     await flushPromises()
     await rowOf(w, 'second queued').find('button[aria-label="Move second queued up"]').trigger('click')
     await flushPromises()
-    expect(calls.find((c) => c.url.endsWith('/q2/move'))?.body).toBe(JSON.stringify({toIndex: 0}))
+    expect(calls.find((c) => c.url.endsWith('/q2/move'))?.body).toBe(JSON.stringify({toIndex: 0, confirm: false}))
     await btn(rowOf(w, 'first queued'), 'Edit')!.trigger('click')
     expect(w.text()).toContain('deletes its saved sign-in')
     await btn(rowOf(w, 'running one'), 'Cancel run')!.trigger('click')
@@ -130,6 +130,123 @@ describe('Job queue (design: The job queue)', () => {
     expect(w.text()).toContain('Sorted view. The queue still runs in its own order')
     expect(up().attributes('disabled')).toBeDefined()
     w.unmount()
+  })
+})
+
+describe('Job queue: jobs that collide (design: Jobs that collide in the queue)', () => {
+  const problem = {job: 'q2', name: 'second queued', n: 1, file: '20-0501.jpg', other: 'q3', otherName: 'third queued', object: '20-0501'}
+  const wouldFail = {status: 409, body: {detail: {code: 'would_fail', problems: [problem],
+    message: 'This would make 1 document fail when the queue runs: “20-0501.jpg” in “second queued”: “third queued” would create object 20-0501 first.'}}}
+  const noPlan = {problems: [], order: [], moves: [], remaining: [], changes: false}
+
+  it('asks before a move that would make a document fail; Cancel changes nothing, going ahead sends it confirmed', async () => {
+    let confirmed = false
+    mockApi({}, (url, method) => {
+      if (url.endsWith('/q3/move') && method === 'POST') {
+        return confirmed ? {status: 200, body: {jobs: []}} : wouldFail
+      }
+      return url.endsWith('/api/queue/collisions') ? {status: 200, body: confirmed ? {...noPlan, problems: [problem]} : noPlan} : undefined
+    })
+    const w = mount(QueueList, {props: scheduler})
+    await flushPromises()
+    await w.find('#job-q3-move-up-btn').trigger('click')
+    await flushPromises()
+    const ask = w.find('#job-q3 .job-confirm-row #job-q3-order-confirm')
+    expect(ask.text()).toContain('This would make 1 document fail when the queue runs')
+    expect(ask.text()).toContain('marked “needs fixing”')
+    expect(w.find('#queue-error').exists()).toBe(false)
+    await w.find('#job-q3-order-cancel-btn').trigger('click')
+    expect(w.find('#job-q3-order-confirm').exists()).toBe(false)
+    expect(calls.filter((c) => c.url.endsWith('/q3/move'))).toHaveLength(1)
+
+    await w.find('#job-q3-move-up-btn').trigger('click')
+    await flushPromises()
+    confirmed = true
+    const checksBefore = calls.filter((c) => c.url.endsWith('/check')).length
+    expect(w.find('#job-q3-order-confirm-btn').text()).toBe('Move anyway')
+    await w.find('#job-q3-order-confirm-btn').trigger('click')
+    await flushPromises()
+    expect(JSON.parse(calls.filter((c) => c.url.endsWith('/q3/move')).pop()!.body!)).toEqual({toIndex: 1, confirm: true})
+    expect(w.find('#job-q3-order-confirm').exists()).toBe(false)
+    // the checks are run again at once, and the page says what would now fail
+    expect(calls.filter((c) => c.url.endsWith('/check')).length).toBeGreaterThan(checksBefore)
+    expect(w.find('#queue-collisions-summary').text()).toBe('1 document would fail in this order, because a job that runs first creates its object:')
+    expect(w.find('#queue-collisions').text()).toContain('“20-0501.jpg” in “second queued”: “third queued” would create object 20-0501 first')
+    w.unmount()
+  })
+
+  it('Run now and Hold ask the same way, with their own button', async () => {
+    mockApi({}, (url) => (url.endsWith('/run-now') || url.endsWith('/hold') ? wouldFail : undefined))
+    const w = mount(QueueList, {props: scheduler})
+    await flushPromises()
+    await btn(rowOf(w, 'second queued'), 'Run now')!.trigger('click')
+    await flushPromises()
+    expect(w.find('#job-q2-order-confirm-btn').text()).toBe('Run now anyway')
+    await btn(rowOf(w, 'second queued'), 'Hold')!.trigger('click')
+    await flushPromises()
+    expect(w.find('#job-q2-order-confirm-btn').text()).toBe('Hold anyway')
+    w.unmount()
+  })
+
+  it('a scheduler reorders the queue to avoid failures, after seeing what will move', async () => {
+    let plan = {problems: [problem], order: ['q1', 'q2', 'q3'], moves: ['“second queued” ahead of “third queued”'], remaining: [] as string[], changes: true}
+    mockApi({}, (url, method) => {
+      if (url.endsWith('/api/queue/reorder-to-avoid-failures') && method === 'POST') {
+        plan = {...noPlan, order: ['q1', 'q2', 'q3']}
+        return {status: 200, body: plan}
+      }
+      return url.endsWith('/api/queue/collisions') ? {status: 200, body: plan} : undefined
+    })
+    const w = mount(QueueList, {props: scheduler})
+    await flushPromises()
+    expect(w.find('#queue-collisions').exists()).toBe(true)
+    await w.find('#queue-reorder-btn').trigger('click')
+    expect(w.find('#queue-reorder-confirm').text()).toContain('This moves “second queued” ahead of “third queued”. Every other job keeps its place')
+    expect(calls.some((c) => c.url.endsWith('/reorder-to-avoid-failures'))).toBe(false)
+    await w.find('#queue-reorder-confirm-btn').trigger('click')
+    await flushPromises()
+    expect(calls.filter((c) => c.url.endsWith('/reorder-to-avoid-failures') && c.method === 'POST')).toHaveLength(1)
+    expect(w.find('#queue-collisions').exists()).toBe(false)
+    expect(w.find('#queue-message').text()).toBe('Reordered the queue to avoid failures.')
+    w.unmount()
+  })
+
+  it('someone who isn\'t a scheduler sees what would fail, without the button; and what a reorder can\'t fix is explained', async () => {
+    const remaining = ['“20-0501.jpg” in “second queued”: “third queued” would create object 20-0501 first (“third queued” has Run now, so it runs first whatever its place; undo Run now to change that).']
+    mockApi({}, (url) => (url.endsWith('/api/queue/collisions')
+      ? {status: 200, body: {problems: [problem], order: [], moves: [], remaining, changes: false}} : undefined))
+    const w = mount(QueueList, {props: viewer})
+    await flushPromises()
+    expect(w.find('#queue-collisions').exists()).toBe(true)
+    expect(w.find('#queue-reorder-btn').exists()).toBe(false)
+    expect(w.find('#queue-collisions-remaining').text()).toContain('Reordering the queue can’t fix this:')
+    expect(w.find('#queue-collisions-remaining').text()).toContain('has Run now')
+    w.unmount()
+    // a reorder would help, but only a scheduler can do it
+    mockApi({}, (url) => (url.endsWith('/api/queue/collisions')
+      ? {status: 200, body: {problems: [problem], order: [], moves: ['“a” ahead of “b”'], remaining: [], changes: true}} : undefined))
+    const v = mount(QueueList, {props: viewer})
+    await flushPromises()
+    expect(v.find('#queue-reorder-why').text()).toBe('A BMU scheduler can reorder the queue to avoid this.')
+    v.unmount()
+  })
+
+  it('runs the checks again when someone else changes the order', async () => {
+    vi.useFakeTimers()
+    let list: Record<string, unknown>[] = jobs
+    mockApi({}, (url) => (url.endsWith('/api/jobs') ? {status: 200, body: {jobs: list}} : undefined))
+    const w = mount(QueueList, {props: viewer})
+    await flushPromises()
+    const count = () => calls.filter((c) => c.url.endsWith('/check')).length
+    const first = count()
+    await vi.advanceTimersByTimeAsync(4100)
+    expect(count()).toBe(first) // nothing changed: no new checks
+    list = jobs.map((j) => (j.id === 'q3' ? {...j, queuePos: 0} : j))
+    await vi.advanceTimersByTimeAsync(2100)
+    await flushPromises()
+    expect(count()).toBeGreaterThan(first)
+    w.unmount()
+    vi.useRealTimers()
   })
 })
 
@@ -267,15 +384,15 @@ describe('Job queue: scheduling (design: Job scheduling; UI mockup scheduleBanne
     await flushPromises()
     await btn(rowOf(w, 'first queued'), 'Undo Run now')!.trigger('click')
     await flushPromises()
-    expect(calls.find((c) => c.url.endsWith('/q1/run-now'))?.body).toBe(JSON.stringify({on: false}))
+    expect(calls.find((c) => c.url.endsWith('/q1/run-now'))?.body).toBe(JSON.stringify({on: false, confirm: false}))
     await btn(rowOf(w, 'second queued'), 'Run now')!.trigger('click')
     await flushPromises()
-    expect(calls.find((c) => c.url.endsWith('/q2/run-now'))?.body).toBe(JSON.stringify({on: true}))
+    expect(calls.find((c) => c.url.endsWith('/q2/run-now'))?.body).toBe(JSON.stringify({on: true, confirm: false}))
     await btn(rowOf(w, 'third queued'), 'Release')!.trigger('click')
     await btn(rowOf(w, 'second queued'), 'Hold')!.trigger('click')
     await flushPromises()
     expect(calls.filter((c) => c.url.includes('/hold')).map((c) => [c.url.split('/')[3], c.body]))
-      .toEqual([['q3', JSON.stringify({on: false})], ['q2', JSON.stringify({on: true})]])
+      .toEqual([['q3', JSON.stringify({on: false, confirm: false})], ['q2', JSON.stringify({on: true, confirm: false})]])
 
     await btn(rowOf(w, 'second queued'), 'Set run time…')!.trigger('click')
     const input = rowOf(w, 'second queued').find('input[type="datetime-local"]')
@@ -285,7 +402,7 @@ describe('Job queue: scheduling (design: Job scheduling; UI mockup scheduleBanne
     await btn(rowOf(w, 'second queued'), 'Save')!.trigger('click')
     await flushPromises()
     // 7:00 PM Pacific on Dec 1 is 03:00 UTC on Dec 2 (PST), whatever the browser's zone
-    expect(calls.find((c) => c.url.endsWith('/q2/run-at'))?.body).toBe(JSON.stringify({at: Date.UTC(2026, 11, 2, 3, 0) / 1000}))
+    expect(calls.find((c) => c.url.endsWith('/q2/run-at'))?.body).toBe(JSON.stringify({at: Date.UTC(2026, 11, 2, 3, 0) / 1000, confirm: false}))
     // a second try the server refuses: its message shows under the field
     await btn(rowOf(w, 'second queued'), 'Set run time…')!.trigger('click')
     await rowOf(w, 'second queued').find('input[type="datetime-local"]').setValue('2027-01-01T19:00')

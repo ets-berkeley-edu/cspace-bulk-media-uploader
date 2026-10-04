@@ -494,3 +494,25 @@ def test_development_mode_runs_queued_jobs_at_once(api, login, add_uploaded, ser
     job = _submit(api, add_uploaded)
     assert job["plan"]["kind"] == "schedule" and job["plan"]["at"] == job["queuedAt"]
     assert worker.tick() is True
+
+
+def test_a_run_time_that_puts_a_job_first_is_warned_about_when_it_makes_a_document_fail(api, login, add_uploaded, services):
+    """Design (Jobs that collide in the queue): the job's own run time decides when it runs, whatever its place."""
+    services.settings.always_run_time = False
+    clock = {"t": LA(*MON, 9, 0)}
+    services.clock = lambda: clock["t"]
+    login()
+    creates = new_job(api, "Creates it")
+    n = add_uploaded(creates, ["20-0501.jpg"])[0]["n"]
+    api.patch(f"/api/jobs/{creates}/rows/{n}", json={"handling": "create"})
+    assert api.post(f"/api/jobs/{creates}/schedule").status_code == 200
+    links = new_job(api, "Links or creates")
+    n = add_uploaded(links, ["20-0501_b.jpg"])[0]["n"]
+    api.patch(f"/api/jobs/{links}/rows/{n}", json={"handling": "linkorcreate"})
+    assert api.post(f"/api/jobs/{links}/schedule").status_code == 200
+    r = api.post(f"/api/jobs/{links}/run-at", json={"at": LA(*MON, 12, 0)})  # before tonight's 7:00 PM start
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "would_fail"
+    assert api.post(f"/api/jobs/{links}/run-at", json={"at": LA(*MON, 21, 0)}).status_code == 200  # after it: fine
+    assert api.post(f"/api/jobs/{links}/run-at", json={"at": LA(*MON, 12, 0), "confirm": True}).status_code == 200
+    plan = api.get("/api/queue/collisions").json()
+    assert "“Links or creates” has its own run time" in plan["remaining"][0] and plan["changes"] is False

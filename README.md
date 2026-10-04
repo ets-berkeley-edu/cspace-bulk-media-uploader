@@ -34,6 +34,18 @@ deployment is built (`deploy/README.md`); what it leaves for later is listed the
   type still exists (a renamed term is updated to its current name). Protected files (Objects the tenant's rules
   mark sensitive) get no stored thumbnail and a "don't publish" default; the Public portal column shows what the
   public will see.
+- **Jobs that collide in the queue:** a job that runs first can change CollectionSpace so that a later job's
+  document fails. Each job is also checked against the jobs ahead of it in the queue (a draft against every queued
+  and running job), without asking CollectionSpace. "Must fix": a "Create new object + link" document whose Object an
+  earlier job creates first; the message names that job and offers "Link to object (create if missing)". "Warning": a
+  document with the same identification number as one in an earlier job (both Media records would be created). The
+  other order, "Create new object + link" ahead of "Link to object (create if missing)", works and is allowed.
+  **Changing the order:** before a scheduler's move, Run now, Hold or run time takes effect, the BMU works out the new
+  order; if it would make a document fail, it says which and asks ("Move anyway" or Cancel). If they go ahead, the
+  job is marked "needs fixing" at once in "Checks now", for everyone looking at the queue; it still runs, and the
+  worker fails that document before creating anything for it. **Reorder to avoid failures** (schedulers) puts the
+  queue in an order where nothing fails, moving as few jobs as possible, after showing what will move. It changes
+  places only: when a Run now, a run time or a hold decides the order, or no order works, it says so instead.
 - **Drafts:** every change is saved as it's made. Anyone in the tenant can open a draft, one person at a time,
   with take-over. Drafts expire 30 days after they were last saved (7 if a document is a protected file).
 - **Submit job** (only when nothing needs fixing) checks the whole job again with fresh permissions and adds it

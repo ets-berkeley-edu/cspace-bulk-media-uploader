@@ -1,6 +1,6 @@
 import axios from 'axios'
 import {ApiError} from '@/lib/axios-utils'
-import type {Check, Created, Failure, Job, Row, RowChange, Run, Schedule, Term} from '@/types'
+import type {Check, Created, Failure, Job, QueuePlan, Row, RowChange, Run, Schedule, Term} from '@/types'
 
 /**
  * JSON request to the BMU API, through axios: X-BMU, and what a failed request rejects with, are set up once in
@@ -44,7 +44,8 @@ export const api = {
     request<Job>('POST', `/api/jobs/${id}/open`, takeOverSince !== undefined ? {takeOverSince} : {}),
   closeJob: (id: string) => request('POST', `/api/jobs/${id}/close`),
   /** The job queue: move a queued job (0 = next to run), take it back to Drafts to edit, cancel a run. */
-  moveJob: (id: string, toIndex: number) => request<{ jobs: Job[] }>('POST', `/api/jobs/${id}/move`, {toIndex}),
+  /** confirm: go ahead although the new order makes a document fail (the API answers 409 would_fail without it). */
+  moveJob: (id: string, toIndex: number, confirm = false) => request<{ jobs: Job[] }>('POST', `/api/jobs/${id}/move`, {toIndex, confirm}),
   editQueued: (id: string) => request<Job>('POST', `/api/jobs/${id}/edit`),
   cancelRun: (id: string) => request<Job>('POST', `/api/jobs/${id}/cancel`),
   saveDraft: (id: string) => request<Job>('POST', `/api/jobs/${id}/save`),
@@ -75,9 +76,13 @@ export const api = {
   putSchedule: (s: { days: number[]; start: string; end: string }) => request<Schedule>('PUT', '/api/schedule', s),
   pauseQueue: (reason: string) => request<Schedule>('POST', '/api/schedule/pause', {reason}),
   resumeQueue: () => request<Schedule>('POST', '/api/schedule/resume'),
-  runNow: (id: string, on: boolean) => request<{ job: Job }>('POST', `/api/jobs/${id}/run-now`, {on}),
-  runAt: (id: string, at: number | null) => request<{ job: Job }>('POST', `/api/jobs/${id}/run-at`, {at}),
-  hold: (id: string, on: boolean) => request<{ job: Job }>('POST', `/api/jobs/${id}/hold`, {on}),
+  runNow: (id: string, on: boolean, confirm = false) => request<{ job: Job }>('POST', `/api/jobs/${id}/run-now`, {on, confirm}),
+  runAt: (id: string, at: number | null, confirm = false) => request<{ job: Job }>('POST', `/api/jobs/${id}/run-at`, {at, confirm}),
+  hold: (id: string, on: boolean, confirm = false) => request<{ job: Job }>('POST', `/api/jobs/${id}/hold`, {on, confirm}),
+  /** The documents that would fail because of a job ahead of theirs, and how a reorder would avoid it. */
+  queueCollisions: (poll = false) => request<QueuePlan>('GET', '/api/queue/collisions', undefined, poll),
+  /** Reorder to avoid failures (BMU schedulers): applies queueCollisions' plan; answers the plan afterwards. */
+  reorderToAvoidFailures: () => request<QueuePlan>('POST', '/api/queue/reorder-to-avoid-failures'),
   /** CollectionSpace's date parser (structureddates), for the preview under the Date field. */
   parseDate: (text: string) =>
     request<{ ok: boolean; group: Record<string, string> }>('GET', `/api/dates/parse?text=${encodeURIComponent(text)}`),

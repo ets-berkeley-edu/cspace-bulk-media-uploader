@@ -879,6 +879,85 @@ STEP_TEXT = {"values": "check the document in CollectionSpace", "media": "create
              "addToGroup": "add the object to the job's group"}
 
 
+def _pending(r: dict) -> bool:
+    """A document the next run still works on."""
+    return bool(r.get("include")) and (r.get("result") or {}).get("state") != "Done"
+
+
+def object_plans(tenant: Tenant, rows: list[dict]) -> dict[str, set[str]]:
+    """What a job's documents will do about Objects that don't exist yet, by object number: {"create": the numbers a
+    "create" document makes, "either": the numbers a "find or create" document makes or links to}. A document whose
+    Object already exists, as far as its last check knows, isn't counted: nothing about it depends on other jobs."""
+    out: dict[str, set[str]] = {"create": set(), "either": set()}
+    for r in rows:
+        h = tenant.handling_by_id(r.get("handling") or "")
+        num = (r.get("obj") or "").strip()
+        if not _pending(r) or not h or h.object not in out or not num or object_step_ran(r):
+            continue
+        looked = (r.get("lookups") or {}).get("object") or {}
+        if looked.get("value") == num and looked.get("csids"):
+            continue
+        out[h.object].add(num)
+    return out
+
+
+def collision_checks(tenant: Tenant, rows: list[dict], ahead: list[tuple[dict, list[dict]]]) -> dict[int, list[dict]]:
+    """Design (Jobs that collide in the queue): what the jobs that run before this one will have changed in
+    CollectionSpace by the time it runs. ahead: (job, rows) of each of those jobs, in any order. Returns the extra
+    checks by row number; nothing is asked of CollectionSpace.
+
+    Must fix: a "create" document whose Object an earlier job creates first (its own "create", or "find or
+    create" when the Object doesn't exist yet): this job's check just before the document would find the Object
+    and fail it. The check carries "collides": {job, name, object}, the earlier job and the object number.
+    Warning: a document whose identification number an earlier job's document also has: both Media records are
+    created. A document CollectionSpace already blocks or warns about for the same reason isn't told twice.
+
+    The other order of a "create" and a "find or create" job works (the first creates the Object, the second links
+    to it), so it is allowed; a scheduler who reverses it is warned first, and the job is flagged (app._guard)."""
+    creates: dict[str, tuple[dict, str]] = {}  # object number -> (job, file) of the first job that creates it
+    ids: dict[str, tuple[dict, str]] = {}      # identification number -> the same
+    for job, others in ahead:
+        for o in others:
+            if not _pending(o):
+                continue
+            h = tenant.handling_by_id(o.get("handling") or "")
+            num = (o.get("obj") or "").strip()
+            if h and h.object in ("create", "either") and num and not object_step_ran(o):
+                creates.setdefault(num, (job, o.get("file") or ""))
+            if o.get("idnum") and not media_created(o):
+                ids.setdefault(o["idnum"], (job, o.get("file") or ""))
+    out: dict[int, list[dict]] = {}
+    if not creates and not ids:
+        return out
+    relink = _labels(tenant, ("either",))
+    title = lambda job: job.get("name") or "Untitled job"  # noqa: E731
+    for r in rows:
+        if not _pending(r):
+            continue
+        found: list[dict] = []
+        h = tenant.handling_by_id(r.get("handling") or "")
+        num = (r.get("obj") or "").strip()
+        looked = (r.get("lookups") or {}).get("object") or {}
+        exists_now = looked.get("value") == num and bool(looked.get("csids"))  # then object_checks blocks it already
+        if h and h.object == "create" and num in creates and not object_step_ran(r) and not exists_now:
+            job, file = creates[num]
+            fix = f"To link to that object, choose {relink}; otherwise" if relink else "Wait until that job has run, or"
+            found.append({"level": "block", "collides": {"job": job["id"], "name": title(job), "object": num},
+                          "text": f"Job “{title(job)}”, ahead of this one in the job queue, creates object {num} "
+                          f"({file}). When this job runs the object will exist, and “Create new object + link” only "
+                          f"creates a new object, so this document would fail. {fix} correct the object number."})
+        idn = r.get("idnum") or ""
+        seen = (r.get("lookups") or {}).get("media") or {}
+        in_cspace = seen.get("value") == idn and bool(seen.get("csids"))  # then check_rows warns about it already
+        if idn in ids and not media_created(r) and not in_cspace:
+            job, file = ids[idn]
+            found.append({"level": "warn", "text": f"Job “{title(job)}”, ahead of this one in the job queue, also has a document "
+                          f"with ID {idn} ({file}). Both Media records would be created."})
+        if found:
+            out[r["n"]] = found
+    return out
+
+
 def worst(row: dict) -> str:
     levels = {c["level"] for c in row.get("checks", [])}
     return "block" if "block" in levels else ("warn" if "warn" in levels else "ok")

@@ -55,6 +55,26 @@ export interface Me {
 }
 
 /** A tenant's run times (design: Job scheduling). days: ISO weekdays (1 = Mon … 7 = Sun); times "HH:MM", Pacific. */
+/** A document of a queued job that would fail because a job ahead of it creates its Object first. */
+export interface QueueProblem {
+  job: string;
+  name: string;
+  n: number;
+  file: string;
+  other: string;
+  otherName: string;
+  object: string;
+}
+
+/** GET /api/queue/collisions: what would fail in the queue's order, and how a reorder would avoid it. */
+export interface QueuePlan {
+  problems: QueueProblem[];
+  order: string[];
+  moves: string[]; // what the reorder would move, e.g. “A” ahead of “B”
+  remaining: string[]; // what a reorder can't fix, with the reason
+  changes: boolean; // whether reordering helps
+}
+
 export interface Schedule {
   days: number[];
   start: string;
