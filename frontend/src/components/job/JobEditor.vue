@@ -252,7 +252,7 @@
       class="my-2"
       density="compact"
       role="status"
-      :type="alertType(message.cls)"
+      :type="message.type"
       variant="tonal"
     >
       {{ message.text }}
@@ -509,7 +509,7 @@ import {readImageInfo} from '@/lib/imageinfo'
 import {portalOf} from '@/lib/portal'
 import {OUTCOME, failureOf, loadFailures} from '@/lib/results'
 import {groupTimestampTitle} from '@/lib/schedule'
-import {alertType, jobCounts, worstLevel} from '@/lib/status'
+import {jobCounts, worstLevel} from '@/lib/status'
 import {editorColumns, tableState, tableView} from '@/lib/table'
 import {alertScreenReader} from '@/lib/utils'
 import {ApiError, api} from '@/api'
@@ -547,7 +547,8 @@ const rows = ref<Row[]>([])
 const name = ref('')
 const expanded = reactive(new Set<number>())
 const previews = reactive(new Map<number, string>())
-const message = ref<{ cls: string; text: string } | null>(null)
+type Message = {type: 'error' | 'warning' | 'info', text: string}
+const message = ref<Message | null>(null)
 const isBusy = ref(false)
 const checking = reactive(new Set<number>()) // rows waiting for a CollectionSpace check
 const deleting = reactive(new Set<number>()) // rows whose deletion was sent; they stay, marked, until the answer
@@ -556,7 +557,7 @@ const selected = reactive(new Set<number>())
 const languages = ref<Option[]>([])
 api.vocabulary('languages')
   .then((r) => { languages.value = r.terms.map((t) => ({value: t.refName, label: t.displayName})) })
-  .catch((e) => { message.value = {cls: 'msg-warn', text: `Couldn't load the languages list: ${(e as Error).message}`} })
+  .catch((e) => { message.value = {type: 'warning', text: `Couldn't load the languages list: ${(e as Error).message}`} })
 const bulkPanel = ref<InstanceType<typeof BulkPanel> | null>(null)
 loadFailures()
 // Paging, sorting and the Show filter (design: User interface, Large jobs).
@@ -700,7 +701,7 @@ async function openForEditing(takeOverSince?: number) {
     isConfirmingTakeOver.value = false
   } catch (e) {
     if (e instanceof ApiError && e.status === 409) await refreshJob()
-    else message.value = {cls: 'msg-block', text: (e as Error).message}
+    else message.value = {type: 'error', text: (e as Error).message}
   }
 }
 
@@ -710,14 +711,14 @@ async function refreshJob() {
 
 /** Show an error; if someone took the draft over, the page becomes a read-only preview (nothing is lost). */
 async function failed(e: unknown) {
-  message.value = {cls: 'msg-block', text: (e as Error).message}
+  message.value = {type: 'error', text: (e as Error).message}
   if (e instanceof ApiError && e.status === 409 && (e.detail as { code?: string } | null)?.code === 'not_editing') await refreshJob()
 }
 
 /** A job that has run becomes Completed as soon as every document is done or excluded (design: Job states). */
 function completedNote() {
   if (job.value?.status === 'Completed') {
-    message.value = {cls: 'msg-info', text: 'Every document is now done or excluded, so the job is Completed. It\'s under Finished jobs and is removed 30 days from now.'}
+    message.value = {type: 'info', text: 'Every document is now done or excluded, so the job is Completed. It\'s under Finished jobs and is removed 30 days from now.'}
     return true
   }
   return false
@@ -744,7 +745,7 @@ async function runChecks(ns: number[], targeted = true) {
     const r = await api.check(job.value.id, targeted ? ns : undefined)
     r.rows.forEach((row) => replace(row))
   } catch (e) {
-    message.value = {cls: 'msg-block', text: (e as Error).message}
+    message.value = {type: 'error', text: (e as Error).message}
   } finally {
     ns.forEach((n) => checking.delete(n))
   }
@@ -757,7 +758,7 @@ function apply(change: RowChange) {
 // A job that isn't there (deleted, expired, or a mistyped address) is reported, so the page can start a new job.
 function loadFailed(e: unknown) {
   if (e instanceof ApiError && e.status === 404) emit('missing')
-  else message.value = {cls: 'msg-block', text: (e as Error).message}
+  else message.value = {type: 'error', text: (e as Error).message}
 }
 watch(() => props.jobId, (id) => (id && id === job.value?.id ? undefined : load(id).catch(loadFailed)), {immediate: true})
 onBeforeUnmount(() => previews.forEach((u) => URL.revokeObjectURL(u)))
@@ -810,7 +811,7 @@ async function addFiles(list: FileList | File[] | null) {
     ...(skipped.length ? [skippedText(skipped.map((f) => f.name), props.me.tenant.fileTypesHint)] : []),
     ...(tooLarge.length ? [tooLargeText(tooLarge.map((f) => f.name), props.me.maxFileBytes!)] : []),
   ]
-  if (notes.length) message.value = {cls: 'msg-warn', text: notes.join(' ')}
+  if (notes.length) message.value = {type: 'warning', text: notes.join(' ')}
   if (!files.length) return
   try {
     const j = await ensureJob()
@@ -843,7 +844,7 @@ async function addFiles(list: FileList | File[] | null) {
 async function replaceFile(row: Row, file: File) {
   if (!job.value) return
   if (!splitSupported([file], props.me.tenant.fileTypes).ok.length) {
-    message.value = {cls: 'msg-warn', text: skippedText([file.name], props.me.tenant.fileTypesHint)}
+    message.value = {type: 'warning', text: skippedText([file.name], props.me.tenant.fileTypesHint)}
     return
   }
   if (tooLargeFor(file)) return
@@ -862,7 +863,7 @@ async function replaceFile(row: Row, file: File) {
 /** A file over the size limit is not sent (design: Browser uploads): say so, and return true. */
 function tooLargeFor(file: File): boolean {
   if (!splitSize([file], props.me.maxFileBytes).tooLarge.length) return false
-  message.value = {cls: 'msg-warn', text: fileTooLargeText(file.name, props.me.maxFileBytes!)}
+  message.value = {type: 'warning', text: fileTooLargeText(file.name, props.me.maxFileBytes!)}
   return true
 }
 
@@ -980,8 +981,8 @@ async function removeMany(targets: number[]) {
       + (created ? ` ${created} couldn't be deleted because ${created === 1 ? 'it' : 'they'} already created records in CollectionSpace.` : '')
       + (other ? ` ${other} ${other === 1 ? 'wasn\'t' : 'weren\'t'} deleted because ${other === 1 ? 'it' : 'they'} changed meanwhile; reload and try again.` : '')
     const done = await removed(r.deleted, r) // the job was deleted, or completed: removed() said so
-    const shown = message.value as { cls: string; text: string } | null
-    if (!done) message.value = {cls: created || other ? 'msg-warn' : 'msg-info', text}
+    const shown = message.value as Message | null
+    if (!done) message.value = {type: created || other ? 'warning' : 'info', text}
     else if (r.jobStatus !== 'Deleted' && shown) message.value = {...shown, text: `${text} ${shown.text}`}
   } catch (e) {
     await failed(e)
@@ -996,7 +997,7 @@ async function removeMany(targets: number[]) {
 async function removed(ns: number[], r: { others: Row[]; jobStatus?: string }): Promise<boolean> {
   stopUploads(r.jobStatus === 'Deleted' ? 'all' : ns)
   if (r.jobStatus === 'Deleted') {
-    message.value = {cls: 'msg-info', text: 'That was the job\'s last document, so the job was deleted.'}
+    message.value = {type: 'info', text: 'That was the job\'s last document, so the job was deleted.'}
     job.value = null
     rows.value = []
     selected.clear()

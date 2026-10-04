@@ -213,7 +213,7 @@
             <td>{{ isLinked(row) ? row.obj || '—' : '—' }}</td>
             <td>{{ row.date || '—' }}</td>
             <td v-if="isRunning">
-              <v-chip :id="`preview-document-${row.n}-run-state`" :color="chipColor(RUN_BADGE[runState(row)] ?? 'b-muted')" size="small">{{ runState(row) }}</v-chip>
+              <v-chip :id="`preview-document-${row.n}-run-state`" :color="chipColor(RUN_TONE[runState(row)] ?? 'neutral')" size="small">{{ runState(row) }}</v-chip>
             </td>
             <td :id="`preview-document-${row.n}-checks`">
               <v-chip v-if="row.result?.state === 'Done'" color="success" size="small">Done in last run</v-chip>
@@ -276,6 +276,7 @@ import DocumentThumbnail from '@/components/util/DocumentThumbnail.vue'
 import Pagination from '@/components/util/Pagination.vue'
 import SortableColumnHeader from '@/components/util/SortableColumnHeader.vue'
 import {formatTime} from '@/lib/files'
+import type {Tone} from '@/lib/status'
 import {checksColor, checksText, chipColor, handlingMix, worstLevel} from '@/lib/status'
 import {tableState, tableView} from '@/lib/table'
 import {ApiError, api} from '@/api'
@@ -321,7 +322,7 @@ const emit = defineEmits<{back: [], open: [id: string, mode: 'edit' | 'preview',
 
 const LEVEL_RANK = {block: 0, warn: 1, ok: 2} as const
 const RUN_RANK: Record<string, number> = {'In progress': 0, Failed: 1, Partial: 1, 'Not started': 2, Done: 3}
-const RUN_BADGE: Record<string, string> = {'In progress': 'b-accent', Done: 'b-ok', Partial: 'b-warn', Failed: 'b-danger', 'Not started': 'b-muted'}
+const RUN_TONE: Record<string, Tone> = {'In progress': 'info', Done: 'success', Partial: 'warning', Failed: 'error', 'Not started': 'neutral'}
 
 const job = ref<Job | null>(null)
 const rows = ref<Row[]>([])

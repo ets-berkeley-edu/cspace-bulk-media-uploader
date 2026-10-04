@@ -5,6 +5,7 @@
 import {ref} from 'vue'
 import {api} from '../api'
 import type {Created, Failure, Handling, Job, ResultCounts, Row, Step} from '../types'
+import type {Tone} from './status'
 
 // ---- the failure catalog, loaded once and shared ----------------------------------------------------
 export const failures = ref<Record<string, Failure>>({})
@@ -34,8 +35,8 @@ export function resultState(r: Row): ResultState {
   return s
 }
 
-export const RESULT_BADGE: Record<ResultState, string> = {
-  Done: 'b-ok', Partial: 'b-warn', Failed: 'b-danger', 'Not started': 'b-accent', 'In progress': 'b-accent', Excluded: 'b-muted',
+export const RESULT_TONE: Record<ResultState, Tone> = {
+  Done: 'success', Partial: 'warning', Failed: 'error', 'Not started': 'info', 'In progress': 'info', Excluded: 'neutral',
 }
 
 export function resultCounts(rows: Row[]): ResultCounts {
@@ -62,11 +63,11 @@ export function countsText(c: ResultCounts | undefined): string {
   return parts.join(' · ') || 'no documents'
 }
 
-export const OUTCOME: Record<string, { text: string; cls: string }> = {
-  Completed: {text: 'Completed', cls: 'b-ok'},
-  NeedsAttention: {text: 'Needs attention', cls: 'b-warn'},
-  Failed: {text: 'Failed', cls: 'b-danger'},
-  Running: {text: 'Running', cls: 'b-accent'},
+export const OUTCOME: Record<string, {text: string, tone: Tone}> = {
+  Completed: {text: 'Completed', tone: 'success'},
+  NeedsAttention: {text: 'Needs attention', tone: 'warning'},
+  Failed: {text: 'Failed', tone: 'error'},
+  Running: {text: 'Running', tone: 'info'},
 }
 
 /** The failure codes recorded on a document's steps (its first error first). */

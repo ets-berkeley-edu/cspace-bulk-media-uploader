@@ -284,7 +284,7 @@ const setConfirming = (id: string, on: boolean) => {
 const nameOf = (job: Job) => job.name || 'Untitled job'
 const ranBy = (job: Job) => job.runBy || job.scheduledBy || '—'
 const outcomeText = (job: Job) => OUTCOME[job.status]?.text ?? job.status
-const outcomeColor = (job: Job) => chipColor(OUTCOME[job.status]?.cls ?? '')
+const outcomeColor = (job: Job) => chipColor(OUTCOME[job.status]?.tone ?? '')
 const runLine = (job: Job) => `Run ${job.run} submitted by ${ranBy(job)} · started ${formatTime(job.startedAt)} · finished ${formatTime(job.finishedAt)}`
   + (job.cancelledBy ? ` · cancelled by ${job.cancelledBy}` : '')
 

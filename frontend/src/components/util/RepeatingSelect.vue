@@ -35,7 +35,7 @@
     <button
       v-if="canAdd && !disabled"
       :id="`${id}-add-btn`"
-      class="link link-btn text-caption"
+      class="link-btn text-caption"
       type="button"
       @click="draft.push('')"
     >

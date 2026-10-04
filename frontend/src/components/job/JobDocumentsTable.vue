@@ -59,7 +59,7 @@
           </td>
           <td>{{ handlingLabel(row) }}</td>
           <td>{{ row.idnum || '—' }}</td>
-          <td><v-chip :color="chipColor(status(row).cls)" size="small">{{ status(row).text }}</v-chip></td>
+          <td><v-chip :color="chipColor(status(row).tone)" size="small">{{ status(row).text }}</v-chip></td>
           <td :class="{'text-medium-emphasis': !issue(row)}">{{ issue(row) || '—' }}</td>
         </tr>
         <tr v-if="!top.length">
@@ -80,7 +80,8 @@ import {mdiLock} from '@mdi/js'
 import type {Job, Row, TenantInfo} from '@/types'
 import DocumentThumbnail from '@/components/util/DocumentThumbnail.vue'
 import SortableColumnHeader from '@/components/util/SortableColumnHeader.vue'
-import {RESULT_BADGE, failureOf, importantRows, resultState, rowCodes} from '@/lib/results'
+import {RESULT_TONE, failureOf, importantRows, resultState, rowCodes} from '@/lib/results'
+import type {Tone} from '@/lib/status'
 import {chipColor, rowStatus, worstLevel} from '@/lib/status'
 import {tableState, tableView} from '@/lib/table'
 
@@ -112,7 +113,7 @@ const props = defineProps({
 const LIMIT = 10
 const LEVEL_RANK = {block: 0, warn: 1, ok: 2} as const
 const RUN_RANK: Record<string, number> = {'In progress': 0, Failed: 1, Partial: 1, 'Not started': 2, Done: 3}
-const RUN_BADGE: Record<string, string> = {'In progress': 'b-accent', Done: 'b-ok', Partial: 'b-warn', Failed: 'b-danger', 'Not started': 'b-muted'}
+const RUN_TONE: Record<string, Tone> = {'In progress': 'info', Done: 'success', Partial: 'warning', Failed: 'error', 'Not started': 'neutral'}
 
 const idPrefix = computed(() => `job-${props.job.id}-documents-`)
 const runView = computed(() => props.kind === 'queue' && props.job.status === 'Running')
@@ -129,14 +130,14 @@ const top = computed<Row[]>(() => {
 
 const handlingLabel = (r: Row) => props.tenant.handling.find(h => h.id === r.handling)?.label ?? r.handling
 
-const status = (r: Row): {text: string, cls: string} => {
+const status = (r: Row): {text: string, tone: Tone} => {
   if (props.kind === 'history') {
     const s = resultState(r)
-    return {text: s, cls: RESULT_BADGE[s]}
+    return {text: s, tone: RESULT_TONE[s]}
   }
   if (runView.value) {
     const s = runState(r)
-    return {text: s, cls: RUN_BADGE[s] ?? 'b-muted'}
+    return {text: s, tone: RUN_TONE[s] ?? 'neutral'}
   }
   return rowStatus(r, props.tenant)
 }

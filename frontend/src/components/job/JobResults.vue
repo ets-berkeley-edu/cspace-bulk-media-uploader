@@ -106,7 +106,7 @@
             <div class="text-caption text-medium-emphasis">{{ handlingLabel(row) }}{{ row.skipLink ? ' · not linked (stopped)' : '' }}</div>
           </td>
           <td>
-            <v-chip :id="`result-${row.n}-state`" :color="chipColor(RESULT_BADGE[resultState(row)])" size="small">{{ resultState(row) }}</v-chip>
+            <v-chip :id="`result-${row.n}-state`" :color="chipColor(RESULT_TONE[resultState(row)])" size="small">{{ resultState(row) }}</v-chip>
           </td>
           <td :id="`result-${row.n}-steps`" class="steps">
             <div
@@ -160,7 +160,7 @@ import FailureAlert from '@/components/util/FailureAlert.vue'
 import Pagination from '@/components/util/Pagination.vue'
 import SortableColumnHeader from '@/components/util/SortableColumnHeader.vue'
 import {formatTime} from '@/lib/files'
-import {OUTCOME, RESULT_BADGE, STEP_MARK, countsText, failureOf, resultCounts, resultState, stepList, stepNote} from '@/lib/results'
+import {OUTCOME, RESULT_TONE, STEP_MARK, countsText, failureOf, resultCounts, resultState, stepList, stepNote} from '@/lib/results'
 import {chipColor} from '@/lib/status'
 import {tableState, tableView} from '@/lib/table'
 
@@ -228,7 +228,7 @@ const view = computed(() => tableView(props.rows, table, {
 
 const handlingLabel = (row: Row) => props.tenant.handling.find(h => h.id === row.handling)?.label ?? row.handling
 const newestFirst = computed(() => [...props.runs].sort((a, b) => b.run - a.run))
-const outcome = (o: string) => OUTCOME[o] ?? {text: o, cls: 'b-muted'}
+const outcome = (o: string) => OUTCOME[o] ?? {text: o, tone: 'neutral'}
 
 /** The documents excluded or deleted before a run. */
 const beforeRun = (run: Run) => [

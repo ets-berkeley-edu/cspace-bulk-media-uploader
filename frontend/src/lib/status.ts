@@ -1,35 +1,38 @@
 import type {Handling, Perms, Row, TenantInfo} from '../types'
 
+/** A status's tone: a Vuetify theme colour, or neutral for the plain grey chip. */
+export type Tone = 'success' | 'warning' | 'error' | 'info' | 'neutral'
+
 export interface Badge {
   text: string;
-  cls: string;
+  tone: Tone;
 }
 
 /** The Status column, as in the design's UI mockup: upload state first, then the row's checks and plan. */
 export function rowStatus(r: Row, tenant: TenantInfo, checking = false): Badge {
   if (r.include && r.result?.state !== 'Done') {
-    if (r.upload.s === 'uploading') return {text: `Uploading ${r.upload.pct ?? 0}%`, cls: 'b-accent'}
-    if (r.upload.s === 'pending') return {text: 'Waiting to upload', cls: 'b-muted'}
-    if (r.upload.s === 'verifying') return {text: 'Verifying…', cls: 'b-accent'}
-    if (r.upload.s === 'failed') return {text: 'Upload failed', cls: 'b-danger'}
+    if (r.upload.s === 'uploading') return {text: `Uploading ${r.upload.pct ?? 0}%`, tone: 'info'}
+    if (r.upload.s === 'pending') return {text: 'Waiting to upload', tone: 'neutral'}
+    if (r.upload.s === 'verifying') return {text: 'Verifying…', tone: 'info'}
+    if (r.upload.s === 'failed') return {text: 'Upload failed', tone: 'error'}
   }
-  if (!r.include) return {text: 'Excluded — ignored', cls: 'b-accent'}
-  if (r.result?.state === 'Done') return {text: 'Done in last run', cls: 'b-ok'}
+  if (!r.include) return {text: 'Excluded — ignored', tone: 'info'}
+  if (r.result?.state === 'Done') return {text: 'Done in last run', tone: 'success'}
   if (r.result?.state === 'Partial') {
-    if (worstLevel(r) === 'block') return {text: 'Needs fixing', cls: 'b-danger'}
-    return {text: checking ? 'Checking…' : 'Partial — rerun finishes it', cls: checking ? 'b-muted' : 'b-warn'}
+    if (worstLevel(r) === 'block') return {text: 'Needs fixing', tone: 'error'}
+    return {text: checking ? 'Checking…' : 'Partial — rerun finishes it', tone: checking ? 'neutral' : 'warning'}
   }
   const needsObject = tenant.handling.find((x) => x.id === r.handling)?.object !== 'none'
-  if (needsObject && !r.parseOk && !r.obj) return {text: 'Fix filename', cls: 'b-danger'}
-  if (worstLevel(r) === 'block') return {text: 'Needs fixing', cls: 'b-danger'}
-  if (checking) return {text: 'Checking…', cls: 'b-muted'}
+  if (needsObject && !r.parseOk && !r.obj) return {text: 'Fix filename', tone: 'error'}
+  if (worstLevel(r) === 'block') return {text: 'Needs fixing', tone: 'error'}
+  if (checking) return {text: 'Checking…', tone: 'neutral'}
   const h = tenant.handling.find((x) => x.id === r.handling)
-  if (!h || h.object === 'none') return {text: 'Not linked', cls: 'b-accent'}
+  if (!h || h.object === 'none') return {text: 'Not linked', tone: 'info'}
   const found = r.lookups?.object?.value === r.obj ? r.lookups.object.csids.length : undefined
   // An existing object blocks "create" (Needs fixing, above); "either" links to it, or creates it when missing
-  if (found === undefined) return {text: 'Not checked yet', cls: 'b-muted'}
-  if (h.object === 'create' || (h.object === 'either' && !found)) return {text: 'Will create object', cls: 'b-accent'}
-  return {text: 'Found — will link', cls: 'b-ok'}
+  if (found === undefined) return {text: 'Not checked yet', tone: 'neutral'}
+  if (h.object === 'create' || (h.object === 'either' && !found)) return {text: 'Will create object', tone: 'info'}
+  return {text: 'Found — will link', tone: 'success'}
 }
 
 export function worstLevel(r: Row): 'block' | 'warn' | 'ok' {
@@ -82,16 +85,15 @@ export function handlingBlocked(h: Handling, perms: Perms): string {
   return ''
 }
 
-/** The Vuetify colour of a status chip, from the badge class that lib/results.ts and lib/schedule.ts give a status. */
-const CHIP_COLOR: Record<string, string | undefined> = {'b-ok': 'success', 'b-warn': 'warning', 'b-danger': 'error', 'b-accent': 'info', 'b-muted': undefined}
-export function chipColor(cls: string): string | undefined {
-  return CHIP_COLOR[cls]
+/** The colour of a status chip, from its tone. */
+export function chipColor(tone: Tone | undefined): string | undefined {
+  return tone && tone !== 'neutral' ? tone : undefined
 }
 
-/** The type of a v-alert, from a message's class or a check's level. */
-const ALERT_TYPE: Record<string, 'error' | 'warning' | 'info'> = {'msg-block': 'error', 'msg-warn': 'warning', 'msg-info': 'info', block: 'error', warn: 'warning', info: 'info'}
-export function alertType(cls: string): 'error' | 'warning' | 'info' {
-  return ALERT_TYPE[cls] ?? 'info'
+/** The type of a v-alert, from a check's level. */
+const ALERT_TYPE: Record<string, 'error' | 'warning' | 'info'> = {block: 'error', warn: 'warning', info: 'info'}
+export function alertType(level: string): 'error' | 'warning' | 'info' {
+  return ALERT_TYPE[level] ?? 'info'
 }
 
 /** A job's checks in a few words: "2 need fixing · 1 warning", or "nothing to fix". */

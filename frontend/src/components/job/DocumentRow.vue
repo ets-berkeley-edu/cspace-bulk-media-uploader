@@ -110,7 +110,7 @@
         >
       </td>
       <td class="py-1">
-        <v-chip :id="`document-${row.n}-status`" :color="chipColor(status.cls)" size="small">
+        <v-chip :id="`document-${row.n}-status`" :color="chipColor(status.tone)" size="small">
           <v-progress-circular
             v-if="'spin' in status && status.spin"
             aria-hidden="true"
@@ -122,7 +122,7 @@
           {{ status.text }}
         </v-chip>
         <v-chip
-          v-if="hasWarnings && !runView && status.cls !== 'b-danger'"
+          v-if="hasWarnings && !runView && status.tone !== 'error'"
           class="font-weight-bold ml-1"
           color="warning"
           size="small"
@@ -538,6 +538,7 @@ import {filenameProblems, idLabel, objectLabel} from '@/lib/filenames'
 import {portalOf} from '@/lib/portal'
 import {PRESETTABLE, isPreset} from '@/lib/presets'
 import {RELINK_OBJECT, STEP_MARK, canReplaceFile, createdSomething, fixFields, mediaCreated, objectStepRan, stepList, stepNote} from '@/lib/results'
+import type {Tone} from '@/lib/status'
 import {alertType, chipColor, handlingBlocked, rowStatus, worstLevel} from '@/lib/status'
 import {editorColumns} from '@/lib/table'
 import {putFocusNextTick} from '@/lib/utils'
@@ -708,19 +709,19 @@ const pickReplacement = (event: Event) => {
   input.value = ''
 }
 
-const RUN_BADGE: Record<string, string> = {'In progress': 'b-accent', Done: 'b-ok', Partial: 'b-warn', Failed: 'b-danger', 'Not started': 'b-muted'}
-const status = computed(() => {
+const RUN_TONE: Record<string, Tone> = {'In progress': 'info', Done: 'success', Partial: 'warning', Failed: 'error', 'Not started': 'neutral'}
+const status = computed((): {text: string, tone: Tone, spin?: boolean} => {
   if (props.runView) {
     if (!props.row.include) {
-      return {text: 'Excluded — ignored', cls: 'b-accent'}
+      return {text: 'Excluded — ignored', tone: 'info'}
     }
     const state = props.row.result?.state ?? 'Not started'
-    return {text: state, cls: RUN_BADGE[state] ?? 'b-muted', spin: state === 'In progress'}
+    return {text: state, tone: RUN_TONE[state] ?? 'neutral', spin: state === 'In progress'}
   }
   if (props.deleting) {
-    return {text: 'Deleting…', cls: 'b-muted', spin: true}
+    return {text: 'Deleting…', tone: 'neutral', spin: true}
   }
-  return stalled.value && props.row.include ? {text: 'Upload not finished', cls: 'b-danger'} : rowStatus(props.row, props.tenant, props.checking)
+  return stalled.value && props.row.include ? {text: 'Upload not finished', tone: 'error'} : rowStatus(props.row, props.tenant, props.checking)
 })
 const hasWarnings = computed(() => props.row.include && worstLevel(props.row) === 'warn')
 const PREFIX: Record<string, string> = {block: 'Must fix: ', warn: 'Warning: ', info: ''}
