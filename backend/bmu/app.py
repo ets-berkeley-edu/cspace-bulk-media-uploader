@@ -301,23 +301,34 @@ DELETE_SKIPPED = {
 }
 
 
-def _delete_one_row(s: "Services", sess: "Session", job: dict, row: dict) -> str:
-    """Delete one document of a draft (design: Deleting a row): its staged file, replacement and thumbnail, and
+def _delete_rows(s: "Services", sess: "Session", job: dict, rows: list[dict]) -> tuple[list[dict], dict[int, str]]:
+    """Delete documents of a draft (design: Deleting a row): each one's staged file, replacement and thumbnail, and
     a "Row deleted" audit entry. Excluded documents can be deleted too; documents that created something in
-    CollectionSpace can't. Returns "" when deleted, else why not ("created", "changed"). The caller records the
-    deletions on the job and rechecks it (_after_rows_deleted)."""
-    job_id, n = job["id"], row["n"]
-    if is_locked(row):
-        return "created"
-    # One conditional write: only if the row is as checked and the job is still this session's draft
-    if not s.storage.delete_row_if_unchanged(job_id, row, sess.key):
-        return "changed"
-    for key in {row.get("s3Key"), row.get("supersededKey"), row.get("thumbKey")} - {None, ""}:
-        s.storage.delete_object(key)  # its staged file, a replacement, and its thumbnail
-    s.storage.drop_fix_original(job_id, n)  # deleting is permanent, even if the fix is abandoned
-    s.storage.audit(sess.tenant, "Row deleted", sess.user, job_id,
-                    f"Deleted document {n} ({row['file']}) from “{job['name'] or 'Untitled job'}”; it had created nothing in CollectionSpace.")
-    return ""
+    CollectionSpace can't. Returns the rows deleted, and for the others why not ({n: "created" | "changed"}). The
+    caller records the deletions on the job and rechecks it (_after_rows_deleted).
+
+    Deleting many at once stays quick: one request per document (the row, the job's count and the audit entry in one
+    transaction), then the files of all of them together (storage.delete_objects)."""
+    job_id, name = job["id"], job["name"] or "Untitled job"
+    deleted: list[dict] = []
+    problems: dict[int, str] = {}
+    for row in rows:
+        if is_locked(row):
+            problems[row["n"]] = "created"
+            continue
+        entry = {"tenant": sess.tenant, "type": "Row deleted", "user": sess.user,
+                 "detail": f"Deleted document {row['n']} ({row['file']}) from “{name}”; it had created nothing in CollectionSpace."}
+        # One conditional write: only if the row is as checked and the job is still this session's draft
+        if s.storage.delete_row_if_unchanged(job_id, row, sess.key, audit=entry):
+            deleted.append(row)
+        else:
+            problems[row["n"]] = "changed"
+    # Their staged files, replacements and thumbnails
+    s.storage.delete_objects(k for row in deleted for k in (row.get("s3Key"), row.get("supersededKey"), row.get("thumbKey")))
+    if job.get("fixFrom"):  # deleting is permanent, even if the fix is abandoned (originals exist only during a fix)
+        for row in deleted:
+            s.storage.drop_fix_original(job_id, row["n"])
+    return deleted, problems
 
 
 def _after_rows_deleted(s: "Services", sess: "Session", job: dict, rows: list[dict]) -> dict:
@@ -1019,7 +1030,7 @@ def _routes(app: FastAPI) -> None:
         _editable(job, sess)
         _saved(s, sess, job_id)
         row = s.storage.get_row(job_id, n) or _404()
-        problem = _delete_one_row(s, sess, job, row)
+        problem = _delete_rows(s, sess, job, [row])[1].get(n)
         if problem == "created":
             raise HTTPException(409, "This document already created records in CollectionSpace, so it can't be deleted. "
                                      "Check Exclude to have the BMU ignore it.")
@@ -1036,15 +1047,11 @@ def _routes(app: FastAPI) -> None:
         _editable(job, sess)
         _saved(s, sess, job_id)
         by_n = {r["n"]: r for r in s.storage.get_rows(job_id)}
-        deleted: list[dict] = []
-        skipped: list[dict] = []
-        for n in dict.fromkeys(body.rows):
-            row = by_n.get(n)
-            problem = _delete_one_row(s, sess, job, row) if row else "missing"
-            if problem:
-                skipped.append({"n": n, "file": row["file"] if row else "", "code": problem, "reason": DELETE_SKIPPED[problem]})
-            else:
-                deleted.append(row)
+        asked = list(dict.fromkeys(body.rows))
+        deleted, problems = _delete_rows(s, sess, job, [by_n[n] for n in asked if n in by_n])
+        problems.update({n: "missing" for n in asked if n not in by_n})
+        skipped = [{"n": n, "file": by_n[n]["file"] if n in by_n else "", "code": problems[n], "reason": DELETE_SKIPPED[problems[n]]}
+                   for n in asked if n in problems]
         out = _after_rows_deleted(s, sess, job, deleted) if deleted else {"others": []}
         return {"deleted": [r["n"] for r in deleted], "skipped": skipped, **out}
 

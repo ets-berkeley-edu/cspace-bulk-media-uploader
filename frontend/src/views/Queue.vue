@@ -1,38 +1,34 @@
 <template>
   <div>
     <h1 id="page-title" class="sr-only" tabindex="-1">Job queue</h1>
-    <div class="legacy">
-      <div class="card">
-        <JobPreview
-          v-if="session.previewing.queue"
-          :key="session.previewing.queue"
-          :edit-why="editWhy"
-          from="queue"
-          :job-id="session.previewing.queue"
-          :scheduler="!!currentUser.scheduler"
-          :tenant="currentUser.tenant"
-          :user="currentUser.user"
-          @back="session.previewing.queue = null"
-          @open="openJob"
-        />
-        <QueueList
-          v-else
-          :edit-why="editWhy"
-          :scheduler="!!currentUser.scheduler"
-          :user="currentUser.user"
-          :tenant="currentUser.tenant"
-          @open="openJob"
-        />
-      </div>
-    </div>
+    <JobPreview
+      v-if="session.previewing.queue"
+      :key="session.previewing.queue"
+      :edit-why="editWhy"
+      from="queue"
+      :job-id="session.previewing.queue"
+      :scheduler="!!currentUser.scheduler"
+      :tenant="currentUser.tenant"
+      :user="currentUser.user"
+      @back="session.previewing.queue = null"
+      @open="openJob"
+    />
+    <QueueList
+      v-else
+      :edit-why="editWhy"
+      :scheduler="!!currentUser.scheduler"
+      :user="currentUser.user"
+      :tenant="currentUser.tenant"
+      @open="openJob"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import {onMounted} from 'vue'
 import type {Me} from '@/types'
-import QueueList from '@/components/QueueList.vue'
-import JobPreview from '@/components/JobPreview.vue'
+import QueueList from '@/components/job/QueueList.vue'
+import JobPreview from '@/components/job/JobPreview.vue'
 import {editBlocked} from '@/lib/status'
 import {useContextStore} from '@/stores/context'
 import {useJobEditSessionStore} from '@/stores/job-edit-session'

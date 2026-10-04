@@ -15,10 +15,11 @@ Rows are separate items so a 1,000-row job never approaches the 400 KB item limi
 from __future__ import annotations
 
 import logging
+import os
 import time
 import uuid
 from decimal import Decimal
-from typing import Any, Iterator
+from typing import Any, Iterable, Iterator
 
 import boto3
 from boto3.dynamodb.conditions import Attr, Key
@@ -611,9 +612,11 @@ class Storage:
                                   {":c_q": "Queued", ":c_null": "NULL"}, {"#c_status": "status", "#c_h": "held"})
         return self._transact([check, update])
 
-    def delete_row_if_unchanged(self, job_id: str, row: dict, session: str) -> bool:
+    def delete_row_if_unchanged(self, job_id: str, row: dict, session: str, audit: dict | None = None) -> bool:
         """Delete a row that was checked as deletable, only if it hasn't changed since (same version) and the
-        job is still a draft this session is editing (design: Deleting a row)."""
+        job is still a draft this session is editing (design: Deleting a row). audit: the entry that records the
+        deletion ({"tenant", "type", "user", "detail"}), written in the same transaction, so there is one request
+        per row and never a deletion without its entry."""
         v = int(row.get("v", 0))
         cond = "attribute_exists(PK) AND " + ("attribute_not_exists(#v)" if v == 0 else "#v = :v")
         delete = {"Delete": {"TableName": self.jobs.name, "Key": _dyn({"PK": f"JOB#{job_id}", "SK": f"ROW#{row['n']:05d}"}),
@@ -624,7 +627,9 @@ class Storage:
                              "ConditionExpression": "#s = :draft AND editingSession = :ed",
                              "ExpressionAttributeNames": {"#u": "updated", "#s": "status"},
                              "ExpressionAttributeValues": _dyn({":one": 1, ":t": now(), ":draft": "Draft", ":ed": session})}}
-        return self._transact([delete, update])
+        entry = [{"Put": {"TableName": self.audit_table.name,
+                          "Item": self._audit_item(audit["tenant"], audit["type"], audit["user"], job_id, audit["detail"], None)}}] if audit else []
+        return self._transact([delete, update, *entry])
 
     def put_credential(self, job_id: str, user: str, token: str, expires: float) -> None:
         self.credentials.put_item(Item=_dyn({"PK": f"JOB#{job_id}", "user": user, "token": token, "expires": int(expires)}))
@@ -823,6 +828,33 @@ class Storage:
             self.s3.delete_object(Bucket=self.s.s3_bucket, Key=key)
         for version in versions:
             self.s3.delete_object(Bucket=self.s.s3_bucket, Key=key, VersionId=version)
+
+    def delete_objects(self, keys: Iterable[str | None]) -> None:
+        """Delete several objects of one job for good, in a few requests whatever their number (deleting many
+        documents at once): one listing of the versions under the keys' common prefix, then S3's batch delete, 1,000
+        versions at a time. A handful of keys, or keys without a job's prefix in common, go one by one (delete_object),
+        and so does anything the listing or the batch delete couldn't do."""
+        wanted = sorted({k for k in keys if k})
+        prefix = os.path.commonprefix(wanted)
+        if len(wanted) <= 3 or prefix.count("/") < 3:  # staging/<tenant>/<job-id>/
+            for key in wanted:
+                self.delete_object(key)
+            return
+        try:
+            pages = self.s3.get_paginator("list_object_versions").paginate(Bucket=self.s.s3_bucket, Prefix=prefix)
+            found = [(v["Key"], v["VersionId"]) for page in pages for v in page.get("Versions", []) + page.get("DeleteMarkers", [])
+                     if v["Key"] in set(wanted)]
+        except ClientError:
+            log.warning("could not list the versions of staged objects; deleting them one by one")
+            for key in wanted:
+                self.delete_object(key)
+            return
+        targets = [{"Key": k, "VersionId": v} for k, v in found]
+        targets += [{"Key": k} for k in set(wanted) - {k for k, _ in found}]  # none listed: a plain delete, as delete_object
+        for i in range(0, len(targets), 1000):
+            r = self.s3.delete_objects(Bucket=self.s.s3_bucket, Delete={"Objects": targets[i:i + 1000], "Quiet": True})
+            for failed in {e["Key"] for e in r.get("Errors", [])}:
+                self.delete_object(failed)  # raises if it really can't be deleted
 
 
 def _strip(item: dict) -> dict:

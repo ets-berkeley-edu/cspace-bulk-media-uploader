@@ -79,8 +79,8 @@ def test_a_document_changed_meanwhile_is_skipped_not_the_whole_request(api, logi
     add_uploaded(job, ["15-1234_1.jpg", "12-5678_1.jpg", "1-2345.jpg"])
     real = services.storage.delete_row_if_unchanged
 
-    def changed_for_2(job_id, row, session):
-        return False if row["n"] == 2 else real(job_id, row, session)
+    def changed_for_2(job_id, row, session, **kw):
+        return False if row["n"] == 2 else real(job_id, row, session, **kw)
     monkeypatch.setattr(services.storage, "delete_row_if_unchanged", changed_for_2)
     r = api.post(f"/api/jobs/{job}/rows/delete", json={"rows": [1, 2]})
     assert r.status_code == 200
@@ -117,3 +117,42 @@ def test_a_job_that_has_run_lists_the_deleted_documents_once_and_completes(api, 
     assert [d["file"] for d in done["deletedRows"]] == ["12-5678_1.jpg", "1-2345.jpg"]
     assert all(d["by"] == "admin" for d in done["deletedRows"])
     assert len([a for a in services.storage.list_audit("pahma") if a["type"] == "Row deleted"]) == 2
+
+
+def test_deleting_many_documents_takes_few_requests(api, login, add_uploaded, services):
+    """Delete selected must stay quick for a large selection: one transaction per document (the row, the job's count
+    and the audit entry together), and the files of all of them listed once and deleted in one batch."""
+    login()
+    job = new_job(api)
+    names = [f"15-{1000 + i}_1.jpg" for i in range(12)]
+    add_uploaded(job, names)
+    staged = {n: services.storage.get_row(job, n)["s3Key"] for n in range(1, 13)}
+    for n in (1, 2):  # an older version under the same key, as after a replaced upload
+        services.storage.s3.put_object(Bucket=services.settings.s3_bucket, Key=staged[n], Body=b"older")
+    calls: list[str] = []
+    for client in (services.storage.s3, services.storage.dynamodb.meta.client):
+        client.meta.events.register("before-call", lambda model, **kw: calls.append(model.name))
+    r = api.post(f"/api/jobs/{job}/rows/delete", json={"rows": list(range(1, 11))})
+    assert r.status_code == 200 and r.json()["deleted"] == list(range(1, 11)), r.text
+    assert calls.count("TransactWriteItems") == 10
+    assert calls.count("ListObjectVersions") == 1 and calls.count("DeleteObjects") == 1 and "DeleteObject" not in calls
+    assert "PutItem" not in calls  # the audit entries went with the transactions
+    bucket = services.settings.s3_bucket
+    left = services.storage.s3.list_object_versions(Bucket=bucket, Prefix=f"staging/pahma/{job}/")
+    assert sorted(v["Key"] for v in left.get("Versions", []) + left.get("DeleteMarkers", [])) == sorted([staged[11], staged[12]])
+    entries = [a for a in services.storage.list_audit("pahma") if a["type"] == "Row deleted" and a["job"] == job]
+    assert len(entries) == 10 and all("it had created nothing in CollectionSpace" in e["detail"] for e in entries)
+    assert services.storage.get_job(job)["rowCount"] == 2
+
+
+def test_a_document_that_changed_meanwhile_gets_no_audit_entry(api, login, add_uploaded, services):
+    """The audit entry is part of the deletion's transaction: no deletion, no entry."""
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_1.jpg", "12-5678_1.jpg"])
+    stale = services.storage.get_row(job, 1)
+    api.patch(f"/api/jobs/{job}/rows/1", json={"description": "changed since it was read"})
+    entry = {"tenant": "pahma", "type": "Row deleted", "user": "admin", "detail": "Deleted document 1"}
+    assert services.storage.delete_row_if_unchanged(job, stale, services.storage.get_job(job)["editingSession"], audit=entry) is False
+    assert services.storage.get_row(job, 1) is not None
+    assert not [a for a in services.storage.list_audit("pahma") if a["type"] == "Row deleted" and a["job"] == job]

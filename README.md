@@ -263,6 +263,13 @@ deliberate, because a page can hold 100 documents:
 - `JobEditor` gives every row the same handler functions (`@edit="edit"`, and the row passes itself back), and the
   list of other file names as a function. A handler written inline per row makes every row redraw on any change.
 
+Drafts and Job queue are converted as well (`views/Drafts.vue`, `views/Queue.vue`): `DraftsList.vue`, `QueueList.vue`
+with `QueueSchedule.vue` (the schedule banner, Schedule settings, Pause and Resume), `JobActions.vue` with
+`DeleteJobConfirm.vue`, `JobDetails.vue` and `JobDocumentsTable.vue` (an expanded job), and `JobPreview.vue`, all in
+`components/job/`. In a list, each job is a `<tbody id="job-<id>">` holding its row, its confirmation and its details;
+a confirmation (Delete, Take over, Edit, Cancel run) opens in a full-width row under the job. Every control has an id
+built from the job's id (`job-<id>-edit-btn`, `job-<id>-status`), which the browser tests planned for later will use.
+
 Light or dark follows Damien: the system's setting until the user picks one in the menu, which is then remembered in
 the browser (`prefersDarkMode`). Both are Vuetify themes in `src/plugins/vuetify.ts`.
 

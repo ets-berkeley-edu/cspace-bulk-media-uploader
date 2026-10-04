@@ -1,12 +1,12 @@
 import {afterEach, describe, expect, it, vi} from 'vitest'
 import {flushPromises, mount} from '@vue/test-utils'
-import DraftsList from '../components/DraftsList.vue'
-import JobActions from '../components/JobActions.vue'
-import JobDocsTable from '../components/JobDocsTable.vue'
-import JobPreview from '../components/JobPreview.vue'
 import {failures} from '../lib/results'
 import {editBlocked, handlingBlocked} from '../lib/status'
 import type {Failure, Job, Perms, Row, TenantInfo} from '../types'
+import DraftsList from '@/components/job/DraftsList.vue'
+import JobActions from '@/components/job/JobActions.vue'
+import JobDocsTable from '@/components/job/JobDocumentsTable.vue'
+import JobPreview from '@/components/job/JobPreview.vue'
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
@@ -45,7 +45,7 @@ describe('expanded job documents (design: Job lists; UI mockup jobDocsTable)', (
         checks: [{level: 'warn', text: 'Minor'}, {level: 'block', text: 'No object 15-1234'}]}),
     ]
     const w = mount(JobDocsTable, {props: {job: job(), rows, tenant, kind: 'drafts'}, global: {stubs: {DocumentThumbnail: true, ThumbCell: true}}})
-    expect(w.findAll('th').map((t) => t.text().replace(/[↕▲▼]/g, '').trim()))
+    expect(w.findAll('th').map((t) => t.text()))
       .toEqual(['Preview', 'Document', 'Handling', 'Identification number', 'Status', 'Most important issue'])
     const trs = w.findAll('tbody tr')
     expect(cells(trs[0])[1]).toContain('bad.jpg')
@@ -82,7 +82,7 @@ describe('expanded job documents (design: Job lists; UI mockup jobDocsTable)', (
       row({n: 3, file: 'off.jpg', include: false, disabledBy: 'jdoe'}),
     ]
     const w = mount(JobDocsTable, {props: {job: job({status: 'NeedsAttention'}), rows, tenant, kind: 'history'}, global: {stubs: {DocumentThumbnail: true, ThumbCell: true}}})
-    expect(w.findAll('th').map((t) => t.text().replace(/[↕▲▼]/g, '').trim()).slice(4)).toEqual(['Result', 'What happened'])
+    expect(w.findAll('th').map((t) => t.text()).slice(4)).toEqual(['Result', 'What happened'])
     const trs = w.findAll('tbody tr')
     expect(cells(trs[0]).slice(1)).toEqual(['big.jpg', 'Link to existing object', '15-1234', 'Partial',
       'File too large for CollectionSpace. Replace the file with a smaller one.'])
@@ -93,7 +93,8 @@ describe('expanded job documents (design: Job lists; UI mockup jobDocsTable)', (
 })
 
 describe('job actions (design: Drafts; The job queue; UI mockup actionsFor)', () => {
-  const texts = (w: ReturnType<typeof mount>) => w.findAll('button').map((b) => b.text())
+  const label = (b: { text: () => string; attributes: (n: string) => string | undefined }) => b.text() || b.attributes('aria-label')
+  const texts = (w: ReturnType<typeof mount>) => w.findAll('button').map(label)
   it('in a draft\'s preview: Edit and Delete, or Take over when someone else is editing; never Save draft or Submit job', () => {
     expect(texts(mount(JobActions, {props: {job: job(), kind: 'drafts', inPreview: true}}))).toEqual(['Edit', 'Delete'])
     expect(texts(mount(JobActions, {props: {job: job({editingBy: 'jlee', editingSince: 5}), kind: 'drafts', inPreview: true}})))
@@ -126,7 +127,7 @@ describe('job actions (design: Drafts; The job queue; UI mockup actionsFor)', ()
     expect(why).toContain('can\'t create and update Media records')
     const w = mount(JobActions, {props: {job: job(), kind: 'drafts', editWhy: why}})
     for (const t of ['Edit', 'Delete']) {
-      const b = w.findAll('button').find((x) => x.text() === t)!
+      const b = w.findAll('button').find((x) => label(x) === t)!
       expect(b.attributes('disabled')).toBeDefined()
       expect(b.attributes('title')).toBe(why)
     }
@@ -163,12 +164,12 @@ describe('JobPreview (design: Drafts; UI mockup renderPreview)', () => {
     expect(w.text()).toContain('Read-only preview.')
     expect(w.text()).toContain('Must fix: No object 15-1234')
     expect(w.text()).toContain('This draft has 1 document that needs fixing before it can be submitted.')
-    const buttons = w.find('.schedule-bar').findAll('button').map((b) => b.text())
+    const buttons = w.find('#preview-actions').findAll('button').map((b) => b.text() || b.attributes('aria-label'))
     expect(buttons).toEqual(['Edit', 'Delete'])
     expect(w.text()).not.toContain('Save draft')
     expect(w.text()).not.toContain('Submit job')
     expect(calls.some((c) => c.url.endsWith('/j1/check'))).toBe(true)
-    await w.find('.schedule-bar').findAll('button')[0].trigger('click')
+    await w.find('#preview-actions').findAll('button')[0].trigger('click')
     expect(w.emitted('open')?.[0].slice(0, 2)).toEqual(['j1', 'edit'])
     await w.findAll('button').find((b) => b.text() === '← Back to Drafts')!.trigger('click')
     expect(w.emitted('back')).toHaveLength(1)
@@ -181,9 +182,9 @@ describe('JobPreview (design: Drafts; UI mockup renderPreview)', () => {
     const w = mount(JobPreview, {props: {jobId: 'j1', from: 'queue', tenant, user: 'admin', scheduler: true}, global: {stubs: {DocumentThumbnail: true, ThumbCell: true}}})
     await flushPromises()
     expect(w.text()).toContain('← Back to Job queue')
-    expect(w.find('.schedule-bar').findAll('button').map((b) => b.text())).toEqual(['Cancel run', 'Delete'])
+    expect(w.find('#preview-actions').findAll('button').map((b) => b.text() || b.attributes('aria-label'))).toEqual(['Cancel run', 'Delete'])
     expect(w.text()).toContain('Run state')
-    await w.find('.schedule-bar').findAll('button')[0].trigger('click')
+    await w.find('#preview-actions').findAll('button')[0].trigger('click')
     expect(w.text()).toContain('Stop this run?')
     w.unmount()
   })

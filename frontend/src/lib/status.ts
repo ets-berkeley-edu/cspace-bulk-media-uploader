@@ -93,3 +93,27 @@ const ALERT_TYPE: Record<string, 'error' | 'warning' | 'info'> = {'msg-block': '
 export function alertType(cls: string): 'error' | 'warning' | 'info' {
   return ALERT_TYPE[cls] ?? 'info'
 }
+
+/** A job's checks in a few words: "2 need fixing · 1 warning", or "nothing to fix". */
+export function checksText(c: {block: number, warn: number}): string {
+  const parts = [c.block ? `${c.block} need${c.block === 1 ? 's' : ''} fixing` : 'nothing to fix']
+  if (c.warn) {
+    parts.push(`${c.warn} warning${c.warn === 1 ? '' : 's'}`)
+  }
+  return parts.join(' · ')
+}
+
+/** The Vuetify colour of a job's checks chip. */
+export function checksColor(c: {block: number, warn: number}): string {
+  return c.block ? 'error' : c.warn ? 'warning' : 'success'
+}
+
+/** How a job's documents are handled, counted: "3 link to existing object, 1 media only". */
+export function handlingMix(rows: Row[], tenant: TenantInfo): string {
+  const counts = new Map<string, number>()
+  for (const r of rows) {
+    const label = tenant.handling.find(h => h.id === r.handling)?.label ?? r.handling
+    counts.set(label, (counts.get(label) ?? 0) + 1)
+  }
+  return [...counts].map(([label, n]) => `${n} ${label.toLowerCase()}`).join(', ') || '—'
+}

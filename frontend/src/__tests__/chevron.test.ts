@@ -39,13 +39,13 @@ describe('the expand/collapse toggle', () => {
   })
 
   it('no component still uses the small ▸ character for a row toggle', () => {
-    for (const f of ['DraftsList', 'QueueList', 'FinishedJobs']) {
+    for (const f of ['FinishedJobs']) {
       const src = readFileSync(resolve(__dirname, `../components/${f}.vue`), 'utf8')
       expect(src).not.toContain('>▸</button>')
       expect(src).toContain('<ChevronIcon />')
     }
-    // The converted editor uses a Vuetify icon button
-    for (const f of ['JobEditor', 'DocumentRow']) {
+    // The converted screens use a Vuetify icon button
+    for (const f of ['JobEditor', 'DocumentRow', 'DraftsList', 'QueueList']) {
       const src = readFileSync(resolve(__dirname, `../components/job/${f}.vue`), 'utf8')
       expect(src).not.toContain('▸')
       expect(src).toContain(':icon="mdiChevronRight"')
