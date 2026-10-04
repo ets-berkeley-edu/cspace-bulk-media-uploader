@@ -109,3 +109,50 @@ def test_delete_all_jobs_deletes_every_job_but_running_ones_and_writes_the_audit
     assert r["deleted"] == 2 and r["skipped"] == ["Running one"]
     assert [j["id"] for j in services.storage.list_jobs("pahma")] == [running]
     assert services.storage.get_job(a) is None and services.storage.get_job(b) is None
+
+
+def test_reset_everything_clears_jobs_files_audit_and_schedule_and_keeps_the_sign_in(api, login, demo, add_uploaded, services, worker, fake):
+    login()
+    done = new_job(api, "Ran")
+    add_uploaded(done, ["1-2345_a.jpg"])
+    assert api.post(f"/api/jobs/{done}/schedule").status_code == 200 and worker.tick()
+    draft = new_job(api, "A draft")
+    add_uploaded(draft, ["12-5678_1.jpg"])
+    queued = new_job(api, "Queued")
+    add_uploaded(queued, ["15-1240_1.jpg"])
+    assert api.post(f"/api/jobs/{queued}/schedule").status_code == 200
+    assert api.put("/api/schedule", json={"days": [1, 3, 5], "start": "07:30", "end": ""}).status_code == 200
+    api.post("/api/_demo/sim/slow", json={"params": {"seconds": 2}})
+    api.post("/api/_demo/browser-upload", json={"mbps": 2})
+    assert services.storage.list_audit("pahma") and services.storage.get_credential(queued) is not None
+    media_before = len(fake.media)
+
+    r = api.post("/api/_demo/reset-everything")
+    assert r.status_code == 200 and r.json()["items"] > 0 and r.json()["objects"] > 0, r.text
+    assert api.get("/api/jobs").json()["jobs"] == []
+    assert services.storage.list_audit("pahma") == []
+    assert services.storage.get_credential(queued) is None
+    assert services.storage.get_rows(draft) == []
+    assert api.get("/api/schedule").json()["start"] == "19:00"  # back to the default
+    left = services.storage.s3.list_object_versions(Bucket=services.settings.s3_bucket)
+    assert not left.get("Versions") and not left.get("DeleteMarkers")
+    status = api.get("/api/_demo/status").json()
+    assert status["browserUploadMbps"] == 0 and status["sim"]["delay"] == 0
+    assert len(fake.media) < media_before  # the simulated CollectionSpace is back to its samples
+    assert api.get("/api/me").status_code == 200  # still signed in
+    assert new_job(api, "After")  # and the prototype works again
+
+
+def test_reset_everything_is_refused_while_a_job_runs_and_against_a_real_server(api, login, demo, services):
+    login()
+    running = new_job(api, "Running one")
+    services.storage.update_job(running, {"status": "Running"})
+    r = api.post("/api/_demo/reset-everything")
+    assert r.status_code == 409 and "“Running one” is running" in r.json()["detail"]
+    assert services.storage.get_job(running) is not None
+    services.storage.update_job(running, {"status": "Draft"})
+    # a real CollectionSpace has no simulator controls: nothing is deleted, least of all the audit log
+    demo.sim = TestClient(__import__("fastapi").FastAPI(), base_url="http://real")  # answers 404 to /_fake/...
+    r = api.post("/api/_demo/reset-everything")
+    assert r.status_code == 502 and "not a real server" in r.json()["detail"]
+    assert services.storage.get_job(running) is not None

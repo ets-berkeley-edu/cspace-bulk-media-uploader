@@ -36,6 +36,8 @@ export const demoApi = {
   sim: (action: string, params: Record<string, unknown> = {}) => request<SimSettings>('POST', `/api/_demo/sim/${action}`, {params}),
   objects: () => request<{ objects: { objectNumber: string; note: string; deleted: boolean; sensitivity?: unknown }[] }>('GET', '/api/_demo/sim/objects'),
   deleteAllJobs: () => request<{ deleted: number; skipped: string[] }>('POST', '/api/_demo/delete-all-jobs'),
+  /** Every job, draft, file and audit entry deleted; the schedule, the simulator and the upload speeds back to the start. */
+  resetEverything: () => request<{ items: number; objects: number }>('POST', '/api/_demo/reset-everything'),
 }
 
 /** "Full speed", or e.g. "2 MB/s". */
