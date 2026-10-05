@@ -8,6 +8,7 @@
       :mode="session.mode"
       :take-over-since="session.takeOverSince"
       @close="session.newJob"
+      @handed-over="session.handedOver"
       @missing="session.missing"
       @opened="session.created"
       @scheduled="session.scheduled"

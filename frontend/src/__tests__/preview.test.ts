@@ -96,18 +96,37 @@ describe('expanded job documents (design: Job lists; UI mockup jobDocsTable)', (
 describe('job actions (design: Drafts; The job queue; UI mockup actionsFor)', () => {
   const label = (b: { text: () => string; attributes: (n: string) => string | undefined }) => b.text() || b.attributes('aria-label')
   const texts = (w: ReturnType<typeof mount>) => w.findAll('button').map(label)
-  it('in a draft\'s preview: Edit and Delete, or Take over when someone else is editing; never Save draft or Submit job', () => {
-    expect(texts(mount(JobActions, {props: {job: job(), kind: 'drafts', inPreview: true, staff: true}}))).toEqual(['Edit', 'Delete'])
+  it('in a draft\'s preview: Edit, Submit…, the intern setting and Delete, or Take over when someone else is editing', () => {
+    expect(texts(mount(JobActions, {props: {job: job(), kind: 'drafts', inPreview: true, staff: true}}))).toEqual(['Edit', 'Submit…', 'Open to interns', 'Delete'])
     expect(texts(mount(JobActions, {props: {job: job({editingBy: 'jlee', editingSince: 5}), kind: 'drafts', inPreview: true, staff: true}})))
-      .toEqual(['Take over…', 'Delete'])
-    expect(texts(mount(JobActions, {props: {job: job(), kind: 'drafts', staff: true}}))).toEqual(['Preview', 'Edit', 'Delete'])
+      .toEqual(['Take over…', 'Submit…', 'Open to interns', 'Delete'])
+    expect(texts(mount(JobActions, {props: {job: job(), kind: 'drafts', staff: true}}))).toEqual(['Preview', 'Edit', 'Submit…', 'Open to interns', 'Delete'])
+    // an intern: no Submit, no setting; Hand over to staff on a draft that is open to interns
+    expect(texts(mount(JobActions, {props: {job: job({internOpen: true}), kind: 'drafts'}}))).toEqual(['Preview', 'Edit', 'Hand over to staff…', 'Delete'])
+    expect(texts(mount(JobActions, {props: {job: job(), kind: 'drafts'}}))).toEqual(['Preview', 'Edit', 'Delete'])
   })
 
   it('in the queue: Edit and Delete for a queued job, Cancel run for a running one', () => {
-    expect(texts(mount(JobActions, {props: {job: job({status: 'Queued'}), kind: 'queue', inPreview: true, staff: true}}))).toEqual(['Edit', 'Delete'])
+    expect(texts(mount(JobActions, {props: {job: job({status: 'Queued'}), kind: 'queue', inPreview: true, staff: true}}))).toEqual(['Edit', 'Move to Drafts…', 'Delete'])
     const run = mount(JobActions, {props: {job: job({status: 'Running'}), kind: 'queue', inPreview: true, staff: true}})
     expect(texts(run)).toEqual(['Cancel run', 'Delete'])
     expect(run.findAll('button')[1].attributes('disabled')).toBeDefined()
+  })
+
+  it('Move to Drafts… takes a queued job out of the queue after a confirmation, without opening it', async () => {
+    const calls = stubFetch(() => job({status: 'Draft'}))
+    const w = mount(JobActions, {props: {job: job({status: 'Queued'}), kind: 'queue', staff: true}})
+    await w.find('#job-j1-to-drafts-btn').trigger('click')
+    expect(w.find('#job-j1-todrafts-confirm').text()).toContain('out of the queue and deletes its saved sign-in')
+    expect(calls).toHaveLength(0)
+    await w.find('#job-j1-todrafts-confirm-btn').trigger('click')
+    await flushPromises()
+    expect(calls).toEqual([{url: '/api/jobs/j1/to-drafts', method: 'POST'}])
+    expect(w.emitted('done')![0]).toEqual(['Moved “Spring batch” to Drafts.'])
+    expect(w.emitted('open')).toBeUndefined()
+    // an intern: off, with the reason
+    const intern = mount(JobActions, {props: {job: job({status: 'Queued'}), kind: 'queue', editWhy: 'Only staff can do this.'}})
+    expect(intern.find('#job-j1-to-drafts-btn').attributes('disabled')).toBeDefined()
   })
 
   it('Cancel run: for staff, for any job; an intern sees why not (design: Roles)', () => {
@@ -189,9 +208,13 @@ describe('JobPreview (design: Drafts; UI mockup renderPreview)', () => {
     expect(w.text()).toContain('Must fix: No object 15-1234')
     expect(w.text()).toContain('This draft has 1 document that needs fixing before it can be submitted.')
     const buttons = w.find('#preview-actions').findAll('button').map((b) => b.text() || b.attributes('aria-label'))
-    expect(buttons).toEqual(['Edit', 'Delete'])
+    expect(buttons).toEqual(['Edit', 'Submit…', 'Open to interns', 'Delete'])
     expect(w.text()).not.toContain('Save draft')
     expect(w.text()).not.toContain('Submit job')
+    // one document needs fixing, so Submit… is off with the reason
+    const submit = w.find('#job-j1-submit-btn')
+    expect(submit.attributes('disabled')).toBeDefined()
+    expect(submit.attributes('title')).toBe('Fix or exclude the document marked Needs fixing first: open the draft with Edit')
     expect(calls.some((c) => c.url.endsWith('/j1/check'))).toBe(true)
     await w.find('#preview-actions').findAll('button')[0].trigger('click')
     expect(w.emitted('open')?.[0].slice(0, 2)).toEqual(['j1', 'edit'])

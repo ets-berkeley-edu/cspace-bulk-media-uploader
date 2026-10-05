@@ -495,7 +495,7 @@
       <li><strong>Layout:</strong> the “change selected documents” controls sit in a panel to the left of the document table and stay in view while you scroll, with a count of how many documents are selected. The arrow button in its header slides it closed to a slim rail that shows how many documents are selected, giving the table more room; the same button, or a click anywhere on the rail, slides it open again. The page remembers your choice. On narrow screens the panel moves above the table.</li>
       <li><strong>Large jobs:</strong> jobs can hold up to 1,000 documents, so the editor, job previews and job results show them in pages (25, 50 or 100 per page) with first / previous / next / last controls above and below the table. Click a column heading to sort (ascending, descending, then back to the original order); every table on every tab sorts this way, including the Drafts, Job queue and Finished jobs lists and the documents shown in an expanded job. Sorting the job queue only changes the view: the queue still runs in its own order, and dragging is off until the sort is cleared; a “Show” filter narrows to documents that need fixing, have warnings, are protected files, excluded or selected (in results: failed, partial, not started, excluded, done). The header checkbox selects the documents on the current page, with a link to select every matching document; bulk changes apply to everything selected, on any page. Try it with “Load 1,000 sample documents” in the bar at the top, or the “2026 digitization project, batch 1” job in Finished jobs. Expanded rows in the job lists show the 10 most important documents; the full preview or results shows them all.</li>
       <li><strong>Sign-in:</strong> the mockup opens on the sign-in screen, like the BMU. The BMU checks the username and password against CollectionSpace (Basic Auth) and reads the account's permissions and roles; here any username and password work, the password “wrong” shows a rejected sign-in, and the tenant, permissions and BMU role (staff or intern) are picked on the sign-in screen. Your username (top right) opens a menu, as in the BMU: Dark mode or Light mode (the choice is remembered in this browser; until you make one, your system's setting decides) and Sign out. Signing out stops editing the open draft; it stays in Drafts, saved, since every change is saved as it's made. Submitted jobs keep running after you sign out: each keeps its own sign-in until it finishes. The Mockup settings pane collapses to one line with the triangle at its left.</li>
-      <li><strong>Roles:</strong> every BMU user has one of two CollectionSpace roles, which carry no permissions and only tell the BMU what the user may do. <strong>BMU_Staff</strong> do everything: edit any draft, submit jobs, change the schedule and the queue (reorder, Run now, run time, hold, pause), cancel any run, and fix or delete finished jobs. A <strong>BMU_Intern</strong> creates drafts and edits the drafts marked “Open to interns” (a draft an intern created; a staff member's is “Staff only”); an intern can't submit, can't take over a draft a staff member is editing, can't delete a draft that has already run, and sees the Job queue and Finished jobs without changing them. The header shows “Intern”. A user with neither role, or a staff account missing the permissions the BMU exists to use, is refused at sign-in with a message to contact their CollectionSpace administrator (not simulated here). Try it with the “BMU_Staff role” box in Mockup settings or on the sign-in screen: unticked, you are an intern. Changing a draft between “Open to interns” and “Staff only” comes in a later step.</li>
+      <li><strong>Roles:</strong> every BMU user has one of two CollectionSpace roles, which carry no permissions and only tell the BMU what the user may do. <strong>BMU_Staff</strong> do everything: edit any draft, submit jobs, change the schedule and the queue (reorder, Run now, run time, hold, pause), cancel any run, and fix or delete finished jobs. A <strong>BMU_Intern</strong> creates drafts and edits the drafts marked “Open to interns” (a draft an intern created; a staff member's is “Staff only”); an intern can't submit, can't take over a draft a staff member is editing, can't delete a draft that has already run, and sees the Job queue and Finished jobs without changing them. The header shows “Intern”. A user with neither role, or a staff account missing the permissions the BMU exists to use, is refused at sign-in with a message to contact their CollectionSpace administrator (not simulated here). Try it with the “BMU_Staff role” box in Mockup settings or on the sign-in screen: unticked, you are an intern. In Drafts, staff switch a draft between “Open to interns” and “Staff only” with one click (in the BMU the Create / edit job page has the same switch as a checkbox, not shown here), and an intern uses <strong>Hand over to staff…</strong> to give a draft that is ready to staff: it becomes staff only. Staff can also <strong>Submit…</strong> a draft from the list or its preview without opening it, when nothing needs fixing; the confirmation says how many documents it has, who created and last saved it, and that it runs with the submitter's sign-in. In the Job queue, <strong>Move to Drafts…</strong> takes a queued job out of the queue like Edit, but without opening it.</li>
       <li><strong>Job lists:</strong> Drafts, Job queue and Finished jobs show one line per job. The triangle at the start of a row expands it in place to show the job's details (handling mix, group, who and when, expiry or run history) and one line per document with its status and most important problem or result, with a link to the full preview or results. “Expand all / Collapse all” sits above each list; hover over dates and badges for who did what. In Drafts and the Job queue, a job's confirmation (Delete, Edit, Cancel run, Take over) opens in a full-width row under the job, where its text has room.</li>
       <li><strong>Worked example:</strong> in Finished jobs, open “example: fixed by excluding a document” with View results. Its run history shows run 1 needing attention because one document's Media record was rejected, that document then excluded by jdoe, and run 2 completing with the document shown as excluded. To try it yourself: use Fix and reschedule on “collections survey batch 4”, check Exclude for the documents that need fixing, press Submit job, then in the Job queue use Run now on it and Finish run (mockup) on the running jobs until it has run.</li>
       <li><strong>Excluding documents:</strong> the Exclude checkbox at the end of each row (unchecked by default; hover its heading for “To exclude a document from a job, check the box.”) tells the BMU to ignore a document, for example one with a problem that can't be fixed yet. Excluded rows are grayed out, their fields can't be changed, and they are left out of the checks, so they never block submitting; unchecking Exclude restores the row as it was. Exclude selected / Include selected in the side panel work on several rows at once. Done rows have nothing to ignore. <strong>Deleting documents:</strong> the trash button at the very end of each row (after Exclude) deletes that document from the job permanently, after a confirmation in the row; its uploaded file is removed and nothing in CollectionSpace is touched. <strong>Delete selected</strong>, under Exclude selected / Include selected in the side panel, does the same for all selected documents after a confirmation in the panel. Excluded documents can be deleted too. Only documents that haven't created anything in CollectionSpace, and that the last run didn't stop on while working on them (BAMPFA's “loan documentation”), can be deleted (finding an existing object doesn't count): for the others the trash button is disabled, its tooltip and the expanded row explain why, Delete selected leaves them in place and says how many it skipped, and they can only be excluded. Deleting the job's last document, or every document at once, deletes the job too. Each deleted document is written to the audit log (Row deleted). In the BMU a document shows “Deleting…” in its Status, and Delete selected reads “Deleting…”, until the server has removed it; this mockup deletes at once. A partial row can be excluded too; its Media record stays in CollectionSpace, unfinished.</li>
@@ -2600,6 +2600,7 @@ function credNote(j) {
     : '<div class="sub" title="Saved sign-in of ' + esc(j.submittedBy || "the person who submitted it") + '">sign-in kept ~' + h + " h</div>";
 }
 var confirmEditId = null, confirmCancelId = null;
+var confirmAct = null;   // { id, kind }: Submit… and Hand over to staff… in Drafts, Move to Drafts… in the Job queue (design: Roles)
 /* What a job created in CollectionSpace (stays there if the job is deleted) */
 function createdSummary(j) {
   var c = { media: 0, blob: 0, object: 0, relation: 0, group: 0 }, unfinished = 0, total = 0;
@@ -2728,6 +2729,18 @@ function confirmFor(j) {
   if (confirmCancelId === j.id)
     return '<span class="msg msg-warn" style="font-size:12px">Stop this run? The worker finishes the document it\u2019s on, then stops; documents it hasn\u2019t reached stay not started, and nothing already created is undone.</span>' +
       '<button class="q-cancel-yes" data-id="' + j.id + '">Cancel run</button><button class="q-cancel-no">Keep running</button>';
+  if (confirmAct && confirmAct.id === j.id) {
+    var ck = confirmAct.kind, cw = countLevels(j.rows).warn;
+    var ct = ck === "submit"
+      ? "Submit \u201c" + esc(j.name) + "\u201d? It has " + j.rows.length + (j.rows.length === 1 ? " document" : " documents") + (cw ? ", " + cw + " with warnings" : "") +
+        ". Created by " + esc(j.createdBy || "you") + (j.createdByRole ? " (" + j.createdByRole + ")" : "") + "; last saved by " + esc(j.lastSavedBy || "you") +
+        ". The whole job is checked again, and it runs with your sign-in, which is deleted when the run ends."
+      : ck === "handover" ? "Hand this draft over to staff? You won\u2019t be able to edit it afterwards unless a staff member opens it to interns again."
+      : "Moving takes this job out of the queue and deletes its saved sign-in. It stays in Drafts until someone submits it again, and then goes to the end of the queue.";
+    var cl = ck === "submit" ? "Submit job" : ck === "handover" ? "Hand over to staff" : "Move to Drafts";
+    return '<span class="msg ' + (ck === "submit" ? "msg-info" : "msg-warn") + '" style="font-size:12px">' + ct + "</span>" +
+      '<button class="q-act-yes" data-id="' + j.id + '">' + cl + '</button><button class="q-act-no">Cancel</button>';
+  }
   if (confirmTakeoverId === j.id)
     return '<span class="msg msg-warn" style="font-size:12px">' + esc(j.editingBy) + " has been editing this draft since " + esc(j.editingSince) +
       ". If you take over, their editing ends and their page becomes read-only; everything they changed is already saved.</span>" +
@@ -2737,6 +2750,40 @@ function confirmFor(j) {
 function confirmRow(j, cols) {
   var c = confirmFor(j);
   return c ? '<tr class="job-confirm"><td colspan="' + cols + '" style="white-space:normal"><div class="actions" style="justify-content:flex-start">' + c + "</div></td></tr>" : "";
+}
+/* Design (Roles). Staff, on a draft: Submit… without opening it (only when nothing needs fixing), and the switch between
+   "Open to interns" and "Staff only". An intern, on a draft that is open to interns: Hand over to staff…. Staff, on a queued
+   job: Move to Drafts…, the same as Edit but without opening it. */
+function roleActions(j, locked, run) {
+  var off = function (why) { return ' disabled title="' + esc(why) + '"'; };
+  if (j.status === "Draft") {
+    if (IS_STAFF) {
+      var c = countLevels(j.rows);
+      var why = locked ? j.editingBy + " is editing this draft" : !j.rows.length ? "This draft has no documents"
+        : c.block ? "Fix or exclude the " + (c.block === 1 ? "document" : c.block + " documents") + " marked Needs fixing first: open the draft with Edit"
+        : (j.groupOn && !(j.groupTitle || "").trim()) ? "Enter a group title, or turn off the job\u2019s group: open the draft with Edit" : "";
+      return '<button class="q-act" data-kind="submit" data-id="' + j.id + '"' + (why ? off(why) : ' title="Check the whole job again, then add it to the job queue, without opening it"') + ">Submit\u2026</button>" +
+        '<button class="q-access" data-id="' + j.id + '" title="' + (j.internOpen ? "Interns can edit this draft now. Make it staff only." : "Only staff can edit this draft now. Let interns edit it too.") + '">' +
+        (j.internOpen ? "Make staff only" : "Open to interns") + "</button>";
+    }
+    return j.internOpen ? '<button class="q-act" data-kind="handover" data-id="' + j.id + '"' + (locked ? off(j.editingBy + " is editing this draft") : ' title="Give this draft to staff: it becomes staff only"') + ">Hand over to staff\u2026</button>" : "";
+  }
+  if (j.status === "Queued" && !run)
+    return '<button class="q-act" data-kind="todrafts" data-id="' + j.id + '"' + (IS_STAFF ? ' title="Take it out of the queue, without opening it"' : off(NO_EDIT_WHY)) + ">Move to Drafts\u2026</button>";
+  return "";
+}
+function moveToDrafts(id) {
+  var f = findJob(id);
+  if (!f || f.list !== "queue" || f.job.status !== "Queued" || !IS_STAFF) return;
+  var job = f.job;
+  removeJob(id);
+  audit({ type: "Moved to Drafts", job: job.name, user: "you", detail: "Took \u201c" + job.name + "\u201d out of the queue; its saved sign-in was deleted.", csids: [] });
+  job.rows.forEach(function (r) { delete r.protAtSubmit; });
+  job.status = "Draft"; job.lastSavedBy = "you"; job.lastSavedAt = nowLabel(); job.lastSavedMs = Date.now();
+  delete job.atSubmit; delete job.editingBy;
+  draftsFor().unshift(job);
+  flash.queue = "Moved \u201c" + job.name + "\u201d to Drafts.";
+  render_lists();
 }
 function actionsFor(j, inPreview) {
   var run = j.status === "Running", locked = lockedByOther(j), open = confirmFor(j);
@@ -2751,6 +2798,7 @@ function actionsFor(j, inPreview) {
       ? '<button class="q-takeover" data-id="' + j.id + '"' + (noEdit || ' title="' + esc(j.editingBy) + ' is editing this draft"') + '>Take over…</button>'
       : (run ? '<button class="q-cancel" data-id="' + j.id + '"' + (canCancelRun(j) ? ' title="Stop after the document in progress"' : ' disabled title="' + esc(NO_CANCEL_WHY) + '"') + '>Cancel run</button>'
              : '<button class="q-edit" data-id="' + j.id + '"' + noEdit + '>' + (j.editingBy === "you" ? "Continue editing" : "Edit") + "</button>")) +
+    roleActions(j, locked, run) +
     '<button class="q-del" data-id="' + j.id + '"' + (run || locked || !canEdit(j) || ranWhy ? ' disabled title="' + esc(why || ranWhy) + '"' : ' title="Delete job"') + ">" + JOB_DEL_INNER + "</button>";
 }
 /* ----- Collapsed / expanded job rows (Drafts, Job queue, Finished jobs) ----- */
@@ -3075,6 +3123,26 @@ document.addEventListener("click", function (e) {
   if (t.classList.contains("q-edit")) { var fe = findJob(id); if (fe && fe.list === "queue") { confirmEditId = id; confirmCancelId = null; render_lists(); } else editJob(id); }
   if (t.classList.contains("q-edit-yes")) { confirmEditId = null; editJob(id); }
   if (t.classList.contains("q-edit-no")) { confirmEditId = null; render_lists(); }
+  if (t.classList.contains("q-act")) { confirmAct = { id: id, kind: t.dataset.kind }; confirmEditId = null; confirmCancelId = null; confirmDeleteId = null; render_lists(); }
+  if (t.classList.contains("q-act-no")) { confirmAct = null; render_lists(); }
+  if (t.classList.contains("q-act-yes")) {
+    var act = confirmAct, fa = findJob(id); confirmAct = null;
+    if (act && fa && act.kind === "handover") {
+      fa.job.internOpen = false; if (fa.job.editingBy === "you") delete fa.job.editingBy;
+      if (currentJob && currentJob.id === id) startNewJob();
+      audit({ type: "Intern access changed", job: fa.job.name, user: "you", detail: "Handed \u201c" + fa.job.name + "\u201d over to staff.", csids: [] });
+      flash.drafts = "\u201c" + fa.job.name + "\u201d was handed over to staff."; render_lists();
+    } else if (act && act.kind === "todrafts") moveToDrafts(id);
+    else if (act && fa && act.kind === "submit") { previewId = null; editJob(id); if (currentJob && currentJob.id === id) submitJob(); else render_lists(); }
+  }
+  if (t.classList.contains("q-access")) {
+    var fx = findJob(id);
+    if (fx && IS_STAFF) {
+      fx.job.internOpen = !fx.job.internOpen;
+      audit({ type: "Intern access changed", job: fx.job.name, user: "you", detail: (fx.job.internOpen ? "Opened \u201c" + fx.job.name + "\u201d to interns." : "Made \u201c" + fx.job.name + "\u201d staff only."), csids: [] });
+      flash.drafts = "\u201c" + fx.job.name + "\u201d is now " + (fx.job.internOpen ? "open to interns." : "staff only."); render_lists();
+    }
+  }
   if (t.classList.contains("q-cancel")) { confirmCancelId = id; confirmEditId = null; render_lists(); }
   if (t.classList.contains("q-cancel-no")) { confirmCancelId = null; render_lists(); }
   if (t.classList.contains("q-cancel-yes")) { confirmCancelId = null; cancelRun(id); }
@@ -4106,7 +4174,7 @@ function resetDemo() {
   TERM_RENAMED = false; document.getElementById("termRenamed").checked = false;
   PROT_LATER_ON = false; PROT_LATER = {}; document.getElementById("protLater").checked = false;
   auditOpen = false; auditRowOpen = {}; auditQuery = ""; auditType = "all";
-  resultsId = null; previewId = null; previewFrom = null; confirmDeleteId = null; confirmTakeoverId = null; confirmEditId = null; confirmCancelId = null; pendingDelete = null; pendingRemove = null;
+  resultsId = null; previewId = null; previewFrom = null; confirmDeleteId = null; confirmTakeoverId = null; confirmEditId = null; confirmCancelId = null; confirmAct = null; pendingDelete = null; pendingRemove = null;
   flash = { drafts: "", queue: "", history: "" }; scheduleMsg = "";
   PERMS = PERM_PROFILES.full; setGroupUi(false, ""); applyEditPerm();
   document.getElementById("permSelect").value = "full";

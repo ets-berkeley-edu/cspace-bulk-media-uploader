@@ -76,6 +76,47 @@ describe('an intern in the editor (design: Roles)', () => {
   })
 })
 
+describe('whether interns may edit the draft, in the editor (design: Roles)', () => {
+  const routes = (j: Job) => (url: string, method: string) => {
+    if (url.endsWith('/api/jobs/j1') && method === 'GET') return {job: j, rows: [row], runs: [], created: {}}
+    if (url.endsWith('/check')) return {rows: [row], counts: {block: 0, warn: 0}}
+    if (url.endsWith('/intern-access')) return {...j, internOpen: !j.internOpen}
+    if (url.includes('/vocabularies/')) return {terms: []}
+    if (url.endsWith('/api/failures')) return {failures: {}}
+    return {}
+  }
+
+  it('staff tick or untick "Open to interns"', async () => {
+    const calls = stub(routes(draft))
+    const w = mount(JobEditor, {props: {me, jobId: 'j1'}, global: {stubs: {DocumentThumbnail: true}}})
+    await flushPromises()
+    const box = w.find('#intern-open')
+    expect((box.element as HTMLInputElement).checked).toBe(false)
+    expect(w.find('#intern-open-hint').text()).toBe('Only staff can edit this draft.')
+    expect(w.find('#hand-over-btn').exists()).toBe(false)
+    await box.setValue(true)
+    await flushPromises()
+    expect(calls.some((c) => c.url === '/api/jobs/j1/intern-access' && c.method === 'POST')).toBe(true)
+    expect(w.find('#intern-open-hint').text()).toBe('Interns can edit this draft.')
+    w.unmount()
+  })
+
+  it('an intern hands the draft over to staff after confirming, and the editor is told', async () => {
+    const calls = stub(routes({...draft, name: 'Box 3', editingBy: 'kim', internOpen: true} as Job))
+    const w = mount(JobEditor, {props: {me: {...me, user: 'kim', role: 'intern'}, jobId: 'j1'}, global: {stubs: {DocumentThumbnail: true}}})
+    await flushPromises()
+    expect(w.find('#intern-open').exists()).toBe(false)
+    await w.find('#hand-over-btn').trigger('click')
+    expect(w.find('#hand-over-confirm').text()).toContain('Hand this draft over to staff?')
+    expect(calls.some((c) => c.url.endsWith('/intern-access'))).toBe(false)
+    await w.find('#hand-over-confirm-btn').trigger('click')
+    await flushPromises()
+    expect(calls.some((c) => c.url === '/api/jobs/j1/intern-access' && c.method === 'POST')).toBe(true)
+    expect(w.emitted('handedOver')![0]).toEqual(['Box 3'])
+    w.unmount()
+  })
+})
+
 describe('the job\'s Group title (user decision: never derived from the job name)', () => {
   it('starts empty and required; the buttons fill it once and renaming the job doesn\'t change it', async () => {
     let job: Job = {...draft, groupOn: true, groupTitle: ''} as Job

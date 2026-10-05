@@ -250,6 +250,7 @@
         rounded
       >
         <JobActions
+          :counts="counts"
           :edit-why="editWhy"
           in-preview
           :job="job"
@@ -259,6 +260,7 @@
           @done="done"
           @error="text => error = text"
           @open="(id, mode, since) => emit('open', id, mode, since)"
+          @submitted="submitted => emit('submitted', submitted)"
         />
       </v-sheet>
     </template>
@@ -318,7 +320,12 @@ const props = defineProps({
     type: String
   }
 })
-const emit = defineEmits<{back: [], open: [id: string, mode: 'edit' | 'preview', takeOverSince?: number]}>()
+const emit = defineEmits<{
+  back: [],
+  open: [id: string, mode: 'edit' | 'preview', takeOverSince?: number],
+  // The draft was submitted from its preview: it is in the job queue now.
+  submitted: [job: Job]
+}>()
 
 const LEVEL_RANK = {block: 0, warn: 1, ok: 2} as const
 const RUN_RANK: Record<string, number> = {'In progress': 0, Failed: 1, Partial: 1, 'Not started': 2, Done: 3}

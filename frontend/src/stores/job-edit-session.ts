@@ -116,6 +116,22 @@ export const useJobEditSessionStore = defineStore('jobEditSession', {
       await this.newJob()
       this.notice = submitMessage(job, {alwaysRunTime: !!schedule?.alwaysRunTime})
       await router.push('/queue')
+    },
+    /** A staff member submitted a draft from the Drafts list or its preview, without opening it. */
+    async submittedFromList(job: Job) {
+      if (this.jobId === job.id) {
+        return this.scheduled(job) // it was the draft open in the editor
+      }
+      this.previewing.drafts = null
+      const schedule = await api.getSchedule().catch(() => null)
+      this.notice = submitMessage(job, {alwaysRunTime: !!schedule?.alwaysRunTime})
+      await router.push('/queue')
+    },
+    /** An intern handed the draft in the editor over to staff: it is staff only now, so the editor starts a new job. */
+    async handedOver(name: string) {
+      this.jobId = null // handing over already ended this page's editing
+      await this.newJob()
+      this.notice = `“${name || 'Untitled job'}” was handed over to staff. It is in Drafts, marked Staff only.`
     }
   }
 })

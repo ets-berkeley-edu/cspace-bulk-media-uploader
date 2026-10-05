@@ -47,6 +47,10 @@ export const api = {
   /** confirm: go ahead although the new order makes a document fail (the API answers 409 would_fail without it). */
   moveJob: (id: string, toIndex: number, confirm = false) => request<{ jobs: Job[] }>('POST', `/api/jobs/${id}/move`, {toIndex, confirm}),
   editQueued: (id: string) => request<Job>('POST', `/api/jobs/${id}/edit`),
+  /** Move a queued job to Drafts without opening it (staff). */
+  toDrafts: (id: string) => request<Job>('POST', `/api/jobs/${id}/to-drafts`),
+  /** Whether interns may edit a draft: staff either way; an intern only hands a draft over to staff (open: false). */
+  internAccess: (id: string, open: boolean) => request<Job>('POST', `/api/jobs/${id}/intern-access`, {open}),
   cancelRun: (id: string) => request<Job>('POST', `/api/jobs/${id}/cancel`),
   saveDraft: (id: string) => request<Job>('POST', `/api/jobs/${id}/save`),
   addFiles: (id: string, files: { name: string; size: number; type: string; exifDate?: string; orientation?: string }[]) =>

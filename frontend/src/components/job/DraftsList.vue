@@ -17,6 +17,17 @@
     >
       {{ error }}
     </v-alert>
+    <v-alert
+      v-if="message"
+      id="drafts-message"
+      class="mb-3"
+      density="compact"
+      role="status"
+      type="info"
+      variant="tonal"
+    >
+      {{ message }}
+    </v-alert>
     <div v-if="drafts.length" class="mb-1 text-body-2 text-right">
       <button
         id="drafts-expand-all-btn"
@@ -115,7 +126,7 @@
           </td>
           <td>
             <div :id="`job-${job.id}-name`" class="font-weight-medium">{{ nameOf(job) }}</div>
-            <div :id="`job-${job.id}-access`" class="text-caption text-medium-emphasis">{{ accessOf(job) }}</div>
+            <div :id="`job-${job.id}-access`" class="text-caption text-medium-emphasis">{{ accessLabel(job) }}</div>
             <div class="text-caption text-medium-emphasis">created by {{ job.createdBy }}</div>
             <div v-if="job.fixFrom" :id="`job-${job.id}-fixing`" class="text-caption text-medium-emphasis">
               <v-icon :icon="mdiWrench" size="x-small" /> fixing after run {{ job.fixFrom.run }} ({{ job.fixFrom.status === 'Failed' ? 'failed' : 'needed attention' }})
@@ -170,14 +181,16 @@
           <td class="text-right">
             <JobActions
               :confirm-to="confirmCells.get(job.id)"
+              :counts="countsOf(job.id)"
               :edit-why="editWhy"
               :job="job"
               kind="drafts"
               :staff="staff"
               @confirming="on => setConfirming(job.id, on)"
-              @done="() => refresh()"
-              @error="message => error = message"
+              @done="done"
+              @error="text => error = text"
               @open="reopen"
+              @submitted="submitted => emit('submitted', submitted)"
             />
           </td>
         </tr>
@@ -209,6 +222,7 @@ import JobActions from '@/components/job/JobActions.vue'
 import JobDetails from '@/components/job/JobDetails.vue'
 import SortableColumnHeader from '@/components/util/SortableColumnHeader.vue'
 import {formatTime} from '@/lib/files'
+import {accessLabel} from '@/lib/roles'
 import {checksColor, checksText} from '@/lib/status'
 import {tableState, tableView} from '@/lib/table'
 import {api} from '@/api'
@@ -234,13 +248,19 @@ defineProps({
     type: Object as PropType<TenantInfo>
   }
 })
-const emit = defineEmits<{open: [id: string, mode: 'edit' | 'preview', takeOverSince?: number]}>()
+const emit = defineEmits<{
+  open: [id: string, mode: 'edit' | 'preview', takeOverSince?: number],
+  // A draft was submitted from the list: it is in the job queue now.
+  submitted: [job: Job]
+}>()
 
 const drafts = ref<Job[]>([])
 // Each draft's documents, from its latest check
 const docs = reactive(new Map<string, Row[]>())
 const expanded = reactive(new Set<string>())
 const checks = reactive(new Map<string, {block: number, warn: number} | 'checking'>())
+// What a job's action just did ("… is now staff only."), until the next one
+const message = ref('')
 const error = ref('')
 // The first answer from the server has arrived: until then the list is loading, not empty.
 const isLoaded = ref(false)
@@ -266,8 +286,14 @@ const setConfirming = (id: string, on: boolean) => {
 }
 
 const nameOf = (job: Job) => job.name || 'Untitled job'
-// Whether interns may edit the draft (design: Roles)
-const accessOf = (job: Job) => (job.internOpen ? 'Open to interns' : 'Staff only')
+// A job's action finished: say what it did and read the drafts again. A refused Submit says nothing here (the
+// reason is shown as an error); the checks run again, because the server found something this list didn't show.
+const done = async (flash: string) => {
+  message.value = flash
+  const refused = flash ? '' : error.value
+  await refresh(!flash)
+  error.value = refused || error.value // reading the drafts again cleared it
+}
 const countsOf = (id: string): {block: number, warn: number} | null => {
   const c = checks.get(id)
   return c && c !== 'checking' ? c : null
