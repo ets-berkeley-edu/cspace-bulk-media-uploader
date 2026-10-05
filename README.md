@@ -60,7 +60,9 @@ deployment is built (`deploy/README.md`); what it leaves for later is listed the
 - **Open to interns or staff only.** Each draft shows which it is. Staff switch it either way, with a checkbox on
   the Create / edit job page or a button on the draft's row; making a draft staff only ends an intern's editing of
   it. Each change is in the audit log ("Intern access changed").
-- **Submit for review.** An intern who has finished a draft uses **Submit for review…**. It is available only when
+- **Submit for review.** An intern who has finished a draft uses **Submit for review…**, the button at the bottom
+  of the job where staff have Submit job (an intern has no Submit job button), or on the draft's row in Drafts. It
+  is available only when
   no document needs fixing; a document that needs an Object creator doesn't stop it. The draft stays in Drafts,
   becomes staff only, and is marked "Needs review" with who sent it and when; such drafts are listed first. A staff
   member reviews it with Preview or Edit and submits it as any draft. The mark comes off when staff submit the job,
