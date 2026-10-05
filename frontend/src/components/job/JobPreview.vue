@@ -428,7 +428,7 @@ const shownChecks = (r: Row) => r.checks.filter(c => c.level !== 'info')
 const matches = (r: Row, filter: string): boolean => {
   const level = worstLevel(r)
   switch (filter) {
-  case 'problems': return r.include && level !== 'ok'
+  case 'problems': return r.include && (level === 'block' || level === 'warn') // not "Needs an Object creator"
   case 'block': return r.include && level === 'block'
   case 'creator': return r.include && level === 'creator'
   case 'warn': return r.include && level === 'warn'

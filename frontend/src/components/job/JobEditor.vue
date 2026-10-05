@@ -575,7 +575,7 @@
       </span>
       <v-spacer />
       <v-btn
-        v-if="counts.block || counts.warn || counts.creator"
+        v-if="counts.block || counts.warn"
         id="show-problems-btn"
         variant="outlined"
         @click="showProblems"
@@ -710,7 +710,8 @@ const docKeys = {
 function docFilter(r: Row, f: string): boolean {
   const lv = worstLevel(r)
   switch (f) {
-  case 'problems': return r.include && lv !== 'ok'
+  // A document that needs an Object creator has no problem with it (design: Roles): it has its own filter
+  case 'problems': return r.include && (lv === 'block' || lv === 'warn')
   case 'block': return r.include && lv === 'block'
   case 'creator': return r.include && lv === 'creator'
   case 'warn': return r.include && lv === 'warn'
@@ -1261,7 +1262,12 @@ async function schedule(withoutCreator = false) {
     if (e instanceof ApiError && e.status === 409 && editable.value) {
       // Scheduling checked the whole job again (with fresh permissions): show what it found.
       rows.value = (await api.job(job.value.id)).rows
-      showProblems()
+      const detail = e.detail as { code?: string } | null
+      if (detail?.code === 'creator') {
+        showFilter('creator') // nothing is wrong with those documents: show them as what they are
+      } else if (detail?.code !== 'account') {
+        showProblems()
+      }
     }
   } finally {
     isBusy.value = false

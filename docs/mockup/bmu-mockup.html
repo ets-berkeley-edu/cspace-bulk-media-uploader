@@ -1559,7 +1559,7 @@ function pagerBar(name, view, noun, filters, pos) {
   return html + "</div>";
 }
 function rerenderPager(name) { if (name === "editor") render(); else render_lists(); }
-var LEVEL_RANK = { block: 0, warn: 1, ok: 2 };
+var LEVEL_RANK = { block: 0, creator: 0.5, warn: 1, ok: 2 };
 var RESULT_RANK = { "Failed": 0, "Partial": 1, "Not started": 2, "Excluded": 3, "Done": 4 };
 
 /* Mockup only: generate sample documents that follow the tenant's filename rule (for 1,000-row jobs) */
@@ -1995,9 +1995,9 @@ function render() {
   var tbody = document.getElementById("grid-body");
   tbody.innerHTML = "";
   var lv = rows.map(function (r, i) { return worstLevel(r, i); });
-  var cnt = { block: 0, warn: 0, problems: 0, sensitive: 0, disabled: 0, selected: 0 };
+  var cnt = { block: 0, warn: 0, creator: 0, problems: 0, sensitive: 0, disabled: 0, selected: 0 };
   rows.forEach(function (r, i) {
-    if (r.disabled) cnt.disabled++; else { if (lv[i] === "block") cnt.block++; if (lv[i] === "warn") cnt.warn++; if (lv[i] !== "ok") cnt.problems++; }
+    if (r.disabled) cnt.disabled++; else { if (lv[i] === "block") cnt.block++; if (lv[i] === "warn") cnt.warn++; if (lv[i] === "creator") cnt.creator++; if (lv[i] === "block" || lv[i] === "warn") cnt.problems++; }
     if (sensitiveReason(r)) cnt.sensitive++;
     if (r.selected) cnt.selected++;
   });
@@ -2013,14 +2013,15 @@ function render() {
     var r = rows[i];
     if (f === "block") return !r.disabled && lv[i] === "block";
     if (f === "warn") return !r.disabled && lv[i] === "warn";
-    if (f === "problems") return !r.disabled && lv[i] !== "ok";
+    if (f === "problems") return !r.disabled && (lv[i] === "block" || lv[i] === "warn");   /* a document that needs an Object creator has no problem with it */
+    if (f === "creator") return !r.disabled && lv[i] === "creator";
     if (f === "sensitive") return !!sensitiveReason(r);
     if (f === "disabled") return !!r.disabled;
     if (f === "selected") return !!r.selected;
     return true;
   });
   lastEditorView = view;
-  var filters = [["all", "All documents (" + rows.length + ")"], ["problems", "With problems (" + cnt.problems + ")"], ["block", "Need fixing (" + cnt.block + ")"],
+  var filters = [["all", "All documents (" + rows.length + ")"], ["problems", "With problems (" + cnt.problems + ")"], ["block", "Need fixing (" + cnt.block + ")"], ["creator", "Need an Object creator (" + cnt.creator + ")"],
     ["warn", "With warnings (" + cnt.warn + ")"], ["sensitive", "Protected (" + cnt.sensitive + ")"], ["disabled", "Excluded (" + cnt.disabled + ")"], ["selected", "Selected (" + cnt.selected + ")"]];
   document.getElementById("gridPagerTop").innerHTML = pagerBar("editor", view, "documents", filters, "top");
   document.getElementById("gridPagerBottom").innerHTML = view.pages > 1 ? pagerBar("editor", view, "documents", null, "bottom") : "";
@@ -2211,7 +2212,7 @@ function renderScheduleBar() {
       : (one ? "1 document needs" : c.creator + " documents need") + " a new Object. The staff member who submits this job must be able to create Objects.") + "</div>" : "") +
     (c.held ? '<div class="msg msg-creator" id="heldLine" style="margin-bottom:8px">' + (c.held === 1 ? "1 document was" : c.held + " documents were") + " left out when this job was submitted, because " + (c.held === 1 ? "it needs" : "they need") + " a new Object. If you can create Objects, include " + (c.held === 1 ? "it" : "them") + " again (uncheck Exclude) and submit.</div>" : "");
   document.getElementById("scheduleBar").innerHTML = '<span class="counts"><strong>' + esc(parts[0]) + "</strong> · " + esc(parts.slice(1).join(" · ")) + "</span>" +
-    (c.block || c.warn || c.creator ? '<button id="showProblemsBtn">Show documents with problems</button>' : "") +
+    (c.block || c.warn ? '<button id="showProblemsBtn">Show documents with problems</button>' : "") +
     '<button id="saveDraftBtn" title="Save this job to Drafts, even if it is incomplete or has problems. Every change is already saved; this confirms it and restarts the draft\u2019s ' + (rows.some(function (r) { return !!sensitiveReason(r); }) ? "7-day expiry (it has protected files)" : "30-day expiry") + '">Save draft</button>' +
     (canWithout ? '<button id="submitWithoutBtn" title="The rest of the job is submitted. ' + (one ? "That document stays" : "Those documents stay") + ' in the job, excluded and marked, for someone who can create Objects.">Submit without the ' + (one ? "document that needs" : c.creator + " documents that need") + " a new Object</button>" : "") +
     '<button id="submitBtn"' + (c.block || !work || !IS_STAFF || gp || c.creator ? " disabled" : "") + ' title="' + esc(!IS_STAFF ? INTERN_SUBMIT_WHY : c.block ? "Fix or exclude the documents marked Needs fixing first, or save a draft" : (!work ? "Nothing left to run: every document is done or excluded" : gp ? "Your account can\u2019t create groups, which this job\u2019s group needs" : creatorWhy ? creatorWhy : "Check the whole job again, then add it to the job queue; it runs at the next run time")) + '">Submit job</button>' +
@@ -3052,17 +3053,18 @@ function renderPreview(v) {
       var r = rows[i];
       if (f === "block") return !r.disabled && lv[i] === "block";
       if (f === "warn") return !r.disabled && lv[i] === "warn";
-      if (f === "problems") return !r.disabled && lv[i] !== "ok";
+      if (f === "problems") return !r.disabled && (lv[i] === "block" || lv[i] === "warn");
+      if (f === "creator") return !r.disabled && lv[i] === "creator";
       if (f === "sensitive") return !!sensitiveReason(r);
       if (f === "disabled") return !!r.disabled;
       return true;
     });
-    var pc = { problems: 0, block: 0, warn: 0, sensitive: 0, disabled: 0 };
+    var pc = { problems: 0, block: 0, warn: 0, creator: 0, sensitive: 0, disabled: 0 };
     rows.forEach(function (r, i) {
-      if (r.disabled) pc.disabled++; else { if (lv[i] === "block") pc.block++; if (lv[i] === "warn") pc.warn++; if (lv[i] !== "ok") pc.problems++; }
+      if (r.disabled) pc.disabled++; else { if (lv[i] === "block") pc.block++; if (lv[i] === "warn") pc.warn++; if (lv[i] === "creator") pc.creator++; if (lv[i] === "block" || lv[i] === "warn") pc.problems++; }
       if (sensitiveReason(r)) pc.sensitive++;
     });
-    var filters = [["all", "All documents (" + rows.length + ")"], ["problems", "With problems (" + pc.problems + ")"], ["block", "Need fixing (" + pc.block + ")"],
+    var filters = [["all", "All documents (" + rows.length + ")"], ["problems", "With problems (" + pc.problems + ")"], ["block", "Need fixing (" + pc.block + ")"], ["creator", "Need an Object creator (" + pc.creator + ")"],
       ["warn", "With warnings (" + pc.warn + ")"], ["sensitive", "Protected (" + pc.sensitive + ")"], ["disabled", "Excluded (" + pc.disabled + ")"]];
     html += pagerBar("preview", view, "documents", filters, "top") +
       '<div class="table-wrap"><table><thead><tr><th class="thumb-cell"><span class="sr-only">Preview</span></th>' + sortTh("preview", "file", "Document") + sortTh("preview", "handling", "Handling", "width:150px") +
@@ -3148,7 +3150,7 @@ function showTab(t) {
 
 document.addEventListener("click", function (e) {
   var t = e.target, id = t.dataset && t.dataset.id;
-  if (t.id === "showProblemsBtn") { var pp = pager("editor"); pp.filter = "problems"; pp.page = 1; rows.forEach(function (r, i) { r.expanded = !r.disabled && worstLevel(r, i) !== "ok"; }); render(); }
+  if (t.id === "showProblemsBtn") { var pp = pager("editor"); pp.filter = "problems"; pp.page = 1; rows.forEach(function (r, i) { var l = worstLevel(r, i); r.expanded = !r.disabled && (l === "block" || l === "warn"); }); render(); }
   if (t.id === "submitBtn") submitJob();
   if (t.id === "submitWithoutBtn") submitJob(true);
   if (t.id === "bulkDisableBtn" || t.id === "bulkEnableBtn") {

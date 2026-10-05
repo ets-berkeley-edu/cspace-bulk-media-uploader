@@ -232,3 +232,26 @@ describe('three kinds of result in the editor (design: Roles)', () => {
     w.unmount()
   })
 })
+
+describe('"With problems" (design: Roles, Three kinds of result)', () => {
+  it('does not count a document that needs an Object creator: it has its own filter', async () => {
+    const linked = {...tenant, handling: [...tenant.handling, {id: 'linkorcreate', label: 'Link to object (create if missing)', object: 'either', id_rule: 'object'}]} as unknown as TenantInfo
+    const waiting: Row = {...row, n: 2, file: '20-1.jpg', handling: 'linkorcreate', obj: '20-1', checks: [{level: 'creator', text: 'This document needs a new Object.'}]}
+    const warned: Row = {...row, n: 3, file: 'b.jpg', checks: [{level: 'warn', text: 'A Media record with ID b already exists in CollectionSpace.'}]}
+    stub((url, method) => {
+      if (url.endsWith('/api/jobs/j1') && method === 'GET') return {job: draft, rows: [row, waiting, warned], runs: [], created: {}}
+      if (url.endsWith('/check')) return {rows: [row, waiting, warned], counts: {block: 0, warn: 1, creator: 1}}
+      if (url.includes('/vocabularies/')) return {terms: []}
+      if (url.endsWith('/api/failures')) return {failures: {}}
+      return {}
+    })
+    const limited: Me = {user: 'limited', tenant: linked, perms: {...perms, objects: false}, role: 'staff'}
+    const w = mount(JobEditor, {props: {me: limited, jobId: 'j1'}, global: {stubs: {DocumentThumbnail: true}}})
+    await flushPromises()
+    const options = w.findAll('option').map((o) => o.text())
+    expect(options).toContain('With problems (1)')
+    expect(options).toContain('Need an Object creator (1)')
+    expect(w.find('#show-problems-btn').exists()).toBe(true) // for the warning
+    w.unmount()
+  })
+})
