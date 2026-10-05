@@ -177,3 +177,126 @@ def test_a_staff_member_made_an_intern_loses_staff_actions_at_once(api, login, a
     r = api.post(f"/api/jobs/{job}/schedule")
     assert r.status_code == 403 and r.json()["detail"] == STAFF_ONLY
     assert api.get("/api/me").json()["role"] == "intern"  # the session follows
+
+
+# ---- Open to interns / Staff only, and Hand over to staff ---------------------------------------------------------
+def _audit(services, kind):
+    return [a["detail"] for a in services.storage.list_audit("pahma") if a["type"] == kind]
+
+
+def test_staff_change_a_draft_between_open_to_interns_and_staff_only(api, login, services):
+    login()
+    job = new_job(api)
+    api.post(f"/api/jobs/{job}/close")
+    intern = _second_user(services, "intern")
+    assert intern.post(f"/api/jobs/{job}/open").status_code == 403
+    r = api.post(f"/api/jobs/{job}/intern-access", json={"open": True})
+    assert r.status_code == 200 and r.json()["internOpen"] is True
+    assert api.post(f"/api/jobs/{job}/intern-access", json={"open": True}).status_code == 200  # already so: nothing to do
+    assert intern.post(f"/api/jobs/{job}/open").json()["editingBy"] == "intern"
+    # staff only again, while the intern has it open: the intern's editing ends at once
+    assert api.post(f"/api/jobs/{job}/intern-access", json={"open": False}).json()["internOpen"] is False
+    j = services.storage.get_job(job)
+    assert "editingSession" not in j and "editingBy" not in j
+    r = intern.patch(f"/api/jobs/{job}", json={"name": "x"})
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "not_editing"
+    assert intern.post(f"/api/jobs/{job}/open").status_code == 403
+    assert _audit(services, "Intern access changed") == ["Made “Test job” staff only.", "Opened “Test job” to interns."]  # newest first
+
+
+def test_staff_only_does_not_end_a_staff_members_editing(api, login, services):
+    login()
+    job = new_job(api)
+    api.post(f"/api/jobs/{job}/intern-access", json={"open": True})
+    assert api.post(f"/api/jobs/{job}/intern-access", json={"open": False}).status_code == 200
+    assert services.storage.get_job(job)["editingBy"] == "admin"
+
+
+def test_an_intern_hands_a_draft_over_to_staff_and_cannot_take_it_back(api, login, services, fake):
+    intern = _second_user(services, "intern")
+    job = intern.post("/api/jobs", json={"name": "Ready"}).json()["id"]
+    r = intern.post(f"/api/jobs/{job}/intern-access", json={"open": False})  # from the editor, with the draft open
+    assert r.status_code == 200 and r.json()["internOpen"] is False and not r.json().get("editingBy")
+    assert _audit(services, "Intern access changed") == ["Handed “Ready” over to staff."]
+    for r in [intern.post(f"/api/jobs/{job}/intern-access", json={"open": True}), intern.post(f"/api/jobs/{job}/open"),
+              intern.delete(f"/api/jobs/{job}")]:
+        assert r.status_code == 403, r.text
+    login()  # staff give it back
+    assert api.post(f"/api/jobs/{job}/intern-access", json={"open": True}).status_code == 200
+    assert intern.post(f"/api/jobs/{job}/open").status_code == 200
+    # an intern can't hand over a draft another intern is editing, nor change a staff-only draft, nor open one to interns
+    fake.role_overrides["newstaff"] = ["ROLE_15_BMU_INTERN"]
+    other = _second_user(services, "newstaff")
+    r = other.post(f"/api/jobs/{job}/intern-access", json={"open": False})
+    assert r.status_code == 409 and "intern is editing this draft" in r.json()["detail"]
+    mine = new_job(api)
+    assert other.post(f"/api/jobs/{mine}/intern-access", json={"open": True}).status_code == 403
+    assert services.storage.get_job(mine)["internOpen"] is False
+
+
+def test_intern_access_is_set_on_drafts_only(api, login, add_uploaded):
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_1.jpg"])
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    r = api.post(f"/api/jobs/{job}/intern-access", json={"open": True})
+    assert r.status_code == 409 and "this is set on drafts" in r.json()["detail"]
+
+
+# ---- Submit from the Drafts list --------------------------------------------------------------------------------------
+def test_staff_submit_a_draft_nobody_has_open_and_the_audit_names_who_prepared_it(api, login, add_uploaded, services):
+    intern = _second_user(services, "intern")
+    job = intern.post("/api/jobs", json={"name": "Box 3"}).json()["id"]
+    intern.post(f"/api/jobs/{job}/close")
+    login("limited")  # a staff member tidies it up
+    assert api.post(f"/api/jobs/{job}/open").status_code == 200
+    add_uploaded(job, ["15-1234_1.jpg"])
+    assert api.post(f"/api/jobs/{job}/save").status_code == 200
+    api.post(f"/api/jobs/{job}/close")
+    login()  # another staff member submits it from the Drafts list, without opening it
+    r = api.post(f"/api/jobs/{job}/schedule")
+    assert r.status_code == 200 and r.json()["status"] == "Queued" and r.json()["scheduledBy"] == "admin"
+    assert "editingSession" not in services.storage.get_job(job)
+    assert _audit(services, "Submitted") == ["Submitted “Box 3” with 1 documents. Created by intern (intern); last saved by limited."]
+
+
+def test_a_refused_submit_from_the_list_leaves_the_draft_in_nobodys_editor(api, login, add_uploaded, services):
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["20-0777_1.jpg"])  # links to an object that doesn't exist: needs fixing
+    api.post(f"/api/jobs/{job}/close")
+    r = api.post(f"/api/jobs/{job}/schedule")
+    assert r.status_code == 409 and r.json()["detail"]["message"] == "1 documents need fixing first."
+    j = services.storage.get_job(job)
+    assert j["status"] == "Draft" and "editingSession" not in j
+    empty = new_job(api)
+    api.post(f"/api/jobs/{empty}/close")
+    assert api.post(f"/api/jobs/{empty}/schedule").status_code == 409  # nothing to run
+    assert "editingSession" not in services.storage.get_job(empty)
+
+
+def test_a_draft_someone_is_editing_cannot_be_submitted_by_another(api, login, add_uploaded, services):
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_1.jpg"])  # admin still has it open
+    r = _second_user(services, "limited").post(f"/api/jobs/{job}/schedule")
+    assert r.status_code == 409 and r.json()["detail"] == {"code": "locked", "message": "admin is editing this draft, so it can't be submitted now."}
+    assert services.storage.get_job(job)["editingBy"] == "admin"
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200  # its editor submits it, as before
+
+
+# ---- Move to Drafts ---------------------------------------------------------------------------------------------------
+def test_move_to_drafts_takes_a_job_out_of_the_queue_without_opening_it(api, login, add_uploaded, services):
+    login()
+    job = new_job(api)
+    add_uploaded(job, ["15-1234_1.jpg"])
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
+    assert _second_user(services, "intern").post(f"/api/jobs/{job}/to-drafts").status_code == 403
+    r = api.post(f"/api/jobs/{job}/to-drafts")
+    assert r.status_code == 200 and r.json()["status"] == "Draft" and not r.json().get("editingBy")
+    assert services.storage.get_credential(job) is None  # its saved sign-in is deleted, as with Edit
+    assert _audit(services, "Moved to Drafts") == ["Took “Test job” out of the queue; its saved sign-in was deleted."]
+    assert api.post(f"/api/jobs/{job}/to-drafts").status_code == 409  # no longer queued
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200  # and it can go straight back
+    assert api.post(f"/api/jobs/{job}/edit").json()["editingBy"] == "admin"  # Edit still opens it
+    assert _audit(services, "Moved to Drafts")[0] == "Took “Test job” out of the queue to edit it; its saved sign-in was deleted."

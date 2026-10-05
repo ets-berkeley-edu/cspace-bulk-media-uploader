@@ -124,6 +124,64 @@
       placeholder="e.g. 2026 spring accession batch"
       @change="rename"
     />
+    <!-- Whether interns may edit this draft (design: Roles): staff set it; an intern hands the draft over to staff -->
+    <div v-if="job?.status === 'Draft' && mode !== 'preview'" id="intern-access" class="mt-2 text-body-2">
+      <label v-if="isStaffUser" class="align-center d-inline-flex" for="intern-open">
+        <input
+          id="intern-open"
+          :checked="!!job.internOpen"
+          class="checkbox mr-2"
+          :disabled="!editable || isBusy"
+          type="checkbox"
+          @change="event => setInternOpen((event.target as HTMLInputElement).checked)"
+        >
+        Open to interns
+        <span id="intern-open-hint" class="ml-2 text-medium-emphasis">{{ internOpenHint }}</span>
+      </label>
+      <template v-else-if="job.internOpen">
+        <v-btn
+          v-if="!isHandingOver"
+          id="hand-over-btn"
+          :disabled="!editable || isBusy"
+          size="small"
+          variant="outlined"
+          @click="isHandingOver = true"
+        >
+          Hand over to staff…
+        </v-btn>
+        <v-alert
+          v-else
+          id="hand-over-confirm"
+          density="compact"
+          role="alert"
+          type="warning"
+          variant="tonal"
+        >
+          <div>{{ HAND_OVER_CONFIRM }}</div>
+          <div class="mt-2">
+            <v-btn
+              id="hand-over-confirm-btn"
+              class="mr-2"
+              color="warning"
+              :disabled="isBusy"
+              size="small"
+              @click="handOver"
+            >
+              Hand over to staff
+            </v-btn>
+            <v-btn
+              id="hand-over-cancel-btn"
+              :disabled="isBusy"
+              size="small"
+              variant="outlined"
+              @click="isHandingOver = false"
+            >
+              Cancel
+            </v-btn>
+          </div>
+        </v-alert>
+      </template>
+    </div>
 
     <v-sheet
       id="group-box"
@@ -508,7 +566,7 @@ import {canPreview, fileTooLargeText, formIsOld, formatTime, makeThumbnail, mapL
 import {readImageInfo} from '@/lib/imageinfo'
 import {portalOf} from '@/lib/portal'
 import {OUTCOME, failureOf, loadFailures} from '@/lib/results'
-import {INTERN_SUBMIT_WHY, isStaff, permsFor} from '@/lib/roles'
+import {HAND_OVER_CONFIRM, INTERN_SUBMIT_WHY, isStaff, permsFor} from '@/lib/roles'
 import {groupTimestampTitle} from '@/lib/schedule'
 import {jobCounts, worstLevel} from '@/lib/status'
 import {editorColumns, tableState, tableView} from '@/lib/table'
@@ -541,7 +599,7 @@ const props = defineProps({
     type: Number as PropType<number | null>
   }
 })
-const emit = defineEmits<{scheduled: [job: Job], opened: [id: string], close: [], missing: []}>()
+const emit = defineEmits<{scheduled: [job: Job], opened: [id: string], close: [], missing: [], handedOver: [name: string]}>()
 
 const job = ref<Job | null>(null)
 const rows = ref<Row[]>([])
@@ -641,6 +699,33 @@ async function setGroup(fields: { groupOn?: boolean; groupTitle?: string }) {
     job.value = rest
   } catch (e) {
     await failed(e)
+  }
+}
+
+// ---- whether interns may edit this draft (design: Roles) ----
+const isStaffUser = computed(() => isStaff(props.me))
+const isHandingOver = ref(false)
+const internOpenHint = computed(() => (job.value?.internOpen ? 'Interns can edit this draft.' : 'Only staff can edit this draft.'))
+async function setInternOpen(open: boolean) {
+  if (!job.value) return
+  try {
+    job.value = {...job.value, ...(await api.internAccess(job.value.id, open))}
+  } catch (e) {
+    await failed(e)
+  }
+}
+async function handOver() {
+  if (!job.value) return
+  isBusy.value = true
+  try {
+    const name = job.value.name
+    await api.internAccess(job.value.id, false)
+    emit('handedOver', name)
+  } catch (e) {
+    isHandingOver.value = false
+    await failed(e)
+  } finally {
+    isBusy.value = false
   }
 }
 

@@ -36,3 +36,34 @@ const EVERY_PERMISSION: Perms = {media: true, mediaUpdate: true, relations: true
  * member who will submit the draft, so nothing is switched off for them on that account (design: Roles).
  */
 export const permsFor = (me: Pick<Me, 'role' | 'perms'>): Perms => (isStaff(me) ? me.perms : EVERY_PERMISSION)
+
+/** "Open to interns" or "Staff only": whether interns may edit the draft. */
+export const accessLabel = (job: Pick<Job, 'internOpen'>): string => (job.internOpen ? 'Open to interns' : 'Staff only')
+
+export const HAND_OVER_CONFIRM = 'Hand this draft over to staff? You won\'t be able to edit it afterwards unless a staff member opens it to interns again.'
+
+/**
+ * Why a draft can't be submitted from the Drafts list or its preview, or '' when it can: the server checks the
+ * whole job again whatever this says. counts: the draft's latest checks; undefined while they are running.
+ */
+export function listSubmitBlocked(job: Pick<Job, 'rowCount' | 'editingBy' | 'editingByYou' | 'groupOn' | 'groupTitle'>,
+  counts?: { block: number; warn: number } | null): string {
+  if (job.editingBy && !job.editingByYou) return `${job.editingBy} is editing this draft`
+  if (!job.rowCount) return 'This draft has no documents'
+  if (!counts) return 'Checking against CollectionSpace…'
+  if (counts.block) return `Fix or exclude the ${counts.block === 1 ? 'document' : `${counts.block} documents`} marked Needs fixing first: open the draft with Edit`
+  if (job.groupOn && !job.groupTitle?.trim()) return 'Enter a group title, or turn off the job\'s group: open the draft with Edit'
+  return ''
+}
+
+/** What the Submit confirmation says: how much is submitted, who prepared it, and whose sign-in it runs under. */
+export function submitConfirmText(job: Pick<Job, 'name' | 'rowCount' | 'createdBy' | 'createdByRole' | 'lastSavedBy'>,
+  counts?: { block: number; warn: number } | null): string {
+  const n = job.rowCount ?? 0
+  const warn = counts?.warn ?? 0
+  const docs = `It has ${n === 1 ? '1 document' : `${n} documents`}${warn ? `, ${warn} with warnings` : ''}.`
+  const by = job.createdBy ? ` Created by ${job.createdBy}${job.createdByRole ? ` (${job.createdByRole})` : ''}` : ''
+  const saved = job.lastSavedBy ? `${by ? ';' : ''} ${by ? 'l' : 'L'}ast saved by ${job.lastSavedBy}` : ''
+  return `Submit “${job.name || 'Untitled job'}”? ${docs}${by}${saved}${by || saved ? '.' : ''} `
+    + 'The whole job is checked again, and it runs with your sign-in, which is deleted when the run ends.'
+}

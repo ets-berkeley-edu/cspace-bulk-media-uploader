@@ -12,6 +12,7 @@
       :user="currentUser.user"
       @back="session.previewing.drafts = null"
       @open="openJob"
+      @submitted="session.submittedFromList"
     />
     <DraftsList
       v-else
@@ -19,6 +20,7 @@
       :staff="currentUser.role === 'staff'"
       :tenant="currentUser.tenant"
       @open="openJob"
+      @submitted="session.submittedFromList"
     />
   </div>
 </template>

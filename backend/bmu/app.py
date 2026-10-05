@@ -253,6 +253,19 @@ def staff_session(sess: Session = Depends(current_session), s: Services = Depend
     return _require_staff(s, sess)
 
 
+def _prepared_by(job: dict, submitter: str) -> str:
+    """Design (Roles): the job runs under the submitter's sign-in, so the audit entry also names whoever prepared
+    it, when that is someone else: " Created by kim (intern); last saved by lee." """
+    by, saved = job.get("createdBy") or "", job.get("lastSavedBy") or ""
+    parts = []
+    if by and by != submitter:
+        parts.append(f"Created by {by}" + (f" ({job['createdByRole']})" if job.get("createdByRole") else ""))
+    if saved and saved != submitter and saved != by:
+        parts.append(f"last saved by {saved}")
+    text = "; ".join(parts)
+    return f" {text[0].upper()}{text[1:]}." if text else ""
+
+
 def _intern_may(job: dict, sess: Session, delete: bool = False) -> None:
     """Design (Roles): an intern edits only a draft that is open to interns, and deletes one only if it has
     never run. Staff are not limited here."""
@@ -488,6 +501,10 @@ class JobPatch(BaseModel):
     name: str | None = Field(default=None, max_length=200)
     groupOn: bool | None = None  # "Create a group of this job's objects"
     groupTitle: str | None = Field(default=None, max_length=200)
+
+
+class InternAccess(BaseModel):
+    open: bool  # True: open to interns; False: staff only
 
 
 class FileSpec(BaseModel):
@@ -756,16 +773,26 @@ def _routes(app: FastAPI) -> None:
     def edit_queued(job_id: str, sess: Session = Depends(staff_session), s: Services = Depends(svc)):
         """Edit a queued job: it leaves the queue for Drafts, locked to you, and its saved sign-in is deleted.
         It goes to the end of the queue when it is scheduled again."""
+        return _to_drafts(s, sess, job_id, edit=True)
+
+    @app.post("/api/jobs/{job_id}/to-drafts")
+    def move_to_drafts(job_id: str, sess: Session = Depends(staff_session), s: Services = Depends(svc)):
+        """Move to Drafts: the same as Edit, but the job is left in Drafts in nobody's editor, for whoever picks it
+        up (an intern too, if it is open to interns)."""
+        return _to_drafts(s, sess, job_id, edit=False)
+
+    def _to_drafts(s: Services, sess: Session, job_id: str, edit: bool) -> dict:
         job = _job_or_404(s, sess, job_id)
         s.queue_rows.pop(sess.tenant, None)  # the queue is about to change: read it again (see _queue_rows)
         if not s.storage.update_job(job_id, {"status": "Draft", "queuePos": None, "note": "", "lastSavedBy": sess.user,
                                              "lastSavedAt": now(), **draft_expiry(job, now() + _draft_days(s, job) * 86400)},
                                     expect_status="Queued"):
-            raise HTTPException(409, f"The job is {s.storage.get_job(job_id)['status']}; only queued jobs can be edited this way.")
+            raise HTTPException(409, f"The job is {s.storage.get_job(job_id)['status']}; only queued jobs can be moved to Drafts.")
         s.storage.delete_credential(job_id)
-        s.storage.open_draft(job_id, sess.user, sess.key, role=sess.role)
+        if edit:
+            s.storage.open_draft(job_id, sess.user, sess.key, role=sess.role)
         s.storage.audit(sess.tenant, "Moved to Drafts", sess.user, job_id,
-                        f"Took “{job['name']}” out of the queue to edit it; its saved sign-in was deleted.")
+                        f"Took “{job['name']}” out of the queue{' to edit it' if edit else ''}; its saved sign-in was deleted.")
         return _public(s.storage.get_job(job_id), sess)
 
     @app.post("/api/jobs/{job_id}/cancel")
@@ -843,6 +870,33 @@ def _routes(app: FastAPI) -> None:
         _saved(s, sess, job_id)
         rc = _recheck(s, sess, job_id, targets=set()) if "groupOn" in fields else None
         return {**_public(s.storage.get_job(job_id), sess), **({"rows": rc["changed"]} if rc else {})}
+
+    @app.post("/api/jobs/{job_id}/intern-access")
+    def intern_access(job_id: str, body: InternAccess, sess: Session = Depends(editor_session), s: Services = Depends(svc)):
+        """Design (Roles): whether interns may edit this draft. Staff change it either way. An intern can only hand
+        a draft that is open to interns over to staff ("Hand over to staff"); only staff can open it again. Making
+        a draft staff only ends an intern's editing of it. Every change is in the audit log."""
+        job = _job_or_404(s, sess, job_id)
+        if job["status"] != "Draft":
+            raise HTTPException(409, f"The job is {job['status']}; this is set on drafts.")
+        staff = sess.role == "staff"
+        if not staff:
+            _intern_may(job, sess)  # a draft that is open to interns
+            if body.open:
+                raise HTTPException(403, STAFF_REFUSED)
+            if job.get("editingSession") not in (None, sess.key):
+                raise HTTPException(409, f"{job.get('editingBy')} is editing this draft, so it can't be handed over now.")
+        if bool(job.get("internOpen")) == body.open:
+            return _public(job, sess)
+        if not s.storage.update_job(job_id, {"internOpen": body.open}, expect_status="Draft"):
+            raise HTTPException(409, "The job changed meanwhile; reload and try again.")
+        if not body.open:
+            s.storage.end_intern_editing(job_id)
+        name = job.get("name") or "Untitled job"
+        detail = (f"Opened “{name}” to interns." if body.open else
+                  f"Made “{name}” staff only." if staff else f"Handed “{name}” over to staff.")
+        s.storage.audit(sess.tenant, "Intern access changed", sess.user, job_id, detail)
+        return _public(s.storage.get_job(job_id), sess)
 
     @app.delete("/api/jobs/{job_id}")
     def delete_job(job_id: str, sess: Session = Depends(editor_session), s: Services = Depends(svc)):
@@ -1141,8 +1195,23 @@ def _routes(app: FastAPI) -> None:
         s.queue_rows.pop(sess.tenant, None)  # the queue is about to change: read it again (see _queue_rows)
         if job["status"] not in RESCHEDULABLE:
             raise HTTPException(409, f"The job is {job['status']} and can't be submitted.")
-        if job["status"] == "Draft":
-            _editable(job, sess)  # only the draft's editor schedules it
+        opened_here = False
+        if job["status"] == "Draft" and job.get("editingSession") != sess.key:
+            # Submit from the Drafts list (design: Roles): a draft nobody has open is opened for this submit, so
+            # nobody else changes it meanwhile. A draft someone is editing is theirs to finish first.
+            if not s.storage.open_draft(job_id, sess.user, sess.key, role=sess.role):
+                who = (s.storage.get_job(job_id) or {}).get("editingBy") or "Someone"
+                raise HTTPException(409, {"code": "locked", "message": f"{who} is editing this draft, so it can't be submitted now."})
+            opened_here = True
+        try:
+            return _submit(s, sess, job)
+        except HTTPException:
+            if opened_here:  # not submitted: leave the draft as it was found, open in nobody's editor
+                s.storage.close_draft(job_id, sess.key)
+            raise
+
+    def _submit(s: Services, sess: Session, job: dict) -> dict:
+        job_id = job["id"]
         if job.get("groupOn") and not (job.get("groupTitle") or "").strip():
             raise HTTPException(409, "Enter a group title, or turn off the job's group.")
         # Permissions can change during a session: fetch them again (refused if the account no longer has what
@@ -1170,7 +1239,8 @@ def _routes(app: FastAPI) -> None:
             raise HTTPException(409, "The job changed while submitting it; reload and try again.")
         s.storage.close_draft(job_id, sess.key)  # it leaves Drafts
         s.queue_rows.pop(sess.tenant, None)  # the queue has a new job: read it again (see _queue_rows)
-        s.storage.audit(sess.tenant, "Submitted", sess.user, job_id, f"Submitted “{job['name']}” with {len(work)} documents.")
+        s.storage.audit(sess.tenant, "Submitted", sess.user, job_id,
+                        f"Submitted “{job['name']}” with {len(work)} documents." + _prepared_by(job, sess.user))
         return _public(s.storage.get_job(job_id), sess, s)  # with its plan: when it runs (design: Job scheduling)
 
     # ---- the schedule and staff's queue actions (design: Job scheduling) ----------------------------

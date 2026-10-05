@@ -15,7 +15,7 @@
         class="text-left"
         density="compact"
         role="alert"
-        type="warning"
+        :type="confirming === 'submit' ? 'info' : 'warning'"
         variant="tonal"
       >
         <div v-if="confirming === 'takeover'">
@@ -26,6 +26,12 @@
           Editing takes this job out of the queue and deletes its saved sign-in. It goes to the end of the queue when it’s
           submitted again, even if nothing changes.
         </div>
+        <div v-else-if="confirming === 'submit'">{{ submitText }}</div>
+        <div v-else-if="confirming === 'handover'">{{ HAND_OVER_CONFIRM }}</div>
+        <div v-else-if="confirming === 'todrafts'">
+          Moving takes this job out of the queue and deletes its saved sign-in. It stays in Drafts until someone submits it
+          again, and then goes to the end of the queue.
+        </div>
         <div v-else>
           Stop this run? The worker finishes the document it’s on, then stops; documents it hasn’t reached stay not started,
           and nothing already created is undone.
@@ -34,7 +40,7 @@
           <v-btn
             :id="`job-${job.id}-${confirming}-confirm-btn`"
             class="mr-2"
-            color="warning"
+            :color="confirming === 'submit' ? 'primary' : 'warning'"
             :disabled="isBusy"
             size="small"
             @click="confirmed"
@@ -89,6 +95,44 @@
             {{ job.editingByYou ? 'Continue editing' : 'Edit' }}
           </v-btn>
         </span>
+        <!-- Staff: submit a draft without opening it, and say whether interns may edit it (design: Roles) -->
+        <template v-if="staff">
+          <span :title="submitTitle">
+            <v-btn
+              :id="`job-${job.id}-submit-btn`"
+              :disabled="!!noSubmit || !!confirming"
+              size="small"
+              :title="submitTitle"
+              variant="outlined"
+              @click="confirming = 'submit'"
+            >
+              Submit…
+            </v-btn>
+          </span>
+          <v-btn
+            :id="`job-${job.id}-access-btn`"
+            :disabled="isBusy || !!confirming"
+            size="small"
+            :title="accessTitle"
+            variant="outlined"
+            @click="toggleAccess"
+          >
+            {{ accessAction }}
+          </v-btn>
+        </template>
+        <!-- An intern: give a draft that is open to interns to staff -->
+        <span v-else-if="job.internOpen" :title="handOverTitle">
+          <v-btn
+            :id="`job-${job.id}-hand-over-btn`"
+            :disabled="lockedByOther || !!confirming"
+            size="small"
+            :title="handOverTitle"
+            variant="outlined"
+            @click="confirming = 'handover'"
+          >
+            Hand over to staff…
+          </v-btn>
+        </span>
       </template>
       <span v-else-if="isRunning" :title="noCancel || 'Stop after the document in progress'">
         <v-btn
@@ -112,6 +156,18 @@
           @click="confirming = 'edit'"
         >
           Edit
+        </v-btn>
+      </span>
+      <span v-if="kind === 'queue' && !isRunning" :title="noEdit || 'Take it out of the queue, without opening it'">
+        <v-btn
+          :id="`job-${job.id}-to-drafts-btn`"
+          :disabled="!!noEdit || !!confirming"
+          size="small"
+          :title="noEdit || 'Take it out of the queue, without opening it'"
+          variant="outlined"
+          @click="confirming = 'todrafts'"
+        >
+          Move to Drafts…
         </v-btn>
       </span>
       <span :title="deleteTitle">
@@ -139,7 +195,7 @@ import {mdiTrashCanOutline} from '@mdi/js'
 import type {Created, Job} from '@/types'
 import DeleteJobConfirm from '@/components/job/DeleteJobConfirm.vue'
 import {formatTime} from '@/lib/files'
-import {draftBlocked, draftDeleteBlocked, takeOverBlocked} from '@/lib/roles'
+import {HAND_OVER_CONFIRM, draftBlocked, draftDeleteBlocked, listSubmitBlocked, submitConfirmText, takeOverBlocked} from '@/lib/roles'
 import {NO_CANCEL_WHY, canCancelRun} from '@/lib/schedule'
 import {api} from '@/api'
 
@@ -155,6 +211,12 @@ const props = defineProps({
     default: undefined,
     required: false,
     type: Object as PropType<HTMLElement>
+  },
+  // A draft's latest checks, for Submit: undefined while they are running.
+  counts: {
+    default: undefined,
+    required: false,
+    type: Object as PropType<{block: number, warn: number} | null>
   },
   // Why this user can't change the jobs of this list at all (an intern, in the Job queue); '' when they can.
   editWhy: {
@@ -191,11 +253,14 @@ const emit = defineEmits<{
   confirming: [on: boolean],
   // The job changed (deleted, cancelled): the list refreshes.
   done: [flash: string],
-  error: [message: string]
+  error: [message: string],
+  // A draft was submitted from here: it is in the job queue now.
+  submitted: [job: Job]
 }>()
 
-type Confirming = 'delete' | 'takeover' | 'edit' | 'cancel'
-const CONFIRM_LABEL: Record<Confirming, string> = {delete: 'Delete', takeover: 'Take over and edit', edit: 'Edit anyway', cancel: 'Cancel run'}
+type Confirming = 'delete' | 'takeover' | 'edit' | 'cancel' | 'submit' | 'handover' | 'todrafts'
+const CONFIRM_LABEL: Record<Confirming, string> = {delete: 'Delete', takeover: 'Take over and edit', edit: 'Edit anyway', cancel: 'Cancel run',
+                                                   submit: 'Submit job', handover: 'Hand over to staff', todrafts: 'Move to Drafts'}
 
 const confirming = ref<Confirming | null>(null)
 // What the job's runs created, for the delete confirmation: undefined while it loads, null if it never ran.
@@ -216,6 +281,14 @@ const deleteWhy = computed(() => {
     || (lockedByOther.value ? `${props.job.editingBy} is editing this draft` : '')
 })
 const deleteTitle = computed(() => deleteWhy.value || 'Delete job')
+const jobName = computed(() => `“${props.job.name || 'Untitled job'}”`)
+// Submit from the list (staff): only a draft whose checks found nothing to fix; the server checks it all again
+const noSubmit = computed(() => listSubmitBlocked(props.job, props.counts))
+const submitTitle = computed(() => noSubmit.value || 'Check the whole job again, then add it to the job queue, without opening it')
+const submitText = computed(() => submitConfirmText(props.job, props.counts))
+const accessAction = computed(() => (props.job.internOpen ? 'Make staff only' : 'Open to interns'))
+const accessTitle = computed(() => (props.job.internOpen ? 'Interns can edit this draft now. Make it staff only.' : 'Only staff can edit this draft now. Let interns edit it too.'))
+const handOverTitle = computed(() => (lockedByOther.value ? `${props.job.editingBy} is editing this draft` : 'Give this draft to staff: it becomes staff only'))
 
 const askDelete = () => {
   confirming.value = 'delete'
@@ -244,6 +317,26 @@ const act = async (fn: () => Promise<unknown>, flash = '') => {
   }
 }
 
+const toggleAccess = () => act(
+  () => api.internAccess(props.job.id, !props.job.internOpen),
+  props.job.internOpen ? `${jobName.value} is now staff only.` : `${jobName.value} is now open to interns.`
+)
+
+const submit = async () => {
+  isBusy.value = true
+  try {
+    const job = await api.schedule(props.job.id)
+    confirming.value = null
+    emit('submitted', job)
+  } catch (e) {
+    confirming.value = null
+    emit('error', (e as Error).message)
+    emit('done', '') // the list reads the draft again: its checks may have changed
+  } finally {
+    isBusy.value = false
+  }
+}
+
 const deleteJob = () => act(() => api.deleteJob(props.job.id), props.kind === 'queue' ? 'Deleted the job.' : '')
 
 const confirmed = async () => {
@@ -255,6 +348,12 @@ const confirmed = async () => {
     }
   } else if (confirming.value === 'cancel') {
     await act(() => api.cancelRun(props.job.id))
+  } else if (confirming.value === 'submit') {
+    await submit()
+  } else if (confirming.value === 'handover') {
+    await act(() => api.internAccess(props.job.id, false), `${jobName.value} was handed over to staff.`)
+  } else if (confirming.value === 'todrafts') {
+    await act(() => api.toDrafts(props.job.id), `Moved ${jobName.value} to Drafts.`)
   }
 }
 </script>

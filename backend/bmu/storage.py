@@ -289,6 +289,15 @@ class Storage:
             if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
                 raise
 
+    def end_intern_editing(self, job_id: str) -> None:
+        """A draft became staff only (design: Roles): if an intern has it open, their editing ends."""
+        try:
+            self.jobs.update_item(Key={"PK": f"JOB#{job_id}", "SK": "META"}, ConditionExpression=Attr("editingRole").eq("intern"),
+                                  UpdateExpression="REMOVE editingBy, editingSession, editingSince")
+        except ClientError as e:
+            if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
+                raise
+
     def mark_saved(self, job_id: str, user: str, session: str, draft_days: int, fix: bool = False) -> bool:
         """Every change to a draft is saved at once; this records who saved it last and restarts its expiry
         (a fix's in draftExpiresAt, see draft_expiry). Only for the session that is editing it."""

@@ -138,3 +138,89 @@ describe('expanded job documents (design: every table sorts)', () => {
     expect(names()).toEqual(['a.jpg', 'b.jpg'])
   })
 })
+
+describe('staff actions on a draft in the list (design: Roles)', () => {
+  const draft = {id: 'e', name: 'Box 3', status: 'Draft', createdBy: 'kim', createdByRole: 'intern', internOpen: true, rowCount: 2,
+    lastSavedBy: 'lee', lastSavedAt: now, expiresAt: now + 30 * 86400}
+  let calls: { url: string; method: string; body: unknown }[] = []
+  const stub = (routes: (url: string, method: string) => { status?: number; body: unknown } | undefined, counts = {block: 0, warn: 1}) => {
+    calls = []
+    vi.stubGlobal('fetch', vi.fn((url: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET'
+      calls.push({url, method, body: init?.body ? JSON.parse(init.body as string) : undefined})
+      const r = routes(url, method) ?? (url.endsWith('/api/jobs') ? {body: {jobs: [draft]}} : {body: {rows: [], counts}})
+      return Promise.resolve(new Response(JSON.stringify(r.body), {status: r.status ?? 200, headers: {'content-type': 'application/json'}}))
+    }))
+  }
+
+  it('Submit… asks first, saying how much, who prepared it and whose sign-in it runs under; then submits', async () => {
+    stub((url) => (url.endsWith('/e/schedule') ? {body: {...draft, status: 'Queued'}} : undefined))
+    const w = mount(DraftsList, {props: {tenant, staff: true}})
+    await flushPromises()
+    expect(w.find('#job-e-access').text()).toBe('Open to interns')
+    await w.find('#job-e-submit-btn').trigger('click')
+    expect(calls.some((c) => c.url.endsWith('/schedule'))).toBe(false)
+    expect(w.find('#job-e-submit-confirm').text()).toContain('Submit “Box 3”? It has 2 documents, 1 with warnings. Created by kim (intern); last saved by lee. '
+      + 'The whole job is checked again, and it runs with your sign-in, which is deleted when the run ends.')
+    await w.find('#job-e-submit-cancel-btn').trigger('click')
+    expect(w.find('#job-e-submit-confirm').exists()).toBe(false)
+    await w.find('#job-e-submit-btn').trigger('click')
+    await w.find('#job-e-submit-confirm-btn').trigger('click')
+    await flushPromises()
+    expect(calls.filter((c) => c.url === '/api/jobs/e/schedule' && c.method === 'POST')).toHaveLength(1)
+    expect((w.emitted('submitted')![0][0] as {status: string}).status).toBe('Queued')
+    w.unmount()
+  })
+
+  it('Submit… is off, with the reason, while a document needs fixing', async () => {
+    stub(() => undefined, {block: 2, warn: 0})
+    const w = mount(DraftsList, {props: {tenant, staff: true}})
+    await flushPromises()
+    const b = w.find('#job-e-submit-btn')
+    expect(b.attributes('disabled')).toBeDefined()
+    expect(b.attributes('title')).toBe('Fix or exclude the 2 documents marked Needs fixing first: open the draft with Edit')
+    w.unmount()
+  })
+
+  it('shows the server\'s reason when the fresh check refuses the submit, and checks the drafts again', async () => {
+    stub((url) => (url.endsWith('/e/schedule') ? {status: 409, body: {detail: {message: '1 documents need fixing first.', rows: [2]}}} : undefined))
+    const w = mount(DraftsList, {props: {tenant, staff: true}})
+    await flushPromises()
+    await w.find('#job-e-submit-btn').trigger('click')
+    await w.find('#job-e-submit-confirm-btn').trigger('click')
+    await flushPromises()
+    expect(w.find('#drafts-error').text()).toBe('1 documents need fixing first.')
+    expect(w.emitted('submitted')).toBeUndefined()
+    expect(calls.filter((c) => c.url.endsWith('/e/check')).length).toBe(2)
+    w.unmount()
+  })
+
+  it('the setting is changed with one click, and the list says what happened', async () => {
+    stub((url) => (url.endsWith('/intern-access') ? {body: {...draft, internOpen: false}} : undefined))
+    const w = mount(DraftsList, {props: {tenant, staff: true}})
+    await flushPromises()
+    const b = w.find('#job-e-access-btn')
+    expect(b.text()).toBe('Make staff only')
+    await b.trigger('click')
+    await flushPromises()
+    expect(calls.find((c) => c.url === '/api/jobs/e/intern-access')!.body).toEqual({open: false})
+    expect(w.find('#drafts-message').text()).toBe('“Box 3” is now staff only.')
+    w.unmount()
+  })
+
+  it('an intern hands a draft over to staff after confirming, and has no Submit or setting', async () => {
+    stub((url) => (url.endsWith('/intern-access') ? {body: {...draft, internOpen: false}} : undefined))
+    const w = mount(DraftsList, {props: {tenant}})
+    await flushPromises()
+    expect(w.find('#job-e-submit-btn').exists()).toBe(false)
+    expect(w.find('#job-e-access-btn').exists()).toBe(false)
+    await w.find('#job-e-hand-over-btn').trigger('click')
+    expect(w.find('#job-e-handover-confirm').text()).toContain('You won\'t be able to edit it afterwards unless a staff member opens it to interns again.')
+    expect(calls.some((c) => c.url.endsWith('/intern-access'))).toBe(false)
+    await w.find('#job-e-handover-confirm-btn').trigger('click')
+    await flushPromises()
+    expect(calls.find((c) => c.url === '/api/jobs/e/intern-access')!.body).toEqual({open: false})
+    expect(w.find('#drafts-message').text()).toBe('“Box 3” was handed over to staff.')
+    w.unmount()
+  })
+})

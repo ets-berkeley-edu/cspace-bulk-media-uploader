@@ -57,6 +57,15 @@ deployment is built (`deploy/README.md`); what it leaves for later is listed the
   places only: when a Run now, a run time or a hold decides the order, or no order works, it says so instead.
 - **Drafts:** every change is saved as it's made. Anyone in the tenant can open a draft, one person at a time,
   with take-over. Drafts expire 30 days after they were last saved (7 if a document is a protected file).
+- **Open to interns or staff only.** Each draft shows which it is. Staff switch it either way, with a checkbox on
+  the Create / edit job page or a button on the draft's row; making a draft staff only ends an intern's editing of
+  it. An intern gives a finished draft to staff with **Hand over to staff…**, which makes it staff only; only staff
+  can open it to interns again. Each change is in the audit log ("Intern access changed").
+- **Submit… from Drafts.** Staff can submit a draft from the list or its preview without opening it, when its checks
+  found nothing to fix and nobody is editing it. The confirmation says how many documents it has, who created and
+  last saved it, and that it runs with the submitter's sign-in; the audit entry names who prepared it.
+- **Move to Drafts…** on a queued job takes it out of the queue like Edit (its saved sign-in is deleted), but
+  leaves it in Drafts in nobody's editor.
 - **Submit job** (only when nothing needs fixing) checks the whole job again with fresh permissions and adds it
   to the end of the job queue, with the submitter's password saved encrypted for at most 72 hours.
 - **Job scheduling:** queued jobs start at the tenant's run times (by default every day at 7:00 PM Pacific), one
@@ -305,7 +314,7 @@ because a page can hold 100 documents:
 reschedule or Reschedule, Delete), in `components/job/`.
 
 **Job lists and ids.** In each of the three lists a job is a `<tbody id="job-<id>">` holding its row, its
-confirmation and its details; a confirmation (Delete, Take over, Edit, Cancel run) opens in a full-width row under
+confirmation and its details; a confirmation (Delete, Take over, Edit, Cancel run, Submit, Hand over to staff, Move to Drafts) opens in a full-width row under
 the job. Every control has an id, built from the job's id or the document's number rather than its position
 (`job-<id>-edit-btn`, `job-<id>-status`, `result-<n>`, `run-<n>`), and state can be read from the page (a chip's
 text, `aria-expanded`, `aria-busy`). The browser tests planned for later rely on both; don't rename an id without
