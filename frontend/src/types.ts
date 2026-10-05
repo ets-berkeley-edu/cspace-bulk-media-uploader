@@ -48,8 +48,8 @@ export interface Me {
   user: string;
   tenant: TenantInfo;
   perms: Perms;
-  /** Has the tenant's BMU_Scheduler role: may change the schedule and the job queue (design: Job scheduling). */
-  scheduler?: boolean;
+  /** The user's BMU role, from their CollectionSpace roles (design: Roles). */
+  role: 'staff' | 'intern';
   /** The largest file the BMU accepts, in bytes; the page skips larger files before adding them (design: Browser uploads). */
   maxFileBytes?: number;
 }
@@ -252,6 +252,12 @@ export interface Job {
   editingBy?: string;
   editingSince?: number;
   editingByYou?: boolean;
+  /** The BMU role of whoever has the draft open: an intern can't take over from staff (design: Roles). */
+  editingRole?: 'staff' | 'intern';
+  /** The creator's BMU role when they created the job (design: Roles). */
+  createdByRole?: 'staff' | 'intern';
+  /** Whether interns may edit this job while it is a draft (design: Roles). */
+  internOpen?: boolean;
   lastSavedBy?: string;
   lastSavedAt?: number;
   expiresAt?: number;

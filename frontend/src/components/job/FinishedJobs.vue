@@ -246,7 +246,7 @@ import {api} from '@/api'
  * needs attention or failed to Drafts; Delete removes it from the BMU (never from CollectionSpace).
  */
 defineProps({
-  // Why this user can't create or edit jobs (design: Permissions in the UI); '' when they can.
+  // Why this user can't change the jobs of this list (an intern, outside Drafts; design: Roles); '' when they can.
   editWhy: {
     default: '',
     required: false,

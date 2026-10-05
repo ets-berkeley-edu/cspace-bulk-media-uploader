@@ -11,8 +11,17 @@ deployment is built (`deploy/README.md`); what it leaves for later is listed the
 ## What it does
 
 - **Sign in** with your CollectionSpace account (HTTP Basic). The BMU reads your permissions
-  (`accounts/0/accountperms`) and roles (`accounts/0/accountroles`). Creating or editing jobs needs create and
-  update on Media records; without them you can only view jobs.
+  (`accounts/0/accountperms`) and roles (`accounts/0/accountroles`).
+- **Roles.** Every BMU user has one of two CollectionSpace roles, **BMU_Staff** or **BMU_Intern**
+  (`ROLE_<tenant id>_BMU_STAFF`, `ROLE_<tenant id>_BMU_INTERN`; named per tenant in its YAML file). The roles carry
+  no permissions in CollectionSpace: they only tell the BMU what the user may do. Staff do everything. An intern
+  creates drafts and edits the drafts that are open to interns (a draft an intern created; a staff member's is
+  staff only); an intern can't submit, can't take over a draft a staff member is editing, can't delete a draft that
+  has already run, and sees the Job queue and Finished jobs without changing them. A user with both roles is
+  staff. A user with neither can't sign in. A staff account must also be able to create and update Media records,
+  create relations, and read Objects, Media, the Person and Organization authorities, vocabularies and the date
+  parser (the tenant's `staff_permissions`); otherwise the sign-in is refused with what is missing and a line to
+  contact the CollectionSpace administrator. Creating Objects and groups is not required to sign in.
 - **Create a job and add files.** The browser uploads each file straight to S3 with a presigned POST (with Retry
   and Remove if an upload fails), reads its EXIF date and orientation, and shows a thumbnail. Accepted: JPEG, TIFF,
   PNG, PDF, WAV, MP3, AAC, MP4 and X3D; other files are skipped with a message. Filenames follow PAHMA's rule: the
@@ -40,10 +49,10 @@ deployment is built (`deploy/README.md`); what it leaves for later is listed the
   earlier job creates first; the message names that job and offers "Link to object (create if missing)". "Warning": a
   document with the same identification number as one in an earlier job (both Media records would be created). The
   other order, "Create new object + link" ahead of "Link to object (create if missing)", works and is allowed.
-  **Changing the order:** before a scheduler's move, Run now, Hold or run time takes effect, the BMU works out the new
+  **Changing the order:** before a staff member's move, Run now, Hold or run time takes effect, the BMU works out the new
   order; if it would make a document fail, it says which and asks ("Move anyway" or Cancel). If they go ahead, the
   job is marked "needs fixing" at once in "Checks now", for everyone looking at the queue; it still runs, and the
-  worker fails that document before creating anything for it. **Reorder to avoid failures** (schedulers) puts the
+  worker fails that document before creating anything for it. **Reorder to avoid failures** (staff) puts the
   queue in an order where nothing fails, moving as few jobs as possible, after showing what will move. It changes
   places only: when a Run now, a run time or a hold decides the order, or no order works, it says so instead.
 - **Drafts:** every change is saved as it's made. Anyone in the tenant can open a draft, one person at a time,
@@ -51,10 +60,9 @@ deployment is built (`deploy/README.md`); what it leaves for later is listed the
 - **Submit job** (only when nothing needs fixing) checks the whole job again with fresh permissions and adds it
   to the end of the job queue, with the submitter's password saved encrypted for at most 72 hours.
 - **Job scheduling:** queued jobs start at the tenant's run times (by default every day at 7:00 PM Pacific), one
-  job at a time per tenant, in queue order. Users with the CollectionSpace role **BMU_Scheduler**
-  (`ROLE_<tenant id>_BMU_SCHEDULER`) can change the run days and times, pause and resume the queue, reorder it,
-  and give a job Run now, its own run time or a hold. Everyone sees when each job will run. Cancel run is for
-  schedulers and the person who submitted the job. A job whose saved sign-in expires while it waits moves back to
+  job at a time per tenant, in queue order. Staff (see Roles) can change the run days and times, pause and
+  resume the queue, reorder it, give a job Run now, its own run time or a hold, and cancel any run. Everyone sees
+  when each job will run. A job whose saved sign-in expires while it waits moves back to
   Drafts.
 - **The run:** a worker runs each document's steps in order: check the document in CollectionSpace again, create
   the Media record, find or create the Object, attach the file (`PUT media/{csid}/blob`, which creates the Blob),
@@ -80,7 +88,7 @@ deployment is built (`deploy/README.md`); what it leaves for later is listed the
 | Path | What |
 | --- | --- |
 | `backend/bmu/` | FastAPI app (`app.py`), worker (`worker.py`), row checks (`rows.py`), job scheduling (`schedule.py`), CollectionSpace client and payloads (`cspace/`), storage (DynamoDB, S3), credential encryption |
-| `backend/bmu/tenants/pahma.yaml` | PAHMA configuration: handling options, filename rule, field lists, sensitivity rules, scheduler roles |
+| `backend/bmu/tenants/pahma.yaml` | PAHMA configuration: handling options, filename rule, field lists, sensitivity rules, the two BMU roles and what staff must be permitted |
 | `backend/bmu/failures.yaml` | The failure catalog: every failure code with its title, explanation and what to do |
 | `backend/fakecspace/` | A simulated CollectionSpace API for development and tests (not CollectionSpace) |
 | `backend/tests/` | pytest: unit tests and the full run path with moto (AWS) and the simulated CollectionSpace |
@@ -104,11 +112,16 @@ docker compose up --build
 
 Open http://localhost:5173. With the simulated CollectionSpace, sign in as:
 
-| User | Permissions |
-| --- | --- |
-| `admin` / `admin` | Everything, and the BMU_Scheduler role |
-| `limited` / `limited` | Can't create objects or groups; not a scheduler |
-| `reader` / `reader` | Read only: can view jobs but not create or edit them |
+| User | BMU role | What it shows |
+| --- | --- | --- |
+| `admin` / `admin` | Staff | Every permission |
+| `limited` / `limited` | Staff | Can't create objects or groups |
+| `intern` / `intern` | Intern | No CollectionSpace permissions at all: creates drafts and edits the drafts that are open to interns |
+| `newstaff` / `newstaff` | Staff | Can only read, so the BMU refuses the sign-in and says what is missing |
+| `reader` / `reader` | none | Has neither BMU role, so the BMU refuses the sign-in |
+
+Until the read-only service account for interns' checks is built (design: Roles), an intern's documents are
+checked with the intern's own account, which can read nothing, so they show "needs fixing" for that reason.
 
 Submitted jobs wait for the run time (7:00 PM Pacific). To have them start at once while you try things, set
 `BMU_ALWAYS_RUN_TIME=true` in `.env` (or start with `BMU_ALWAYS_RUN_TIME=true docker compose up`); pause and hold
@@ -321,7 +334,7 @@ export CSPACE_URL=https://pahma.qa.collectionspace.org CSPACE_USER=... CSPACE_PA
 python scripts/check_cspace.py --object <an existing object number> --term <3+ letters of a person's name>
 python scripts/check_cspace.py --object <number> --show-object   # the Object's fields and the sensitivity verdict
 python scripts/check_cspace.py --vocabularies                    # the Person and Organization vocabularies
-python scripts/check_cspace.py --roles                           # your roles, and whether you're a BMU scheduler
+python scripts/check_cspace.py --roles                           # your roles, your BMU role, and what a staff account lacks
 python scripts/check_cspace.py --terms person:<short id> ...     # read terms as the BMU does (deleted, merged, renamed)
 python scripts/check_cspace.py --create                          # also creates one test Media/Object pair (BMU-TEST-<time>)
 ```
@@ -342,8 +355,8 @@ python scripts/check_cspace.py --create                          # also creates 
   presigned download URLs are given to anyone; thumbnails are served by the web app after checking the session.
 - Sessions end after 30 minutes without activity (`BMU_SESSION_IDLE_MINUTES`) or 8 hours in all
   (`BMU_SESSION_HOURS`); the lists' background refreshes don't count as activity.
-- Schedule and queue changes check the BMU_Scheduler role on the server each time, so removing the role takes
-  effect at once.
+- Everything only staff may do (submitting, the schedule, the queue, finished jobs) reads the user's roles from
+  CollectionSpace again each time, so removing the BMU_Staff role takes effect at once.
 
 ## Audit log
 

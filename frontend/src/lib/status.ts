@@ -74,22 +74,8 @@ export function jobCounts(rows: Row[]) {
 }
 
 /**
- * Why the signed-in user can't create or edit jobs, or "" when they can (design: Permissions in the UI). Every
- * job creates Media records and attaches their files, so without create and update on Media the user can only
- * view jobs; the API refuses the changes too (403).
- */
-export function editBlocked(perms: Perms): string {
-  if (perms.media === false || perms.mediaUpdate === false) return 'Your CollectionSpace account can\'t create and update Media records.'
-  return ''
-}
-
-/** The longer explanation shown instead of the editor when editBlocked (design: Permissions in the UI). */
-export const EDIT_BLOCKED_EXPLAIN = 'Your CollectionSpace account can\'t create and update Media records, so it can\'t create or edit jobs. '
-  + 'You can still view them in Drafts, Job queue and Finished jobs.'
-
-/**
  * Why the signed-in user can't use a handling option, or "" when they can (design: Permissions in the UI).
- * Missing Media permissions aren't a reason here: without them the whole editor is unavailable (editBlocked).
+ * Missing Media permissions aren't a reason here: staff can't sign in without them (design: Roles).
  */
 export function handlingBlocked(h: Handling, perms: Perms): string {
   if (h.object !== 'none' && perms.readObjects === false) return 'Your account can\'t read Object records, so it can\'t find objects.'

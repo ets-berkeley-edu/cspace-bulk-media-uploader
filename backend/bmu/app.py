@@ -21,7 +21,7 @@ from . import logsafe
 from . import schedule as sched
 from .config import Settings, get_settings
 from .crypto import Crypto, make_crypto
-from .cspace import CSpaceClient, CSpaceError
+from .cspace import CSpaceClient, CSpaceError, Permissions
 from .failures import catalog
 from .filetypes import content_type, unsupported
 from .rows import (PROBLEM_TEXT, apply_edit, can_replace_file, check_rows, clean_filename, collision_checks, created_records,
@@ -146,7 +146,7 @@ class Session(BaseModel):
     tenant: str
     perms: dict[str, bool]
     password_token: str
-    scheduler: bool = False  # a BMU scheduler when signing in (design: Job scheduling)
+    role: str = "staff"  # "staff" or "intern": the user's BMU role (design: Roles)
 
     def client(self, s: Services) -> CSpaceClient:
         pw = s.crypto.decrypt("session", self.password_token, {"user": self.user, "session": self.key})
@@ -161,6 +161,9 @@ def current_session(request: Request, s: Services = Depends(svc)) -> Session:
     item = s.storage.get_session(_hash(token)) if token else None
     if not item:
         raise HTTPException(401, "Please sign in with your CollectionSpace account.")
+    if item.get("role") not in ROLES:  # a session from before the BMU had roles
+        s.storage.end_session(item["PK"], item.get("tenant"))
+        raise HTTPException(401, "Please sign in again.")
     t = now()
     last = float(item.get("lastSeen") or item.get("expires", t) - s.settings.session_hours * 3600)
     if t - last > s.settings.session_idle_minutes * 60:
@@ -170,64 +173,95 @@ def current_session(request: Request, s: Services = Depends(svc)) -> Session:
     if request.headers.get("x-bmu-poll") != "1" and t - last > 60:
         s.storage.touch_session(item["PK"], t)
     return Session(key=item["PK"], user=item["user"], tenant=item["tenant"], perms=item["perms"],
-                   password_token=item["password"], scheduler=bool(item.get("scheduler")))
+                   password_token=item["password"], role=item["role"])
 
 
-EDIT_REFUSED = ("Your CollectionSpace account can't create and update Media records, so it can't create or edit jobs. "
-                "You can still view them.")
+ROLES = ("staff", "intern")
+STAFF_REFUSED = ("Only users with the BMU_Staff role can do this. Interns can create drafts and edit the drafts that are "
+                 "open to interns.")
+INTERN_DRAFT_REFUSED = "This draft is for staff only, so an intern can't edit or delete it."
+INTERN_TAKEOVER_REFUSED = "A staff member is editing this draft. Only staff can take it over."
+INTERN_DELETE_RAN = "This job has already run, so only staff can delete it. You can still edit it."
+ADMIN_HELP = "Contact your CollectionSpace administrator if you think this is wrong."
+
+# How the sign-in messages name what an account can't do (design: Roles)
+_RESOURCE_LABEL = {"media": "Media records", "relations": "relations", "collectionobjects": "Objects", "groups": "groups",
+                   "personauthorities": "Person authorities", "orgauthorities": "Organization authorities",
+                   "vocabularies": "vocabularies", "structureddates": "dates (the date parser)"}
+_ACTION_LABEL = {"C": "create", "R": "read", "U": "update", "D": "delete", "L": "search"}
 
 
-def can_edit(perms: dict[str, bool]) -> bool:
-    """Creating or editing a job needs create and update on media, since every job creates Media records and
-    attaches files to them (design: Authentication, permissions)."""
-    return bool(perms.get("media")) and bool(perms.get("mediaUpdate", True))
+def _join(parts: list[str]) -> str:
+    return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " or " + parts[-1]
+
+
+def _staff_missing(s: Services, perms: Permissions) -> str:
+    """Design (Roles): what a staff account lacks of the tenant's staff_permissions, in words ("create Media
+    records or read Objects"); "" if nothing. The roles carry no permissions, so having BMU_Staff doesn't mean the
+    account can do what the BMU exists for."""
+    missing = perms.missing(s.tenant.staff_permissions)
+    return _join([f"{_ACTION_LABEL.get(a, a)} {_RESOURCE_LABEL.get(res, res)}" for res, a in missing]) if missing else ""
+
+
+def _account_refused(s: Services, missing: str) -> HTTPException:
+    return HTTPException(403, {"code": "account", "message":
+                               f"Your CollectionSpace account has the {_join(list(s.tenant.staff_roles))} role, but it can't "
+                               f"{missing}. The BMU needs that to create Media records. {ADMIN_HELP}"})
+
+
+def _read_role(s: Services, client: CSpaceClient) -> str:
+    """The account's BMU role for this tenant, "staff", "intern" or "" (design: Roles). Raises CSpaceError if
+    the roles can't be read."""
+    roles = client.account_roles()
+    return s.tenant.role_of(roles.tenant_id, roles.role_names)
 
 
 def editor_session(sess: Session = Depends(current_session)) -> Session:
-    """The signed-in session of a request that creates or changes a job: every such endpoint takes this instead
-    of current_session, so a user who may only view jobs is refused before anything is read or written."""
-    if not can_edit(sess.perms):
-        raise HTTPException(403, EDIT_REFUSED)
+    """The signed-in session of a request that creates or changes a draft. Staff and interns both may; which
+    drafts an intern may change is decided per job (see _intern_may)."""
     return sess
 
 
-SCHEDULER_REFUSED = "Only users with the BMU_Scheduler role can change the schedule or the job queue."
-CANCEL_REFUSED = "Only a BMU scheduler or the person who submitted the job can cancel its run."
-
-
-def _read_scheduler(s: Services, client: CSpaceClient, user: str) -> bool:
-    """Whether the account is a BMU scheduler for this tenant: one of its CollectionSpace roles is one of the
-    tenant's scheduler_roles (design: Job scheduling). Raises CSpaceError if the roles can't be read."""
-    roles = client.account_roles()
-    return s.tenant.is_scheduler(roles.tenant_id, roles.role_names)
-
-
-def _scheduler_now(s: Services, sess: Session) -> bool:
-    """Read the session user's roles again, with their credentials, and keep the session's flag up to date, so
-    a role removed in CollectionSpace takes effect at once. A refused roles request means not a scheduler; a
+def _role_now(s: Services, sess: Session) -> str:
+    """Read the session user's roles again, with their credentials, and keep the session's role up to date, so
+    a role removed in CollectionSpace takes effect at once. A refused roles request means no role; a
     CollectionSpace that doesn't answer (or no longer accepts the sign-in) is reported as such."""
     client = sess.client(s)
     try:
-        scheduler = _read_scheduler(s, client, sess.user)
+        role = _read_role(s, client)
     except CSpaceError as e:
         if e.code in ("auth", "unavailable", "server"):
             raise _cspace_http(e)
-        log.warning("reading the roles of %s failed (%s); not a scheduler", sess.user, e)
-        scheduler = False
+        log.warning("reading the roles of %s failed (%s); no BMU role", sess.user, e)
+        role = ""
     finally:
         client.close()
-    if scheduler != sess.scheduler:
-        s.storage.update_session_scheduler(sess.key, scheduler)
-    return scheduler
+    if role != sess.role and role in ROLES:
+        s.storage.update_session_role(sess.key, role)
+    return role
 
 
-def scheduler_session(sess: Session = Depends(current_session), s: Services = Depends(svc)) -> Session:
-    """The signed-in session of a request that changes the schedule or the job queue: only BMU schedulers,
-    checked against CollectionSpace on every such request (design: Job scheduling). Separate from editing
-    rights: a scheduler who can't create Media records can still manage the schedule and the queue."""
-    if not _scheduler_now(s, sess):
-        raise HTTPException(403, SCHEDULER_REFUSED)
-    return sess.model_copy(update={"scheduler": True})
+def _require_staff(s: Services, sess: Session) -> Session:
+    if _role_now(s, sess) != "staff":
+        raise HTTPException(403, STAFF_REFUSED)
+    return sess.model_copy(update={"role": "staff"})
+
+
+def staff_session(sess: Session = Depends(current_session), s: Services = Depends(svc)) -> Session:
+    """The signed-in session of a request only staff may make: submitting a job, and every change to the schedule,
+    the job queue or a finished job. Checked against CollectionSpace on every such request (design: Roles)."""
+    return _require_staff(s, sess)
+
+
+def _intern_may(job: dict, sess: Session, delete: bool = False) -> None:
+    """Design (Roles): an intern edits only a draft that is open to interns, and deletes one only if it has
+    never run. Staff are not limited here."""
+    if sess.role == "staff":
+        return
+    if job.get("status") != "Draft" or not job.get("internOpen"):
+        raise HTTPException(403, INTERN_DRAFT_REFUSED)
+    if delete and (int(job.get("run") or 0) > 0 or job.get("fixFrom")):
+        raise HTTPException(403, INTERN_DELETE_RAN)
 
 
 def _job_or_404(s: Services, sess: Session, job_id: str) -> dict:
@@ -371,10 +405,10 @@ def _upload_form(s: "Services", key: str, size: int, content_type: str) -> dict:
     return demo.route_upload(s, form)
 
 
-def _me(s: "Services", user: str, perms: dict, scheduler: bool) -> dict:
+def _me(s: "Services", user: str, perms: dict, role: str) -> dict:
     """What the browser needs about the signed-in user and the app: the tenant's settings, the user's permissions,
     and the per-file size limit, so the page skips files over it before asking to add them (design: Browser uploads)."""
-    return {"user": user, "tenant": s.tenant.public_summary(), "perms": perms, "scheduler": scheduler,
+    return {"user": user, "tenant": s.tenant.public_summary(), "perms": perms, "role": role,
             "maxFileBytes": s.settings.max_file_bytes}
 
 
@@ -396,7 +430,7 @@ def _delete_job(s: "Services", sess: "Session", job: dict, rows: list[dict],
     s.storage.delete_job_and_files(job["id"])
 
 
-QUEUE_FIELDS = ("runNow", "runAt", "held")  # a scheduler's settings for one queued job (design: Job scheduling)
+QUEUE_FIELDS = ("runNow", "runAt", "held")  # staff's settings for one queued job (design: Job scheduling)
 
 
 class QueueView:
@@ -535,28 +569,39 @@ def _routes(app: FastAPI) -> None:
         client = s.client_factory(body.username, body.password)
         try:
             perms = client.account_permissions()
-            try:  # design (Job scheduling): a user whose roles can't be read is not a scheduler; sign-in goes on
-                scheduler = _read_scheduler(s, client, body.username)
+            try:
+                role = _read_role(s, client)
             except CSpaceError as e:
-                log.warning("reading the roles of %s at sign-in failed (%s); not a scheduler", body.username, e)
-                scheduler = False
+                if e.code in ("auth", "unavailable", "server"):
+                    raise
+                log.warning("reading the roles of %s at sign-in failed (%s); no BMU role", body.username, e)
+                role = ""
         except CSpaceError as e:
             if e.code in ("auth", "forbidden"):
                 raise HTTPException(401, "CollectionSpace didn't accept that username and password.")
             raise _cspace_http(e)
         finally:
             client.close()
+        # Design (Roles): every BMU user has one of the two roles; staff must also be able to do what the BMU
+        # exists for. Both refusals say whom to ask.
+        if role not in ROLES:
+            names = _join([*s.tenant.staff_roles, *s.tenant.intern_roles])
+            raise HTTPException(403, {"code": "no_role", "message":
+                                      f"Your CollectionSpace account doesn't have the {names} role, which the BMU needs. "
+                                      f"{ADMIN_HELP}"})
+        if role == "staff" and (missing := _staff_missing(s, perms)):
+            raise _account_refused(s, missing)
         token = secrets.token_urlsafe(32)
         key = _hash(token)
         expires = now() + s.settings.session_hours * 3600
         s.storage.put_session(key, {
-            "user": body.username, "tenant": s.tenant.key, "perms": perms.summary, "scheduler": scheduler,
+            "user": body.username, "tenant": s.tenant.key, "perms": perms.summary, "role": role,
             "expires": int(expires), "lastSeen": now(),
             "password": s.crypto.encrypt("session", body.password, {"user": body.username, "session": key}),
         })
         response.set_cookie(s.settings.cookie_name, token, httponly=True, secure=s.settings.cookie_secure, samesite="strict",
                             max_age=int(s.settings.session_hours * 3600), path="/")
-        return _me(s, body.username, perms.summary, scheduler)
+        return _me(s, body.username, perms.summary, role)
 
     @app.post("/api/logout")
     def logout(response: Response, request: Request, s: Services = Depends(svc)):
@@ -576,7 +621,7 @@ def _routes(app: FastAPI) -> None:
 
     @app.get("/api/me")
     def me(sess: Session = Depends(current_session), s: Services = Depends(svc)):
-        return _me(s, sess.user, sess.perms, sess.scheduler)
+        return _me(s, sess.user, sess.perms, sess.role)
 
     # ---- authority autocomplete (existing terms only) ------------------------------------
     @app.get("/api/authorities")
@@ -645,7 +690,8 @@ def _routes(app: FastAPI) -> None:
 
     @app.post("/api/jobs")
     def create_job(body: NewJob, sess: Session = Depends(editor_session), s: Services = Depends(svc)):
-        return _public(s.storage.create_job(sess.tenant, sess.user, body.name.strip(), sess.key, s.settings.draft_days), sess)
+        return _public(s.storage.create_job(sess.tenant, sess.user, body.name.strip(), sess.key, s.settings.draft_days,
+                                            role=sess.role), sess)
 
     @app.get("/api/jobs/{job_id}")
     def get_job(job_id: str, sess: Session = Depends(current_session), s: Services = Depends(svc)):
@@ -656,7 +702,7 @@ def _routes(app: FastAPI) -> None:
 
     # ---- Fix and reschedule (design: Fixing a job after a run; Rescheduling after a run) --------------
     @app.post("/api/jobs/{job_id}/fix")
-    def fix(job_id: str, sess: Session = Depends(editor_session), s: Services = Depends(svc)):
+    def fix(job_id: str, sess: Session = Depends(staff_session), s: Services = Depends(svc)):
         """Fix and reschedule (or Reschedule): a job that needs attention or failed moves to Drafts, locked to
         you. Its rows keep their results; scheduling it queues a rerun of only what's unfinished. A fix not
         scheduled within 30 days of its last change is reverted."""
@@ -672,13 +718,13 @@ def _routes(app: FastAPI) -> None:
             who = now_job.get("editingBy")
             raise HTTPException(409, f"{who} is already fixing this job; it's in Drafts." if who else
                                 f"The job is {now_job.get('status')}; only jobs that need attention or failed can be fixed.")
-        s.storage.open_draft(job_id, sess.user, sess.key)
+        s.storage.open_draft(job_id, sess.user, sess.key, role=sess.role)
         return _public(s.storage.get_job(job_id), sess)
 
     # ---- the job queue (design: The job queue; State rules) ---------------------------------------
     @app.post("/api/jobs/{job_id}/move")
-    def move_job(job_id: str, body: MoveJob, sess: Session = Depends(scheduler_session), s: Services = Depends(svc)):
-        """Change a queued job's place in the queue (BMU schedulers only; design: Job scheduling). Running jobs
+    def move_job(job_id: str, body: MoveJob, sess: Session = Depends(staff_session), s: Services = Depends(svc)):
+        """Change a queued job's place in the queue (staff only; design: Job scheduling). Running jobs
         stay first and can't be moved."""
         job = _job_or_404(s, sess, job_id)
         s.queue_rows.pop(sess.tenant, None)  # the queue is about to change: read it again (see _queue_rows)
@@ -700,7 +746,7 @@ def _routes(app: FastAPI) -> None:
         return {"jobs": [_public(by_id[j["id"]], sess, view=view) for j in order if j["id"] in by_id]}
 
     @app.post("/api/jobs/{job_id}/edit")
-    def edit_queued(job_id: str, sess: Session = Depends(editor_session), s: Services = Depends(svc)):
+    def edit_queued(job_id: str, sess: Session = Depends(staff_session), s: Services = Depends(svc)):
         """Edit a queued job: it leaves the queue for Drafts, locked to you, and its saved sign-in is deleted.
         It goes to the end of the queue when it is scheduled again."""
         job = _job_or_404(s, sess, job_id)
@@ -710,18 +756,16 @@ def _routes(app: FastAPI) -> None:
                                     expect_status="Queued"):
             raise HTTPException(409, f"The job is {s.storage.get_job(job_id)['status']}; only queued jobs can be edited this way.")
         s.storage.delete_credential(job_id)
-        s.storage.open_draft(job_id, sess.user, sess.key)
+        s.storage.open_draft(job_id, sess.user, sess.key, role=sess.role)
         s.storage.audit(sess.tenant, "Moved to Drafts", sess.user, job_id,
                         f"Took “{job['name']}” out of the queue to edit it; its saved sign-in was deleted.")
         return _public(s.storage.get_job(job_id), sess)
 
     @app.post("/api/jobs/{job_id}/cancel")
-    def cancel_run(job_id: str, sess: Session = Depends(current_session), s: Services = Depends(svc)):
+    def cancel_run(job_id: str, sess: Session = Depends(staff_session), s: Services = Depends(svc)):
         """Cancel run: the worker finishes the document in progress, then stops (Needs attention, cancelled).
-        Design (Job scheduling): BMU schedulers, or the person who submitted the job."""
+        Design (Roles): any staff member, for any job."""
         job = _job_or_404(s, sess, job_id)
-        if job.get("scheduledBy") != sess.user and not _scheduler_now(s, sess):
-            raise HTTPException(403, CANCEL_REFUSED)
         if not s.storage.update_job(job_id, {"cancelRequested": {"by": sess.user, "at": now()}}, expect_status="Running"):
             raise HTTPException(409, "Only a running job can be cancelled.")
         s.storage.audit(sess.tenant, "Run cancelled", sess.user, job_id,
@@ -734,8 +778,12 @@ def _routes(app: FastAPI) -> None:
         job = _job_or_404(s, sess, job_id)
         if job["status"] != "Draft":
             raise HTTPException(409, f"The job is {job['status']}; only drafts can be edited.")
+        _intern_may(job, sess)
         take = body.takeOverSince if body else None
-        if not s.storage.open_draft(job_id, sess.user, sess.key, take):
+        if take is not None and sess.role != "staff" and job.get("editingSession") not in (None, sess.key) \
+                and job.get("editingRole", "staff") == "staff":
+            raise HTTPException(403, INTERN_TAKEOVER_REFUSED)
+        if not s.storage.open_draft(job_id, sess.user, sess.key, take, role=sess.role):
             job = s.storage.get_job(job_id)
             raise HTTPException(409, {"code": "locked", "editingBy": job.get("editingBy", ""), "editingSince": job.get("editingSince"),
                                       "message": f"{job.get('editingBy')} is editing this draft."})
@@ -802,6 +850,9 @@ def _routes(app: FastAPI) -> None:
             raise HTTPException(409, "Completed jobs are removed on their own 30 days after they finish.")
         if job["status"] not in ("Draft", "Queued", *FIXABLE):
             raise HTTPException(409, f"The job is {job['status']} and can't be deleted now.")
+        if job["status"] != "Draft":  # design (Roles): a queued or finished job is deleted by staff only
+            sess = _require_staff(s, sess)
+        _intern_may(job, sess, delete=True)
         if job.get("editingSession") and job["editingSession"] != sess.key:
             raise HTTPException(409, f"{job.get('editingBy')} is editing this draft, so it can't be deleted.")
         _delete_job(s, sess, job, s.storage.get_rows(job_id))
@@ -1078,7 +1129,7 @@ def _routes(app: FastAPI) -> None:
         return {"rows": r["rows"], "counts": r["counts"]}
 
     @app.post("/api/jobs/{job_id}/schedule")
-    def schedule(job_id: str, sess: Session = Depends(editor_session), s: Services = Depends(svc)):
+    def schedule(job_id: str, sess: Session = Depends(staff_session), s: Services = Depends(svc)):
         job = _job_or_404(s, sess, job_id)
         s.queue_rows.pop(sess.tenant, None)  # the queue is about to change: read it again (see _queue_rows)
         if job["status"] not in RESCHEDULABLE:
@@ -1087,10 +1138,9 @@ def _routes(app: FastAPI) -> None:
             _editable(job, sess)  # only the draft's editor schedules it
         if job.get("groupOn") and not (job.get("groupTitle") or "").strip():
             raise HTTPException(409, "Enter a group title, or turn off the job's group.")
-        # Roles can change during a session: fetch the permissions again, then check the whole job afresh.
+        # Permissions can change during a session: fetch them again (refused if the account no longer has what
+        # staff need), then check the whole job afresh.
         sess = _refresh_permissions(s, sess)
-        if not can_edit(sess.perms):
-            raise HTTPException(403, EDIT_REFUSED)
         result = _recheck(s, sess, job_id, targets=None, refresh=True)
         work = [r for r in result["rows"] if r.get("include") and (r.get("result") or {}).get("state") != "Done"]
         if not work:
@@ -1106,7 +1156,7 @@ def _routes(app: FastAPI) -> None:
         if not s.storage.queue_with_credential(
                 job_id, sess.user, s.crypto.encrypt("job", pw, {"user": sess.user, "job": job_id}), expires,
                 {"status": "Queued", "queuedAt": t, "queuePos": t, "scheduledBy": sess.user, "note": "",
-                 "runNow": False, "runAt": None, "held": None,  # a scheduler's settings from an earlier time in the queue
+                 "runNow": False, "runAt": None, "held": None,  # staff's settings from an earlier time in the queue
                  "credentialExpires": int(expires), "checksAtSchedule": result["counts"],
                  "progress": {"total": len(work), "done": 0, "failed": 0}},
                 list(RESCHEDULABLE), sess.key):
@@ -1116,7 +1166,7 @@ def _routes(app: FastAPI) -> None:
         s.storage.audit(sess.tenant, "Submitted", sess.user, job_id, f"Submitted “{job['name']}” with {len(work)} documents.")
         return _public(s.storage.get_job(job_id), sess, s)  # with its plan: when it runs (design: Job scheduling)
 
-    # ---- the schedule and the scheduler's queue actions (design: Job scheduling) ----------------------------
+    # ---- the schedule and staff's queue actions (design: Job scheduling) ----------------------------
     def _schedule_view(s: Services, tenant: str) -> dict:
         return sched.view(sched.load(s.storage, tenant), s.clock(), s.settings.always_run_time)
 
@@ -1125,7 +1175,7 @@ def _routes(app: FastAPI) -> None:
         return _schedule_view(s, sess.tenant)
 
     @app.put("/api/schedule")
-    def put_schedule(body: ScheduleBody, sess: Session = Depends(scheduler_session), s: Services = Depends(svc)):
+    def put_schedule(body: ScheduleBody, sess: Session = Depends(staff_session), s: Services = Depends(svc)):
         try:
             fields = sched.validate(body.days, body.start, body.end)
         except sched.ScheduleError as e:
@@ -1139,8 +1189,8 @@ def _routes(app: FastAPI) -> None:
         return _schedule_view(s, sess.tenant)
 
     @app.post("/api/schedule/pause")
-    def pause_queue(body: PauseBody, sess: Session = Depends(scheduler_session), s: Services = Depends(svc)):
-        """Pause the queue: no job starts until a scheduler resumes it; a running job runs on."""
+    def pause_queue(body: PauseBody, sess: Session = Depends(staff_session), s: Services = Depends(svc)):
+        """Pause the queue: no job starts until a staff member resumes it; a running job runs on."""
         reason = body.reason.strip()
         if not reason:
             raise HTTPException(422, "Give a reason for pausing the queue.")
@@ -1150,7 +1200,7 @@ def _routes(app: FastAPI) -> None:
         return _schedule_view(s, sess.tenant)
 
     @app.post("/api/schedule/resume")
-    def resume_queue(sess: Session = Depends(scheduler_session), s: Services = Depends(svc)):
+    def resume_queue(sess: Session = Depends(staff_session), s: Services = Depends(svc)):
         was = s.storage.resume_queue(sess.tenant)
         if was:  # resuming a queue that isn't paused changes nothing
             s.storage.audit(sess.tenant, "Queue resumed", sess.user, "",
@@ -1159,8 +1209,8 @@ def _routes(app: FastAPI) -> None:
 
     def _queue_action(s: Services, sess: Session, job_id: str, fields: dict, audit_type: str, detail: str,
                       confirm: bool = False) -> dict:
-        """Set a scheduler's setting on a queued job, only if it is still Queued (one conditional write). A setting
-        that would make a document fail is refused until the scheduler confirms (see _guard)."""
+        """Set a staff member's setting on a queued job, only if it is still Queued (one conditional write). A setting
+        that would make a document fail is refused until they confirm (see _guard)."""
         s.queue_rows.pop(sess.tenant, None)  # the order may change: read the queue again (see _queue_rows)
         job = _job_or_404(s, sess, job_id)
         if job["status"] == "Queued":
@@ -1173,7 +1223,7 @@ def _routes(app: FastAPI) -> None:
         return {"job": _public(s.storage.get_job(job_id), sess, s)}
 
     @app.post("/api/jobs/{job_id}/run-now")
-    def run_now(job_id: str, body: OnOff, sess: Session = Depends(scheduler_session), s: Services = Depends(svc)):
+    def run_now(job_id: str, body: OnOff, sess: Session = Depends(staff_session), s: Services = Depends(svc)):
         """Run now: the job goes first, as soon as no job is running, whatever the run times (not while paused)."""
         if body.on:
             return _queue_action(s, sess, job_id, {"runNow": True}, "Run now", "“{name}” runs next, as soon as no job is running.",
@@ -1182,7 +1232,7 @@ def _routes(app: FastAPI) -> None:
                              body.confirm)
 
     @app.post("/api/jobs/{job_id}/run-at")
-    def run_at(job_id: str, body: RunAt, sess: Session = Depends(scheduler_session), s: Services = Depends(svc)):
+    def run_at(job_id: str, body: RunAt, sess: Session = Depends(staff_session), s: Services = Depends(svc)):
         """The job's own run time, instead of the schedule's; from now until its saved sign-in expires."""
         if body.at is None:
             return _queue_action(s, sess, job_id, {"runAt": None}, "Run time cleared",
@@ -1200,7 +1250,7 @@ def _routes(app: FastAPI) -> None:
                              body.confirm)
 
     @app.post("/api/jobs/{job_id}/hold")
-    def hold(job_id: str, body: OnOff, sess: Session = Depends(scheduler_session), s: Services = Depends(svc)):
+    def hold(job_id: str, body: OnOff, sess: Session = Depends(staff_session), s: Services = Depends(svc)):
         """Hold: the job keeps its place but doesn't start until it is released."""
         if body.on:
             return _queue_action(s, sess, job_id, {"held": {"by": sess.user, "at": now()}}, "Job held",
@@ -1210,12 +1260,12 @@ def _routes(app: FastAPI) -> None:
     @app.get("/api/queue/collisions")
     def queue_collisions(sess: Session = Depends(current_session), s: Services = Depends(svc)):
         """The documents that would fail in the queue's order as it is, and how a reorder would avoid that
-        (see _repair_plan). Everyone signed in sees it; only a scheduler can apply it."""
+        (see _repair_plan). Everyone signed in sees it; only staff can apply it."""
         return _repair_plan(s, sess.tenant)
 
     @app.post("/api/queue/reorder-to-avoid-failures")
-    def reorder_to_avoid_failures(sess: Session = Depends(scheduler_session), s: Services = Depends(svc)):
-        """Reorder to avoid failures (BMU schedulers only): put the queued jobs in the order of _repair_plan, with
+    def reorder_to_avoid_failures(sess: Session = Depends(staff_session), s: Services = Depends(svc)):
+        """Reorder to avoid failures (staff only): put the queued jobs in the order of _repair_plan, with
         one "Queue reordered" audit entry. Only places in the queue change, never a job's Run now, run time or hold."""
         plan = _repair_plan(s, sess.tenant)
         if not plan["changes"]:
@@ -1232,11 +1282,14 @@ def _routes(app: FastAPI) -> None:
 def _refresh_permissions(s: Services, sess: Session) -> Session:
     client = sess.client(s)
     try:
-        perms = client.account_permissions().summary
+        account = client.account_permissions()
     except CSpaceError as e:
         raise _cspace_http(e)
     finally:
         client.close()
+    if sess.role == "staff" and (missing := _staff_missing(s, account)):
+        raise _account_refused(s, missing)
+    perms = account.summary
     if perms != sess.perms:
         s.storage.update_session_perms(sess.key, perms)
     return sess.model_copy(update={"perms": perms})
@@ -1254,8 +1307,9 @@ def _recheck(s: Services, sess: Session, job_id: str, targets: set[int] | None, 
     group_on = bool(job.get("groupOn"))
     group_exists = (job.get("groupStep") or {}).get("s") == "done"
     editable = job.get("status") == "Draft"
-    # A user who may only view jobs sees a draft's checks, computed with their permissions, but never saves them
-    writable = editable and can_edit(sess.perms)
+    # An intern who is only looking at a draft sees its checks, computed with their own account, but never saves
+    # them: only staff, or the draft's own editor, do (design: Roles)
+    writable = editable and (sess.role == "staff" or job.get("editingSession") == sess.key)
     # a real copy: check_rows updates each row's lookups in place
     auto = ("checks", "lookups", "protected", "softSignals", "restricted", "restrictedAuto", "thumbKey",
             "creator", "contributor", "rightsHolder", "language")  # a renamed term's current refName (see rows.value_findings)
@@ -1364,9 +1418,9 @@ def _failure_text(p: dict) -> str:
 
 
 def _guard(s: Services, tenant: str, changed: list[dict], confirm: bool) -> None:
-    """Design (Jobs that collide in the queue): before a scheduler's change to the queue's order takes effect, say
+    """Design (Jobs that collide in the queue): before a staff member's change to the queue's order takes effect, say
     which documents it would make fail. changed: the jobs as they would be. Refused with 409 would_fail unless the
-    scheduler confirmed; a change that makes nothing new fail goes through."""
+    staff member confirmed; a change that makes nothing new fail goes through."""
     if confirm:
         return
     queue = _queue_rows(s, tenant, fresh=True)

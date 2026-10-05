@@ -32,7 +32,7 @@ describe('schedule text (design: Job scheduling; UI mockup schedSummary)', () =>
     expect(scheduleSummary(sched({days: [1, 3, 5], start: '20:30'}))).toBe('Jobs run on Mon, Wed, Fri at 8:30 PM (Pacific time).')
     expect(scheduleBanner(sched(), NOW)).toBe('Jobs run every day at 7:00 PM (Pacific time). Next run time: today at 7:00 PM.')
     expect(pausedBanner({by: 'jlee', at: pt(2026, 8, 30, 9, 15), reason: 'CollectionSpace upgrade'}))
-      .toBe('The queue is paused by jlee since Wed, Sep 30, 9:15 AM: CollectionSpace upgrade. No job starts until a BMU scheduler resumes it.')
+      .toBe('The queue is paused by jlee since Wed, Sep 30, 9:15 AM: CollectionSpace upgrade. No job starts until a staff member resumes it.')
   })
 
   it('names run times relative to today, in Pacific time', () => {
@@ -62,7 +62,7 @@ describe('Runs at (design: Job scheduling; UI mockup runsAt)', () => {
     expect(runsAt(q({plan: plan({kind: 'runNow', at: null})}), true, NOW)).toMatchObject({text: 'Next, as soon as the running job ends', sub: 'Run now'})
     expect(runsAt(q({plan: plan({kind: 'runNow', at: null})}), false, NOW).text).toBe('Now')
     expect(runsAt(q({plan: plan({kind: 'at', at: pt(2026, 9, 1, 8, 30)})}), false, NOW)).toMatchObject({text: 'Thu, Oct 1, 8:30 AM', sub: 'its own run time'})
-    expect(runsAt(q({plan: plan({kind: 'paused'})}), false, NOW)).toMatchObject({text: 'Paused', sub: 'until a BMU scheduler resumes the queue'})
+    expect(runsAt(q({plan: plan({kind: 'paused'})}), false, NOW)).toMatchObject({text: 'Paused', sub: 'until a staff member resumes the queue'})
     expect(runsAt(q({held: {by: 'jlee', at: NOW}, plan: plan({kind: 'held', at: null})}), false, NOW).text).toBe('Held by jlee')
     // the run window is open (or the development setting): it starts when the jobs ahead are done
     expect(runsAt(q({plan: plan({at: NOW - 60, ahead: 1})}), true, NOW).text).toBe('In the current run · after 1 job')
@@ -81,12 +81,11 @@ describe('Runs at (design: Job scheduling; UI mockup runsAt)', () => {
   })
 })
 
-describe('who may cancel a run (design: Job scheduling)', () => {
-  it('schedulers and the submitter', () => {
-    expect(canCancelRun({scheduledBy: 'jlee'}, {user: 'admin', scheduler: true})).toBe(true)
-    expect(canCancelRun({scheduledBy: 'jlee'}, {user: 'jlee', scheduler: false})).toBe(true)
-    expect(canCancelRun({scheduledBy: 'jlee'}, {user: 'admin', scheduler: false})).toBe(false)
-    expect(canCancelRun({scheduledBy: undefined}, {user: undefined})).toBe(false)
+describe('who may cancel a run (design: Roles)', () => {
+  it('any staff member, for any job; never an intern', () => {
+    expect(canCancelRun({staff: true})).toBe(true)
+    expect(canCancelRun({staff: false})).toBe(false)
+    expect(canCancelRun({})).toBe(false)
   })
 })
 
@@ -100,7 +99,7 @@ describe('Submit job message (design: Job scheduling; UI mockup submitJob)', () 
       .toBe('“Spring batch” was submitted with 3 document(s) carrying warnings and added to the end of the queue. It runs at the next run time, tonight at 7:00 PM.' + tail)
   })
   it('says when the queue is paused, or that it starts now in development mode', () => {
-    expect(submitMessage(sub({plan: plan({kind: 'paused'})}), {}, NOW)).toContain('The queue is paused, so it waits until a BMU scheduler resumes it.')
+    expect(submitMessage(sub({plan: plan({kind: 'paused'})}), {}, NOW)).toContain('The queue is paused, so it waits until a staff member resumes it.')
     expect(submitMessage(sub({plan: plan({at: NOW})}), {alwaysRunTime: true}, NOW))
       .toContain('Development setting: every moment counts as run time, so it starts now.')
     expect(submitMessage(sub({plan: plan({at: NOW, ahead: 1})}), {alwaysRunTime: true}, NOW)).toContain('so it starts after 1 other job.')

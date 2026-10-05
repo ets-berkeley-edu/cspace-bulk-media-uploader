@@ -195,11 +195,11 @@ def test_reorder_to_avoid_failures_moves_only_what_must_move(api, login, add_upl
     assert {api.get(f"/api/jobs/{j}").json()["job"]["status"] for j in (creates, links, unrelated, last)} == {"Completed"}
 
 
-def test_reorder_is_for_schedulers_and_everyone_sees_the_plan(api, login, add_uploaded, services):
+def test_reorder_is_for_staff_and_everyone_sees_the_plan(api, login, add_uploaded, services):
     login()
     creates, links = _pair(api, add_uploaded)
     assert api.post(f"/api/jobs/{links}/move", json={"toIndex": 0, "confirm": True}).status_code == 200
-    other = _second_user(services)  # "limited": not a scheduler
+    other = _second_user(services, "intern")
     assert other.get("/api/queue/collisions").json()["changes"] is True
     assert other.post("/api/queue/reorder-to-avoid-failures").status_code == 403
 

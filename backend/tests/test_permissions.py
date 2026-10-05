@@ -25,86 +25,17 @@ def test_attaching_the_file_needs_update_on_media(api, login, add_uploaded, fake
     _set_session_perms(services, mediaUpdate=False)
     r = api.post(f"/api/jobs/{job}/check").json()["rows"][0]
     assert any("can't update Media records" in t for t in _texts(r))
-    assert not any("can't update" in c["text"] for c in services.storage.get_row(job, 1)["checks"])  # a viewer's checks aren't saved
-
-
-# ---- editing needs the full Media permissions (create and update on media) ---------------------------
-def test_an_account_without_create_and_update_on_media_can_view_jobs_but_not_create_or_edit_them(
-        api, login, add_uploaded, worker, services, fake, fail_on):
-    from test_flow import _second_user
-    login()
-    draft = new_job(api)
-    n = add_uploaded(draft, ["15-1234_1.jpg"])[0]["n"]
-    api.post(f"/api/jobs/{draft}/close")
-    queued = new_job(api)
-    add_uploaded(queued, ["12-5678_1.jpg"])
-    assert api.post(f"/api/jobs/{queued}/schedule").status_code == 200
-    failed = new_job(api)
-    add_uploaded(failed, ["3-1001_1.jpg"])
-    fail_on("upload", status=413)
-    assert api.post(f"/api/jobs/{failed}/schedule").status_code == 200
-    services.storage.update_job(queued, {"queuePos": 10 ** 12})  # run the other one
-    worker.tick()
-    assert services.storage.get_job(failed)["status"] == "NeedsAttention"
-    before = services.storage.get_row(draft, n)
-
-    reader = _second_user(services, "reader")
-    assert reader.get("/api/me").json()["perms"]["media"] is False
-    file = {"name": "15-1234_2.jpg", "size": 3, "type": "image/jpeg"}
-    refused = [
-        reader.post("/api/jobs", json={"name": "mine"}),
-        reader.post(f"/api/jobs/{draft}/open"),
-        reader.post(f"/api/jobs/{draft}/open", json={"takeOverSince": 1}),
-        reader.post(f"/api/jobs/{draft}/save"),
-        reader.patch(f"/api/jobs/{draft}", json={"name": "x"}),
-        reader.post(f"/api/jobs/{draft}/files", json={"files": [file]}),
-        reader.post(f"/api/jobs/{draft}/rows/{n}/uploaded"),
-        reader.post(f"/api/jobs/{draft}/rows/{n}/upload-failed"),
-        reader.post(f"/api/jobs/{draft}/rows/{n}/upload-form", json={"size": 3}),
-        reader.post(f"/api/jobs/{draft}/rows/{n}/thumbnail", content=b"x"),
-        reader.post(f"/api/jobs/{draft}/rows/{n}/retry-upload", json=file),
-        reader.post(f"/api/jobs/{failed}/rows/1/replace-file", json=file),
-        reader.patch(f"/api/jobs/{draft}/rows/{n}", json={"description": "x"}),
-        reader.post(f"/api/jobs/{draft}/rows/bulk", json={"rows": [n], "changes": {"description": "x"}}),
-        reader.delete(f"/api/jobs/{draft}/rows/{n}"),
-        reader.post(f"/api/jobs/{draft}/rows/delete", json={"rows": [n]}),
-        reader.post(f"/api/jobs/{draft}/schedule"),
-        reader.post(f"/api/jobs/{queued}/edit"),
-        reader.post(f"/api/jobs/{failed}/fix"),
-        reader.delete(f"/api/jobs/{draft}"),
-    ]
-    for r in refused:
-        assert r.status_code == 403, (r.request.method, r.request.url, r.text)
-        assert r.json()["detail"] == ("Your CollectionSpace account can't create and update Media records, so it can't "
-                                      "create or edit jobs. You can still view them.")
-    # nothing changed
-    assert {services.storage.get_job(j)["status"] for j in (draft, queued, failed)} == {"Draft", "Queued", "NeedsAttention"}
-    assert services.storage.get_row(draft, n) == before and len(services.storage.list_jobs("pahma")) == 3
-    # viewing still works: lists, a job, its checks (a draft's are shown, not saved), thumbnails, the catalog, authorities
-    assert reader.get("/api/jobs").status_code == 200
-    assert reader.get(f"/api/jobs/{draft}").status_code == 200
-    assert reader.post(f"/api/jobs/{failed}/check").status_code == 200
-    checked = reader.post(f"/api/jobs/{draft}/check")
-    # computed with the viewer's permissions; "can't create Media records" isn't a row check (the editor refuses such
-    # an account outright, above)
-    assert checked.status_code == 200 and not any("can't create Media records" in t for t in _texts(checked.json()["rows"][0]))
-    assert services.storage.get_row(draft, n) == before
-    assert reader.get(f"/api/jobs/{failed}/rows/1/thumbnail").status_code in (200, 404)
-    assert reader.get("/api/failures").status_code == 200
-    assert reader.get("/api/authorities", params={"field": "creator", "q": "hearst"}).status_code == 200
-    # create without update on media is not enough either
-    fake.perm_overrides["admin"] = {"media": "CRL"}
-    login()
-    assert api.post("/api/jobs", json={"name": "x"}).status_code == 403
 
 
 def test_scheduling_is_refused_when_the_account_lost_update_on_media_meanwhile(api, login, add_uploaded, fake):
     login()
     job = new_job(api)
     add_uploaded(job, ["15-1234_1.jpg"])
-    fake.perm_overrides["admin"] = {"media": "CRL"}  # roles changed after signing in: scheduling reads them again
+    fake.perm_overrides["admin"] = {"media": "CRL"}  # permissions changed after signing in: submitting reads them again
     r = api.post(f"/api/jobs/{job}/schedule")
-    assert r.status_code == 403 and "can't create and update Media records" in r.json()["detail"]
+    assert r.status_code == 403 and r.json()["detail"]["code"] == "account"
+    assert "can't update Media records" in r.json()["detail"]["message"]
+    assert "Contact your CollectionSpace administrator" in r.json()["detail"]["message"]
     assert api.get(f"/api/jobs/{job}").json()["job"]["status"] == "Draft"
 
 
@@ -218,27 +149,30 @@ def test_the_languages_vocabulary_is_read_whole_with_pgsz_0(fake):
     assert len(terms) == total > 1
 
 
-def test_finding_objects_needs_read_on_objects(api, login, add_uploaded, fake):
-    fake.perm_overrides["admin"] = {"collectionobjects": "C"}
+def test_finding_objects_needs_read_on_objects(api, login, add_uploaded, fake, services):
     login()
+    fake.perm_overrides["admin"] = {"collectionobjects": "C"}  # lost after signing in (staff can't sign in without it)
+    _set_session_perms(services, readObjects=False)
     job = new_job(api)
     add_uploaded(job, ["15-1234_1.jpg"])
     r = api.post(f"/api/jobs/{job}/check").json()["rows"][0]
     assert any("can't read Object records" in t for t in _texts(r))
 
 
-def test_without_read_on_media_the_id_check_blocks(api, login, add_uploaded, fake):
-    fake.perm_overrides["admin"] = {"media": "CU"}
+def test_without_read_on_media_the_id_check_blocks(api, login, add_uploaded, fake, services):
     login()
+    fake.perm_overrides["admin"] = {"media": "CU"}  # lost after signing in (staff can't sign in without it)
+    _set_session_perms(services, readMedia=False)
     job = new_job(api)
     add_uploaded(job, ["15-1234_1.jpg"])
     r = api.post(f"/api/jobs/{job}/check").json()["rows"][0]
     assert any(c["level"] == "block" and "can't read Media records" in c["text"] for c in r["checks"])
 
 
-def test_a_filled_authority_field_needs_read_on_its_authority(api, login, add_uploaded, fake):
-    fake.perm_overrides["admin"] = {"personauthorities": ""}
+def test_a_filled_authority_field_needs_read_on_its_authority(api, login, add_uploaded, fake, services):
     login()
+    fake.perm_overrides["admin"] = {"personauthorities": ""}  # lost after signing in (staff can't sign in without it)
+    _set_session_perms(services, readPersons=False, authorities=False)
     job = new_job(api)
     n = add_uploaded(job, ["15-1234_1.jpg"])[0]["n"]
     r = api.post(f"/api/jobs/{job}/check").json()["rows"][0]
@@ -249,25 +183,27 @@ def test_a_filled_authority_field_needs_read_on_its_authority(api, login, add_up
                for c in r["checks"])
 
 
-def test_dates_need_the_date_parser(api, login, add_uploaded, fake):
-    fake.perm_overrides["admin"] = {"structureddates": ""}
+def test_dates_need_the_date_parser(api, login, add_uploaded, fake, services):
     login()
+    fake.perm_overrides["admin"] = {"structureddates": ""}  # lost after signing in (staff can't sign in without it)
+    _set_session_perms(services, readDates=False)
     job = new_job(api)
     n = add_uploaded(job, ["15-1234_1.jpg"])[0]["n"]
     r = api.patch(f"/api/jobs/{job}/rows/{n}", json={"date": "1920s"}).json()["row"]
     assert any("date parser" in t for t in _texts(r))
 
 
-def test_autocomplete_drops_sources_the_user_cannot_read_and_counts_matches(api, login, fake, monkeypatch):
-    fake.perm_overrides["admin"] = {"orgauthorities": ""}
+def test_autocomplete_drops_sources_the_user_cannot_read_and_counts_matches(api, login, fake, monkeypatch, services):
     login()
+    fake.perm_overrides["admin"] = {"orgauthorities": ""}  # lost after signing in
+    _set_session_perms(services, readOrgs=False, authorities=False)
     r = api.get("/api/authorities", params={"field": "creator", "q": "hearst"}).json()
     assert r["terms"] == []  # organizations dropped silently
     monkeypatch.setattr(appmod, "AUTOCOMPLETE_PAGE", 1)
     r = api.get("/api/authorities", params={"field": "creator", "q": "cha"}).json()  # Michael T. Black, Zachary Williams
     assert len(r["terms"]) == 1 and r["total"] == 2 and r["more"] is True
     fake.perm_overrides["admin"] = {"orgauthorities": "", "personauthorities": ""}
-    login()
+    _set_session_perms(services, readPersons=False)
     r = api.get("/api/authorities", params={"field": "creator", "q": "son"}).json()
     assert "can't read the Person or Organization authorities" in r["message"]
 
@@ -295,7 +231,7 @@ def test_the_sweep_deletes_idle_and_expired_sessions_with_their_passwords(api, l
     """Design: expiry deletes the session record. An abandoned tab never makes the request that would notice."""
     login()
     login("limited")
-    login("reader")
+    login("intern")
     keys = {i["user"]: i["PK"] for i in services.storage.sessions.scan()["Items"]}
     login()  # admin again: a second session, with a draft open
     second = next(i["PK"] for i in services.storage.sessions.scan()["Items"] if i["PK"] not in keys.values())
@@ -310,9 +246,9 @@ def test_the_sweep_deletes_idle_and_expired_sessions_with_their_passwords(api, l
     assert services.storage.get_session(keys["limited"]) is None  # an expired session read is deleted at once
     assert services.storage.sweep_sessions(30 * 60) == 1
     left = {i["user"] for i in services.storage.sessions.scan()["Items"]}
-    assert left == {"reader"}
+    assert left == {"intern"}
     worker.sweep()  # the worker's periodic checks include it
-    assert {i["user"] for i in services.storage.sessions.scan()["Items"]} == {"reader"}
+    assert {i["user"] for i in services.storage.sessions.scan()["Items"]} == {"intern"}
 
 
 

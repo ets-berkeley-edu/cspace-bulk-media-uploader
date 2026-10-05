@@ -9,13 +9,14 @@
 import {onMounted} from 'vue'
 import type {Me} from '@/types'
 import FinishedJobs from '@/components/job/FinishedJobs.vue'
-import {editBlocked} from '@/lib/status'
+import {staffOnly} from '@/lib/roles'
 import {useContextStore} from '@/stores/context'
 import {useJobEditSessionStore} from '@/stores/job-edit-session'
 
 const contextStore = useContextStore()
 const currentUser = contextStore.currentUser as Me
-const editWhy = editBlocked(currentUser.perms)
+// Only staff change a submitted job (design: Roles).
+const editWhy = staffOnly(currentUser)
 const session = useJobEditSessionStore()
 
 onMounted(() => contextStore.loadingComplete('Finished jobs'))

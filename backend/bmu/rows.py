@@ -913,7 +913,7 @@ def collision_checks(tenant: Tenant, rows: list[dict], ahead: list[tuple[dict, l
     created. A document CollectionSpace already blocks or warns about for the same reason isn't told twice.
 
     The other order of a "create" and a "find or create" job works (the first creates the Object, the second links
-    to it), so it is allowed; a scheduler who reverses it is warned first, and the job is flagged (app._guard)."""
+    to it), so it is allowed; a staff member who reverses it is warned first, and the job is flagged (app._guard)."""
     creates: dict[str, tuple[dict, str]] = {}  # object number -> (job, file) of the first job that creates it
     ids: dict[str, tuple[dict, str]] = {}      # identification number -> the same
     for job, others in ahead:

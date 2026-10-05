@@ -5,9 +5,14 @@ search, creating Media, Objects and Relations, and attaching a file with PUT med
 behavior against the real server must be confirmed on the Lyrasis QA tenant.
 
 Run: uvicorn fakecspace.app:app --port 8180
-Users: admin/admin (all permissions; a BMU scheduler), limited/limited (can't create objects or groups), reader/reader
-(read only). Roles (accounts/0/accountroles): admin has ROLE_15_TENANT_ADMINISTRATOR and ROLE_15_BMU_SCHEDULER, the
-others ROLE_15_TENANT_READER.
+Users (the password is the user name; design: Roles):
+  admin     BMU staff with every permission
+  limited   BMU staff who can't create Objects or groups
+  intern    a BMU intern: the BMU_Intern role and no permissions at all
+  newstaff  has the BMU_Staff role but can only read, so the BMU refuses the sign-in
+  reader    can read everything but has neither BMU role, so the BMU refuses the sign-in
+Roles (accounts/0/accountroles): admin has ROLE_15_TENANT_ADMINISTRATOR and ROLE_15_BMU_STAFF; limited and newstaff
+ROLE_15_TENANT_READER and ROLE_15_BMU_STAFF; intern ROLE_15_BMU_INTERN; reader ROLE_15_TENANT_READER.
 Development hooks: /_fake/state, /_fake/reset, /_fake/slow, /_fake/fail (failures on demand), /_fake/delete-term,
 /_fake/rename-term, /_fake/delete-language and /_fake/rename-language (terms deleted or renamed in CollectionSpace
 meanwhile).
@@ -29,6 +34,8 @@ USERS = {
     "admin": ("admin", "CRUDL"),
     "limited": ("limited", "CRUDL"),
     "reader": ("reader", "RL"),
+    "intern": ("intern", ""),
+    "newstaff": ("newstaff", "RL"),
 }
 RESOURCES = ["media", "relations", "collectionobjects", "groups", "personauthorities", "orgauthorities", "vocabularies",
              "structureddates"]
@@ -46,9 +53,11 @@ def _perms_for(user: str) -> dict[str, str]:
 
 TENANT_ID = "15"  # PAHMA's tenant id
 ROLES = {
-    "admin": ["ROLE_15_TENANT_ADMINISTRATOR", "ROLE_15_BMU_SCHEDULER"],
-    "limited": ["ROLE_15_TENANT_READER"],
+    "admin": ["ROLE_15_TENANT_ADMINISTRATOR", "ROLE_15_BMU_STAFF"],
+    "limited": ["ROLE_15_TENANT_READER", "ROLE_15_BMU_STAFF"],
     "reader": ["ROLE_15_TENANT_READER"],
+    "intern": ["ROLE_15_BMU_INTERN"],
+    "newstaff": ["ROLE_15_TENANT_READER", "ROLE_15_BMU_STAFF"],
 }
 
 

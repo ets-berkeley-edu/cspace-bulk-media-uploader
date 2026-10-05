@@ -29,7 +29,7 @@ function mockApi() {
 describe('Drafts tab (design: Drafts)', () => {
   it('lists only drafts, with who is editing, checks now and expiry', async () => {
     mockApi()
-    const w = mount(DraftsList, {props: {tenant}})
+    const w = mount(DraftsList, {props: {tenant, staff: true}})
     await flushPromises()
     const text = w.text()
     expect(text).toContain('mine')
@@ -44,7 +44,7 @@ describe('Drafts tab (design: Drafts)', () => {
 
   it('offers Continue editing for your own draft, and Take over (after a warning) for someone else\'s', async () => {
     mockApi()
-    const w = mount(DraftsList, {props: {tenant}})
+    const w = mount(DraftsList, {props: {tenant, staff: true}})
     await flushPromises()
     const rowOf = (name: string) => w.findAll('tbody').find((r) => r.text().includes(name))!
     await rowOf('mine').findAll('button').find((b) => b.text() === 'Continue editing')!.trigger('click')
@@ -60,7 +60,7 @@ describe('Drafts tab (design: Drafts)', () => {
 
   it('shows a draft\'s note, such as a sign-in that expired while it waited in the queue', async () => {
     mockApi()
-    const w = mount(DraftsList, {props: {tenant}})
+    const w = mount(DraftsList, {props: {tenant, staff: true}})
     await flushPromises()
     expect(w.findAll('tr.job-row').find((r) => r.text().includes('fixing'))!.text()).toContain('Sign-in expired while waiting in the queue')
     w.unmount()
@@ -68,7 +68,7 @@ describe('Drafts tab (design: Drafts)', () => {
 
   it('counts what a job\'s runs created before it is deleted, and says nothing was created for one that never ran', async () => {
     mockApi()
-    const w = mount(DraftsList, {props: {tenant}})
+    const w = mount(DraftsList, {props: {tenant, staff: true}})
     await flushPromises()
     const rowOf = (name: string) => w.findAll('tbody').find((r) => r.text().includes(name))!
     await rowOf('fixing').find('button[aria-label="Delete"]').trigger('click')
@@ -86,7 +86,7 @@ describe('Drafts tab (design: Drafts)', () => {
 describe('a job\'s confirmations in a list', () => {
   it('open in a full-width row under the job, with the job\'s buttons off meanwhile', async () => {
     mockApi()
-    const w = mount(DraftsList, {props: {tenant}})
+    const w = mount(DraftsList, {props: {tenant, staff: true}})
     await flushPromises()
     const job = w.find('#job-a')
     const confirmRow = job.find('tr.job-confirm-row')
@@ -112,7 +112,7 @@ describe('a job\'s confirmations in a list', () => {
       if (init?.method === 'DELETE') return new Promise<Response>(resolve => { answer = resolve })
       return Promise.resolve(json(url.endsWith('/api/jobs') ? {jobs} : {rows: [], counts: {block: 0, warn: 0}}))
     }))
-    const w = mount(DraftsList, {props: {tenant}})
+    const w = mount(DraftsList, {props: {tenant, staff: true}})
     await flushPromises()
     await w.find('#job-a-delete-btn').trigger('click')
     await w.find('#job-a-delete-confirm-btn').trigger('click')

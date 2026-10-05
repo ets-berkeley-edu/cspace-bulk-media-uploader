@@ -138,8 +138,8 @@
           aria-label="Create a group of this job's objects"
           :checked="!!job?.groupOn"
           class="checkbox mr-2"
-          :disabled="!editable || groupMade || (!me.perms.groups && !job?.groupOn)"
-          :title="!me.perms.groups ? 'You don\'t have permission to create groups' : groupMade ? 'The group already exists in CollectionSpace' : undefined"
+          :disabled="!editable || groupMade || (!perms.groups && !job?.groupOn)"
+          :title="!perms.groups ? 'You don\'t have permission to create groups' : groupMade ? 'The group already exists in CollectionSpace' : undefined"
           type="checkbox"
           @change="event => setGroup({groupOn: (event.target as HTMLInputElement).checked})"
         >
@@ -188,7 +188,7 @@
         <template v-if="groupMade">
           The group was created in run {{ job?.groupStep?.run }} (<code>{{ job?.groupStep?.csid }}</code>), so it can't be turned off or renamed here.
         </template>
-        <template v-else-if="!me.perms.groups">Your account can't create groups.</template>
+        <template v-else-if="!perms.groups">Your account can't create groups.</template>
       </div>
     </v-sheet>
 
@@ -268,7 +268,7 @@
         :deleting="isBusy && deleting.size > 0"
         :group-on="!!job?.groupOn"
         :languages="languages"
-        :perms="me.perms"
+        :perms="perms"
         :readonly="!editable"
         :rows="rows"
         :selected="selected"
@@ -416,7 +416,7 @@
             :languages="languages"
             :last="rows.length === 1"
             :other-names="otherNames"
-            :perms="me.perms"
+            :perms="perms"
             :preview="previews.get(row.n)"
             :readonly="rowsReadonly"
             :row="row"
@@ -508,6 +508,7 @@ import {canPreview, fileTooLargeText, formIsOld, formatTime, makeThumbnail, mapL
 import {readImageInfo} from '@/lib/imageinfo'
 import {portalOf} from '@/lib/portal'
 import {OUTCOME, failureOf, loadFailures} from '@/lib/results'
+import {INTERN_SUBMIT_WHY, isStaff, permsFor} from '@/lib/roles'
 import {groupTimestampTitle} from '@/lib/schedule'
 import {jobCounts, worstLevel} from '@/lib/status'
 import {editorColumns, tableState, tableView} from '@/lib/table'
@@ -643,8 +644,12 @@ async function setGroup(fields: { groupOn?: boolean; groupTitle?: string }) {
   }
 }
 
+// What the controls go by: the user's own permissions, or every permission for an intern (see permsFor)
+const perms = computed(() => permsFor(props.me))
+
 const scheduleBlocked = computed(() => {
   const c = counts.value
+  if (!isStaff(props.me)) return INTERN_SUBMIT_WHY
   if (job.value?.groupOn && !job.value.groupTitle?.trim()) return 'Enter a group title, or turn off the job\'s group'
   if (c.block) return 'Fix or exclude the documents marked Needs fixing first'
   if (c.uploading) return 'Wait until every file is uploaded and verified'

@@ -10,7 +10,7 @@ export const PT_TZ = 'America/Los_Angeles'
 export const DAY_ORDER = [7, 1, 2, 3, 4, 5, 6]
 export const DAY_NAMES: Record<number, string> = {1: 'Mon', 2: 'Tue', 3: 'Wed', 4: 'Thu', 5: 'Fri', 6: 'Sat', 7: 'Sun'}
 /** design: Job scheduling — who may cancel a run. */
-export const NO_CANCEL_WHY = 'Only a BMU scheduler or the person who submitted the job can cancel its run.'
+export const NO_CANCEL_WHY = 'Only staff can cancel a run.'
 
 const pad2 = (n: number) => (n < 10 ? '0' : '') + n
 let ptFmt: Intl.DateTimeFormat | null = null
@@ -89,7 +89,7 @@ export function scheduleBanner(s: Schedule, nowSec = Date.now() / 1000): string 
 
 /** The paused warning banner. */
 export function pausedBanner(p: NonNullable<Schedule['paused']>): string {
-  return `The queue is paused by ${p.by} since ${absLabel(p.at)}: ${p.reason}. No job starts until a BMU scheduler resumes it.`
+  return `The queue is paused by ${p.by} since ${absLabel(p.at)}: ${p.reason}. No job starts until a staff member resumes it.`
 }
 
 /** A datetime-local value ("2026-10-01T19:00") for an instant, in Pacific time. */
@@ -136,9 +136,9 @@ export function runsAt(j: Pick<Job, 'status' | 'plan' | 'held' | 'runNow'>, runn
   const dueNow = running ? 'Next, as soon as the running job ends' : 'Now'
   switch (plan.kind) {
     case 'held':
-      return {text: `Held by ${j.held?.by ?? 'a scheduler'}`, sub: `${j.held?.at ? `since ${absLabel(j.held.at)}; ` : ''}its sign-in clock keeps running`, warn: false, key: 9e15}
+      return {text: `Held by ${j.held?.by ?? 'a staff member'}`, sub: `${j.held?.at ? `since ${absLabel(j.held.at)}; ` : ''}its sign-in clock keeps running`, warn: false, key: 9e15}
     case 'paused':
-      return {text: 'Paused', sub: 'until a BMU scheduler resumes the queue', warn, key: 8e15}
+      return {text: 'Paused', sub: 'until a staff member resumes the queue', warn, key: 8e15}
     case 'runNow':
       return {text: dueNow, sub: 'Run now', warn, key: 1 + plan.ahead}
     case 'at':
@@ -154,9 +154,9 @@ export function runsAt(j: Pick<Job, 'status' | 'plan' | 'held' | 'runNow'>, runn
   }
 }
 
-/** Whether this user may cancel the job's run: a BMU scheduler, or whoever submitted it (design: Job scheduling). */
-export function canCancelRun(j: Pick<Job, 'scheduledBy'>, me: { user?: string; scheduler?: boolean }): boolean {
-  return !!me.scheduler || (!!me.user && j.scheduledBy === me.user)
+/** Whether this user may cancel a job's run: any staff member, for any job (design: Roles). */
+export function canCancelRun(me: { staff?: boolean }): boolean {
+  return !!me.staff
 }
 
 /**
@@ -174,8 +174,8 @@ export function submitMessage(j: Pick<Job, 'name' | 'plan' | 'checksAtSchedule' 
   const ahead = plan?.ahead ?? 0
   const afterJobs = ahead ? `after ${jobsText(ahead, true)}` : ''
   if (!plan) when = 'It runs at the next run time.'
-  else if (plan.kind === 'paused') when = 'The queue is paused, so it waits until a BMU scheduler resumes it.'
-  else if (plan.kind === 'held') when = 'It is held, so it waits until a BMU scheduler releases it.'
+  else if (plan.kind === 'paused') when = 'The queue is paused, so it waits until a staff member resumes it.'
+  else if (plan.kind === 'held') when = 'It is held, so it waits until a staff member releases it.'
   else if (plan.at === null || plan.at === undefined) when = 'It runs at the next run time.'
   else if (plan.at <= nowSec || opts.alwaysRunTime) {
     when = (opts.alwaysRunTime ? 'Development setting: every moment counts as run time, so it starts ' : 'A run is in progress, so it starts ')
@@ -187,4 +187,4 @@ export function submitMessage(j: Pick<Job, 'name' | 'plan' | 'checksAtSchedule' 
 }
 
 /** The part of Me scheduling needs. */
-export type SchedulerOf = Pick<Me, 'user' | 'scheduler'>;
+export type SchedulerOf = Pick<Me, 'user' | 'role'>;

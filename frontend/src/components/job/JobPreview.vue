@@ -254,7 +254,7 @@
           in-preview
           :job="job"
           :kind="from"
-          :scheduler="scheduler"
+          :staff="staff"
           :user="user"
           @done="done"
           @error="text => error = text"
@@ -288,7 +288,7 @@ import {ApiError, api} from '@/api'
  * refreshed while it runs. The actions are only those that apply; there is nothing to save or submit here.
  */
 const props = defineProps({
-  // Why this user can't create or edit jobs (design: Permissions in the UI); '' when they can.
+  // Why this user can't change the jobs of this list (an intern, outside Drafts; design: Roles); '' when they can.
   editWhy: {
     default: '',
     required: false,
@@ -304,7 +304,7 @@ const props = defineProps({
     type: String
   },
   // For Cancel run (design: Job scheduling).
-  scheduler: {
+  staff: {
     required: false,
     type: Boolean
   },

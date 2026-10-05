@@ -9,7 +9,7 @@ const tenant = {key: 'pahma', name: 'PAHMA', filenameHint: '', filenamePattern: 
   authorityFields: {}, publish: {field: 'approvedForWeb', header: 'Restricted', invert: true},
   handling: [{id: 'none', label: 'Media only', object: 'none', id_rule: 'image'}]} as unknown as TenantInfo
 const perms: Perms = {media: true, mediaUpdate: true, relations: true, objects: true, readObjects: true, authorities: true, groups: true}
-const me: Me = {user: 'admin', tenant, perms, scheduler: false}
+const me: Me = {user: 'admin', tenant, perms, role: 'staff'}
 const row: Row = {n: 1, file: 'a.jpg', size: 10, contentType: 'image/jpeg', handling: 'none', obj: '', objParsed: '', img: 'a', parseOk: true,
   idnum: 'a', date: '', restricted: false, type: [], creator: '', contributor: '', rightsHolder: '', description: '', copyright: '', include: true,
   upload: {s: 'done'}, checks: [], result: null}
@@ -47,6 +47,31 @@ describe('Submit job (design: Job scheduling)', () => {
     await flushPromises()
     expect(calls.some((c) => c.url.endsWith('/j1/schedule') && c.method === 'POST')).toBe(true)
     expect((w.emitted('scheduled')?.[0][0] as Job).plan).toEqual(plan)
+    w.unmount()
+  })
+})
+
+describe('an intern in the editor (design: Roles)', () => {
+  it('cannot submit, with the reason; nothing is switched off for lack of permissions', async () => {
+    const calls = stub((url, method) => {
+      if (url.endsWith('/api/jobs/j1') && method === 'GET') return {job: {...draft, editingBy: 'kim', internOpen: true}, rows: [row], runs: [], created: {}}
+      if (url.endsWith('/check')) return {rows: [row], counts: {block: 0, warn: 0}}
+      if (url.includes('/vocabularies/')) return {terms: []}
+      if (url.endsWith('/api/failures')) return {failures: {}}
+      return {}
+    })
+    const none: Perms = {media: false, mediaUpdate: false, relations: false, objects: false, readObjects: false, authorities: false, groups: false}
+    const w = mount(JobEditor, {props: {me: {...me, user: 'kim', role: 'intern', perms: none}, jobId: 'j1'}, global: {stubs: {DocumentThumbnail: true}}})
+    await flushPromises()
+    const submit = w.findAll('button').find((b) => b.text() === 'Submit job')!
+    expect(submit.attributes('disabled')).toBeDefined()
+    expect(submit.attributes('title')).toBe('Only staff can submit a job. A staff member submits it when the draft is ready.')
+    await submit.trigger('click')
+    expect(calls.some((c) => c.url.endsWith('/j1/schedule'))).toBe(false)
+    // the group box is offered although the intern's own account can't create groups: they act for the submitter
+    expect(w.find('#group-on').attributes('disabled')).toBeUndefined()
+    expect(w.text()).not.toContain('Your account can\'t create groups.')
+    expect(w.text()).not.toContain('(no permission)')
     w.unmount()
   })
 })

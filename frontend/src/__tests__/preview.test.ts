@@ -1,7 +1,8 @@
 import {afterEach, describe, expect, it, vi} from 'vitest'
 import {flushPromises, mount} from '@vue/test-utils'
 import {failures} from '../lib/results'
-import {editBlocked, handlingBlocked} from '../lib/status'
+import {RAN_DELETE_WHY, STAFF_DRAFT_WHY, STAFF_EDITING_WHY, STAFF_ONLY_WHY, staffOnly} from '../lib/roles'
+import {handlingBlocked} from '../lib/status'
 import type {Failure, Job, Perms, Row, TenantInfo} from '../types'
 import DraftsList from '@/components/job/DraftsList.vue'
 import JobActions from '@/components/job/JobActions.vue'
@@ -96,51 +97,74 @@ describe('job actions (design: Drafts; The job queue; UI mockup actionsFor)', ()
   const label = (b: { text: () => string; attributes: (n: string) => string | undefined }) => b.text() || b.attributes('aria-label')
   const texts = (w: ReturnType<typeof mount>) => w.findAll('button').map(label)
   it('in a draft\'s preview: Edit and Delete, or Take over when someone else is editing; never Save draft or Submit job', () => {
-    expect(texts(mount(JobActions, {props: {job: job(), kind: 'drafts', inPreview: true}}))).toEqual(['Edit', 'Delete'])
-    expect(texts(mount(JobActions, {props: {job: job({editingBy: 'jlee', editingSince: 5}), kind: 'drafts', inPreview: true}})))
+    expect(texts(mount(JobActions, {props: {job: job(), kind: 'drafts', inPreview: true, staff: true}}))).toEqual(['Edit', 'Delete'])
+    expect(texts(mount(JobActions, {props: {job: job({editingBy: 'jlee', editingSince: 5}), kind: 'drafts', inPreview: true, staff: true}})))
       .toEqual(['Take over…', 'Delete'])
-    expect(texts(mount(JobActions, {props: {job: job(), kind: 'drafts'}}))).toEqual(['Preview', 'Edit', 'Delete'])
+    expect(texts(mount(JobActions, {props: {job: job(), kind: 'drafts', staff: true}}))).toEqual(['Preview', 'Edit', 'Delete'])
   })
 
   it('in the queue: Edit and Delete for a queued job, Cancel run for a running one', () => {
-    expect(texts(mount(JobActions, {props: {job: job({status: 'Queued'}), kind: 'queue', inPreview: true}}))).toEqual(['Edit', 'Delete'])
-    const run = mount(JobActions, {props: {job: job({status: 'Running'}), kind: 'queue', inPreview: true, scheduler: true}})
+    expect(texts(mount(JobActions, {props: {job: job({status: 'Queued'}), kind: 'queue', inPreview: true, staff: true}}))).toEqual(['Edit', 'Delete'])
+    const run = mount(JobActions, {props: {job: job({status: 'Running'}), kind: 'queue', inPreview: true, staff: true}})
     expect(texts(run)).toEqual(['Cancel run', 'Delete'])
     expect(run.findAll('button')[1].attributes('disabled')).toBeDefined()
   })
 
-  it('Cancel run: for BMU schedulers and whoever submitted the job; others see why not (design: Job scheduling)', () => {
+  it('Cancel run: for staff, for any job; an intern sees why not (design: Roles)', () => {
     const cancel = (w: ReturnType<typeof mount>) => w.findAll('button').find((b) => b.text() === 'Cancel run')!
     const running = job({status: 'Running', scheduledBy: 'jlee'})
-    const other = mount(JobActions, {props: {job: running, kind: 'queue', user: 'admin', scheduler: false}})
-    expect(cancel(other).attributes('disabled')).toBeDefined()
-    expect(cancel(other).attributes('title')).toBe('Only a BMU scheduler or the person who submitted the job can cancel its run.')
-    const submitter = mount(JobActions, {props: {job: running, kind: 'queue', user: 'jlee', scheduler: false}})
-    expect(cancel(submitter).attributes('disabled')).toBeUndefined()
-    const sched = mount(JobActions, {props: {job: running, kind: 'queue', user: 'admin', scheduler: true}})
+    const intern = mount(JobActions, {props: {job: running, kind: 'queue', user: 'jlee', staff: false}})
+    expect(cancel(intern).attributes('disabled')).toBeDefined()
+    expect(cancel(intern).attributes('title')).toBe('Only staff can cancel a run.')
+    const sched = mount(JobActions, {props: {job: running, kind: 'queue', user: 'admin', staff: true}})
     expect(cancel(sched).attributes('disabled')).toBeUndefined()
     expect(cancel(sched).attributes('title')).toBe('Stop after the document in progress')
   })
 
-  it('without Media create and update: Edit, Take over and Delete are off, with the reason', () => {
-    const why = editBlocked({...perms, mediaUpdate: false})
-    expect(why).toContain('can\'t create and update Media records')
-    const w = mount(JobActions, {props: {job: job(), kind: 'drafts', editWhy: why}})
+  it('an intern: Edit and Delete are on for a draft that is open to interns, off for a staff-only one', () => {
+    const btn = (w: ReturnType<typeof mount>, t: string) => w.findAll('button').find((x) => label(x) === t)!
+    const open = mount(JobActions, {props: {job: job({internOpen: true}), kind: 'drafts', staff: false}})
     for (const t of ['Edit', 'Delete']) {
-      const b = w.findAll('button').find((x) => label(x) === t)!
+      expect(btn(open, t).attributes('disabled')).toBeUndefined()
+    }
+    const closed = mount(JobActions, {props: {job: job({internOpen: false}), kind: 'drafts', staff: false}})
+    for (const t of ['Edit', 'Delete']) {
+      expect(btn(closed, t).attributes('disabled')).toBeDefined()
+      expect(btn(closed, t).attributes('title')).toBe(STAFF_DRAFT_WHY)
+    }
+    expect(closed.findAll('button').find((x) => x.text() === 'Preview')!.attributes('disabled')).toBeUndefined()
+    // staff are never limited by the setting
+    const staff = mount(JobActions, {props: {job: job({internOpen: false}), kind: 'drafts', staff: true}})
+    expect(btn(staff, 'Edit').attributes('disabled')).toBeUndefined()
+  })
+
+  it('an intern edits but does not delete a draft that has run, and takes over from interns only', () => {
+    const btn = (w: ReturnType<typeof mount>, t: string) => w.findAll('button').find((x) => label(x) === t)!
+    const ran = mount(JobActions, {props: {job: job({internOpen: true, run: 1}), kind: 'drafts', staff: false}})
+    expect(btn(ran, 'Edit').attributes('disabled')).toBeUndefined()
+    expect(btn(ran, 'Delete').attributes('title')).toBe(RAN_DELETE_WHY)
+    const byStaff = mount(JobActions, {props: {job: job({internOpen: true, editingBy: 'jlee', editingRole: 'staff'}), kind: 'drafts', staff: false}})
+    expect(btn(byStaff, 'Take over…').attributes('disabled')).toBeDefined()
+    expect(btn(byStaff, 'Take over…').attributes('title')).toBe(STAFF_EDITING_WHY)
+    const byIntern = mount(JobActions, {props: {job: job({internOpen: true, editingBy: 'kim', editingRole: 'intern'}), kind: 'drafts', staff: false}})
+    expect(btn(byIntern, 'Take over…').attributes('disabled')).toBeUndefined()
+  })
+
+  it('an intern changes nothing in the job queue: Edit and Delete are off, with the reason', () => {
+    expect(staffOnly({role: 'staff'})).toBe('')
+    const why = staffOnly({role: 'intern'})
+    expect(why).toBe(STAFF_ONLY_WHY)
+    const q = mount(JobActions, {props: {job: job({status: 'Queued', internOpen: true}), kind: 'queue', editWhy: why, staff: false}})
+    for (const t of ['Edit', 'Delete']) {
+      const b = q.findAll('button').find((x) => label(x) === t)!
       expect(b.attributes('disabled')).toBeDefined()
       expect(b.attributes('title')).toBe(why)
     }
-    expect(w.findAll('button').find((x) => x.text() === 'Preview')!.attributes('disabled')).toBeUndefined()
-    const q = mount(JobActions, {props: {job: job({status: 'Queued'}), kind: 'queue', editWhy: why}})
-    expect(q.findAll('button').find((x) => x.text() === 'Edit')!.attributes('disabled')).toBeDefined()
   })
 })
 
 describe('permissions (design: Permissions in the UI)', () => {
-  it('editing needs create and update on Media; handling options no longer carry that reason', () => {
-    expect(editBlocked(perms)).toBe('')
-    expect(editBlocked({...perms, media: false})).not.toBe('')
+  it('handling options carry no reason about Media permissions: staff can\'t sign in without them', () => {
     expect(handlingBlocked(tenant.handling[0], {...perms, media: false})).toBe('')
     expect(handlingBlocked(tenant.handling[0], {...perms, relations: false})).toContain('can\'t create relations')
   })
@@ -158,7 +182,7 @@ describe('JobPreview (design: Drafts; UI mockup renderPreview)', () => {
   it('shows a read-only draft inside its tab with its checks and only the actions that apply', async () => {
     const rows = [row({n: 1, file: 'bad.jpg', checks: [{level: 'block', text: 'No object 15-1234'}]}), row({n: 2, file: 'ok.jpg'})]
     const calls = stubFetch((url) => (url.endsWith('/check') ? {rows, counts: {block: 1, warn: 0}} : {job: job({rowCount: 2}), rows, runs: [], created: {}}))
-    const w = mount(JobPreview, {props: {jobId: 'j1', from: 'drafts', tenant}, global: {stubs: {DocumentThumbnail: true}}})
+    const w = mount(JobPreview, {props: {jobId: 'j1', from: 'drafts', tenant, staff: true}, global: {stubs: {DocumentThumbnail: true}}})
     await flushPromises()
     expect(w.text()).toContain('← Back to Drafts')
     expect(w.text()).toContain('Read-only preview.')
@@ -179,7 +203,7 @@ describe('JobPreview (design: Drafts; UI mockup renderPreview)', () => {
   it('a running job\'s preview offers Cancel run, and shows each document\'s run state', async () => {
     const rows = [row({n: 1, file: 'a.jpg', result: {state: 'In progress'}})]
     stubFetch(() => ({job: job({status: 'Running', progress: {total: 1, done: 0, failed: 0}}), rows, runs: [], created: {}}))
-    const w = mount(JobPreview, {props: {jobId: 'j1', from: 'queue', tenant, user: 'admin', scheduler: true}, global: {stubs: {DocumentThumbnail: true}}})
+    const w = mount(JobPreview, {props: {jobId: 'j1', from: 'queue', tenant, user: 'admin', staff: true}, global: {stubs: {DocumentThumbnail: true}}})
     await flushPromises()
     expect(w.text()).toContain('← Back to Job queue')
     expect(w.find('#preview-actions').findAll('button').map((b) => b.text() || b.attributes('aria-label'))).toEqual(['Cancel run', 'Delete'])

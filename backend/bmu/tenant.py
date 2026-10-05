@@ -81,8 +81,13 @@ class Tenant:
     # From the tenant's UI profile; cspace-ui's defaults are 500 ms and 3 characters
     autocomplete: dict[str, int] = field(default_factory=lambda: {"find_delay_ms": 500, "min_length": 3})
     sensitivity: dict[str, Any] = field(default_factory=dict)  # Object-level rules (design: Protected files)
-    # Display names of the CollectionSpace roles whose members are BMU schedulers (design: Job scheduling)
-    scheduler_roles: tuple[str, ...] = ()
+    # Display names of the CollectionSpace roles that make a user BMU staff or a BMU intern (design: Roles). The
+    # roles carry no permissions; they only tell the BMU what the user may do in the BMU.
+    staff_roles: tuple[str, ...] = ()
+    intern_roles: tuple[str, ...] = ()
+    # What a staff account must be allowed to do in CollectionSpace to sign in: resource -> action letters
+    # (C)reate (R)ead (U)pdate, as accounts/0/accountperms reports them.
+    staff_permissions: dict[str, str] = field(default_factory=dict)
 
     @property
     def media_type_values(self) -> set[str]:
@@ -102,16 +107,15 @@ class Tenant:
             return list(v or [])
         return v or ""
 
-    def scheduler_role_names(self, tenant_id: str) -> list[str]:
-        """The roleNames CollectionSpace gives the tenant's scheduler_roles (see role_name)."""
-        return [role_name(tenant_id, name) for name in self.scheduler_roles] if tenant_id else []
-
-    def is_scheduler(self, tenant_id: str, role_names: list[str]) -> bool:
-        """Design (Job scheduling): a user is a BMU scheduler if any of their roleNames (from
-        accounts/0/accountroles) is the roleName of one of the tenant's scheduler_roles (compared
-        case-insensitively)."""
-        wanted = {r.upper() for r in self.scheduler_role_names(tenant_id)}
-        return any((r or "").strip().upper() in wanted for r in role_names)
+    def role_of(self, tenant_id: str, role_names: list[str]) -> str:
+        """Design (Roles): "staff" if any of the user's roleNames (from accounts/0/accountroles) is the roleName of
+        one of the tenant's staff_roles, else "intern" if one is an intern role, else "" (not a BMU user). Staff
+        wins when a user has both. Compared case-insensitively (see role_name)."""
+        have = {(r or "").strip().upper() for r in role_names}
+        for role, names in (("staff", self.staff_roles), ("intern", self.intern_roles)):
+            if tenant_id and have & {role_name(tenant_id, n).upper() for n in names}:
+                return role
+        return ""
 
     def public_summary(self) -> dict[str, Any]:
         return {
@@ -158,7 +162,9 @@ def parse_tenant(raw: dict[str, Any], key: str) -> Tenant:
         authority_fields=raw.get("authority_fields", {}),
         autocomplete={"find_delay_ms": 500, "min_length": 3, **(raw.get("autocomplete") or {})},
         sensitivity=raw.get("sensitivity") or {},
-        scheduler_roles=tuple(raw.get("scheduler_roles") or ()),
+        staff_roles=tuple((raw.get("roles") or {}).get("staff") or ()),
+        intern_roles=tuple((raw.get("roles") or {}).get("intern") or ()),
+        staff_permissions={str(k): str(v).upper() for k, v in (raw.get("staff_permissions") or {}).items()},
     )
     for h in tenant.handling:
         problems = preset_problems(tenant, h)

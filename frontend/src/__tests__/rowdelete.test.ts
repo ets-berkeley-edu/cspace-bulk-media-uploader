@@ -12,7 +12,7 @@ const tenant = {key: 'pahma', name: 'PAHMA', filenameHint: '', filenamePattern: 
   mediaTypes: [], languageDefault: '', authorityFields: {}, publish: {field: 'approvedForWeb', header: 'Restricted', invert: true},
   handling: [{id: 'link', label: 'Link to existing object', object: 'existing', id_rule: 'object'}]} as unknown as TenantInfo
 const perms: Perms = {media: true, mediaUpdate: true, relations: true, objects: true, readObjects: true, authorities: true, groups: true}
-const me: Me = {user: 'admin', tenant, perms, scheduler: false}
+const me: Me = {user: 'admin', tenant, perms, role: 'staff'}
 
 function row(p: Partial<Row> = {}): Row {
   return {n: 1, file: '15-1234_1.jpg', size: 10, contentType: 'image/jpeg', handling: 'link', obj: '15-1234', objParsed: '15-1234',

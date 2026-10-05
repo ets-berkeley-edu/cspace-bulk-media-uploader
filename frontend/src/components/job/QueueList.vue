@@ -3,13 +3,13 @@
     <p id="queue-description" class="mb-3 text-body-2 text-medium-emphasis">
       Jobs submitted to run, in the order workers pick them up. Queued jobs start at {{ tenant.name }}’s next run time,
       in this order, one job at a time, so each job waits for the ones above it; running jobs stay first.
-      {{ scheduler ? 'Drag a job, or use its arrows, to change the order.' : '' }}
+      {{ staff ? 'Drag a job, or use its arrows, to change the order.' : '' }}
       Editing a queued job moves it to Drafts until it is submitted again. Checks are re-run against CollectionSpace each time this list is shown.
     </p>
     <QueueSchedule
       v-if="schedule"
       :schedule="schedule"
-      :scheduler="scheduler"
+      :staff="staff"
       :tenant="tenant"
       @changed="scheduleChanged"
       @error="text => error = text"
@@ -52,7 +52,7 @@
       <div v-if="plan.changes">
         <div v-if="!isConfirmingReorder">
           <v-btn
-            v-if="scheduler"
+            v-if="staff"
             id="queue-reorder-btn"
             color="warning"
             :disabled="isReordering"
@@ -61,7 +61,7 @@
           >
             Reorder to avoid failures…
           </v-btn>
-          <span v-else id="queue-reorder-why">A BMU scheduler can reorder the queue to avoid this.</span>
+          <span v-else id="queue-reorder-why">A staff member can reorder the queue to avoid this.</span>
         </div>
         <div v-else id="queue-reorder-confirm">
           <div>This moves {{ plan.moves.join('; ') }}. Every other job keeps its place among the rest.</div>
@@ -112,7 +112,7 @@
       >
         clear the sort
       </button>
-      to {{ scheduler ? 'drag or move jobs' : 'see it in run order' }}.
+      to {{ staff ? 'drag or move jobs' : 'see it in run order' }}.
     </v-alert>
     <div v-if="jobs.length" class="mb-1 text-body-2 text-right">
       <button
@@ -259,7 +259,7 @@
               :edit-why="editWhy"
               :job="job"
               kind="queue"
-              :scheduler="scheduler"
+              :staff="staff"
               :user="user"
               @confirming="on => setConfirming(job.id, on)"
               @done="done"
@@ -344,14 +344,14 @@
           </td>
           <td class="text-no-wrap">
             <v-icon
-              v-if="scheduler"
+              v-if="staff"
               aria-hidden="true"
               class="grip"
               :icon="mdiDragVertical"
               size="small"
             />
             <span :id="`job-${job.id}-order`">{{ running.length + queued.indexOf(job) + 1 }}</span>
-            <span v-if="scheduler" class="ml-1 order-btns">
+            <span v-if="staff" class="ml-1 order-btns">
               <v-btn
                 :id="`job-${job.id}-move-up-btn`"
                 :aria-label="`Move ${job.name} up`"
@@ -422,7 +422,7 @@
             >
               <v-icon :icon="mdiAlert" size="x-small" /> sign-in expires before its run time
             </div>
-            <template v-if="scheduler">
+            <template v-if="staff">
               <template v-if="runAtEdit?.id === job.id">
                 <div class="align-center d-flex flex-wrap mt-1 run-at-edit">
                   <input
@@ -532,7 +532,7 @@
               :edit-why="editWhy"
               :job="job"
               kind="queue"
-              :scheduler="scheduler"
+              :staff="staff"
               :user="user"
               @confirming="on => setConfirming(job.id, on)"
               @done="done"
@@ -612,19 +612,19 @@ import {ApiError, api} from '@/api'
 
 /**
  * The Job queue page (design: The job queue; Job scheduling): running jobs first, then queued jobs in the order
- * workers take them. Queued jobs start at the tenant's run times, one at a time. BMU schedulers reorder the queue
- * (drag, or the arrows) and set each job's Run now, own run time or hold; everyone can preview, edit (back to
- * Drafts) and delete; schedulers and the submitter cancel a run.
+ * workers take them. Queued jobs start at the tenant's run times, one at a time. Everyone can preview a job. Only staff
+ * reorder the queue (drag, or the arrows), set each job's Run now, own run time or hold, edit a job (back to Drafts),
+ * delete it, and cancel a run (design: Roles).
  */
 const props = defineProps({
-  // Why this user can't create or edit jobs (design: Permissions in the UI); '' when they can.
+  // Why this user can't change the jobs of this list (an intern, outside Drafts; design: Roles); '' when they can.
   editWhy: {
     default: '',
     required: false,
     type: String
   },
-  // The signed-in user has the BMU_Scheduler role (design: Job scheduling).
-  scheduler: {
+  // The signed-in user is BMU staff, not an intern (design: Roles).
+  staff: {
     required: false,
     type: Boolean
   },
@@ -652,7 +652,7 @@ const runSeen = new Map<string, string>()
 const plan = ref<QueuePlan | null>(null)
 const isConfirmingReorder = ref(false)
 const isReordering = ref(false)
-// A scheduler's change that would make a document fail, waiting for "go ahead" under the job it was made on
+// A staff member's change that would make a document fail, waiting for "go ahead" under the job it was made on
 const pending = ref<{jobId: string, text: string, label: string, done: string, busy: boolean, run: (confirm: boolean) => Promise<unknown>} | null>(null)
 // The order and the settings that decide it, as last seen: when someone else changes them, the checks are run again
 let orderSeen = ''
@@ -692,7 +692,7 @@ const queued = computed(() => jobs.value.filter(j => j.status === 'Queued')
   .sort((a, b) => (a.queuePos ?? 0) - (b.queuePos ?? 0) || (a.queuedAt ?? 0) - (b.queuedAt ?? 0)))
 // Sorted by Order ascending is the queue order itself, so it counts as not sorted: jobs can still be moved.
 const isSortedView = computed(() => !!table.sort && !(table.sort === 'order' && table.dir === 1))
-const isMovable = computed(() => props.scheduler && !isSortedView.value)
+const isMovable = computed(() => props.staff && !isSortedView.value)
 const runsOf = (job: Job) => runsAt(job, running.value.length > 0)
 /** The Status column's order: among queued jobs, those waiting their turn, then those waiting for the paused queue
  *  to be resumed, then held ones, the same order as Runs at. Ties keep queue order. Running jobs are always first. */
@@ -776,7 +776,7 @@ onMounted(() => {
 onBeforeUnmount(() => clearInterval(timer))
 
 /**
- * A scheduler's change to the queue. The server refuses one that would make a document fail (409 would_fail) until it
+ * A staff member's change to the queue. The server refuses one that would make a document fail (409 would_fail) until it
  * is confirmed: the question opens under the job, and goAhead sends the change again, confirmed. Afterwards the
  * checks are run again, so a job that would now fail is marked at once.
  */
@@ -831,7 +831,7 @@ const move = (job: Job, to: number) => change(
   'Move anyway'
 )
 
-// ---- per-job run controls (BMU schedulers) ----
+// ---- per-job run controls (staff) ----
 const runNow = (job: Job, on: boolean) => change(
   job,
   confirm => api.runNow(job.id, on, confirm),
@@ -879,7 +879,7 @@ const clearRunAt = async (job: Job) => {
   }
 }
 
-// ---- drag and drop among the queued jobs (BMU schedulers) ----
+// ---- drag and drop among the queued jobs (staff) ----
 const onDragOver = (event: DragEvent, job: Job) => {
   if (!dragId.value || job.status !== 'Queued' || !isMovable.value) {
     return

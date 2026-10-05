@@ -15,7 +15,8 @@ from conftest import worker_factory
 from test_flow import _second_user, new_job
 
 LA_TZ = ZoneInfo("America/Los_Angeles")
-REFUSED = "Only users with the BMU_Scheduler role can change the schedule or the job queue."
+REFUSED = ("Only users with the BMU_Staff role can do this. Interns can create drafts and edit the drafts that are "
+           "open to interns.")
 
 
 def LA(*args) -> float:
@@ -206,49 +207,52 @@ def test_plans_of_jobs_that_miss_a_window_or_wait_long():
 
 
 # ---- the scheduler role --------------------------------------------------------------------------------------
-def test_the_scheduler_role_name_rule():
+def test_the_role_rule():
     t = load_tenant("pahma")
-    assert t.scheduler_roles == ("BMU_Scheduler",)
-    assert t.is_scheduler("15", ["ROLE_15_TENANT_READER", "ROLE_15_BMU_SCHEDULER"])
-    assert t.is_scheduler("15", ["role_15_bmu_scheduler"])  # compared case-insensitively
-    assert not t.is_scheduler("15", ["ROLE_16_BMU_SCHEDULER"])  # another tenant's role
-    assert not t.is_scheduler("15", ["ROLE_15_TENANT_ADMINISTRATOR"])
-    assert not t.is_scheduler("", ["ROLE_15_BMU_SCHEDULER"])
-    assert t.scheduler_role_names("15") == ["ROLE_15_BMU_SCHEDULER"]
+    assert t.staff_roles == ("BMU_Staff",) and t.intern_roles == ("BMU_Intern",)
+    assert t.role_of("15", ["ROLE_15_TENANT_READER", "ROLE_15_BMU_STAFF"]) == "staff"
+    assert t.role_of("15", ["role_15_bmu_staff"]) == "staff"  # compared case-insensitively
+    assert t.role_of("15", ["ROLE_15_BMU_INTERN"]) == "intern"
+    assert t.role_of("15", ["ROLE_15_BMU_INTERN", "ROLE_15_BMU_STAFF"]) == "staff"  # staff wins
+    assert t.role_of("15", ["ROLE_16_BMU_STAFF"]) == ""  # another tenant's role
+    assert t.role_of("15", ["ROLE_15_TENANT_ADMINISTRATOR"]) == ""
+    assert t.role_of("", ["ROLE_15_BMU_STAFF"]) == ""
 
 
 def test_role_name_follows_cspace_sanitizing():
     # cspace-ui: upper-case, spaces -> _, drop all but A-Z 0-9 _, collapse repeated _; services: add ROLE_<t>_
-    assert role_name("15", "BMU_Scheduler") == "ROLE_15_BMU_SCHEDULER"
-    assert role_name("15", "BMU Scheduler") == "ROLE_15_BMU_SCHEDULER"
-    assert role_name("15", "bmu  scheduler") == "ROLE_15_BMU_SCHEDULER"  # repeated underscores collapse
-    assert role_name("15", "BMU-Scheduler (PAHMA)") == "ROLE_15_BMUSCHEDULER_PAHMA"
+    assert role_name("15", "BMU_Staff") == "ROLE_15_BMU_STAFF"
+    assert role_name("15", "BMU Staff") == "ROLE_15_BMU_STAFF"
+    assert role_name("15", "bmu  staff") == "ROLE_15_BMU_STAFF"  # repeated underscores collapse
+    assert role_name("15", "BMU-Staff (PAHMA)") == "ROLE_15_BMUSTAFF_PAHMA"
     assert role_name("15", "+ cow") == "ROLE_15__COW"  # the prefix is added after the collapse
-    assert role_name("15", "ROLE_15_BMU_SCHEDULER") == "ROLE_15_BMU_SCHEDULER"  # prefix not added twice
-    assert role_name("16", "BMU_Scheduler") == "ROLE_16_BMU_SCHEDULER"
+    assert role_name("15", "ROLE_15_BMU_STAFF") == "ROLE_15_BMU_STAFF"  # prefix not added twice
+    assert role_name("16", "BMU_Staff") == "ROLE_16_BMU_STAFF"
 
 
 def test_account_roles_are_parsed_from_collectionspace_xml():
     xml = (b'<ns2:account_role xmlns:ns2="http://collectionspace.org/services/authorization"><account><accountId>a1</accountId>'
            b'<screenName>Jo</screenName><userId>jo@example.org</userId><tenantId>15</tenantId></account>'
            b'<role><roleRelationshipId>r1</roleRelationshipId><roleId>x</roleId><roleName>ROLE_15_TENANT_READER</roleName></role>'
-           b'<role><roleRelationshipId>r2</roleRelationshipId><roleId>y</roleId><roleName>ROLE_15_BMU_SCHEDULER</roleName></role>'
+           b'<role><roleRelationshipId>r2</roleRelationshipId><roleId>y</roleId><roleName>ROLE_15_BMU_STAFF</roleName></role>'
            b'</ns2:account_role>')
     r = AccountRoles.from_xml(xml)
-    assert r.tenant_id == "15" and r.role_names == ["ROLE_15_TENANT_READER", "ROLE_15_BMU_SCHEDULER"]
+    assert r.tenant_id == "15" and r.role_names == ["ROLE_15_TENANT_READER", "ROLE_15_BMU_STAFF"]
 
 
-def test_me_says_whether_the_user_is_a_scheduler(api, login, fake, services):
-    assert login()["scheduler"] is True
-    assert api.get("/api/me").json()["scheduler"] is True
-    assert _second_user(services, "limited").get("/api/me").json()["scheduler"] is False
-    assert _second_user(services, "reader").get("/api/me").json()["scheduler"] is False
+def test_me_says_the_users_role(api, login, fake, services):
+    assert login()["role"] == "staff"
+    assert api.get("/api/me").json()["role"] == "staff"
+    assert _second_user(services, "limited").get("/api/me").json()["role"] == "staff"
+    assert _second_user(services, "intern").get("/api/me").json()["role"] == "intern"
 
 
-def test_sign_in_works_when_the_roles_cannot_be_read(api, login, fake):
-    fake.fail_next["accountroles"] = 500
-    assert login()["scheduler"] is False
-    assert api.get("/api/me").json()["scheduler"] is False
+def test_sign_in_is_refused_when_the_roles_cannot_be_read(api, fake):
+    fake.fail_next["accountroles"] = 403  # CollectionSpace refuses the roles request: no role, so no sign-in
+    r = api.post("/api/login", json={"username": "admin", "password": "admin"})
+    assert r.status_code == 403 and r.json()["detail"]["code"] == "no_role"
+    fake.fail_next["accountroles"] = 500  # CollectionSpace itself is failing: say that instead
+    assert api.post("/api/login", json={"username": "admin", "password": "admin"}).status_code == 503
 
 
 def test_the_roles_are_read_again_for_every_schedule_change(api, login, fake):
@@ -257,11 +261,11 @@ def test_the_roles_are_read_again_for_every_schedule_change(api, login, fake):
     fake.role_overrides["admin"] = ["ROLE_15_TENANT_ADMINISTRATOR"]  # the role was removed after signing in
     r = api.put("/api/schedule", json={"days": [1, 2, 3, 4, 5, 6, 7], "start": "20:00"})
     assert r.status_code == 403 and r.json()["detail"] == REFUSED
-    assert api.get("/api/me").json()["scheduler"] is False  # the session follows
+    assert api.get("/api/me").json()["role"] == "staff"  # the session keeps its role; each staff action asks again
     assert api.get("/api/schedule").json()["start"] == "18:00"
-    fake.role_overrides["admin"] = ["ROLE_15_Bmu_Scheduler"]  # given back (any case)
+    fake.role_overrides["admin"] = ["ROLE_15_Bmu_Staff"]  # given back (any case)
     assert api.post("/api/schedule/pause", json={"reason": "x"}).status_code == 200
-    assert api.get("/api/me").json()["scheduler"] is True
+    assert api.get("/api/me").json()["role"] == "staff"
 
 
 # ---- the schedule API ----------------------------------------------------------------------------------------
@@ -304,12 +308,12 @@ def test_pause_and_resume(api, login, services):
     assert any(a["detail"] == "Paused the job queue: CollectionSpace upgrade" for a in services.storage.list_audit("pahma"))
 
 
-def test_only_schedulers_change_the_schedule_and_the_queue(api, login, add_uploaded, services):
+def test_only_staff_change_the_schedule_and_the_queue(api, login, add_uploaded, services):
     login()
     job = new_job(api)
     add_uploaded(job, ["15-1234_a.jpg"])
     assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
-    other = _second_user(services, "limited")
+    other = _second_user(services, "intern")
     assert other.get("/api/schedule").status_code == 200  # everyone sees it
     for method, path, body in [("put", "/api/schedule", {"days": [1, 2, 3, 4, 5, 6, 7], "start": "19:00"}),
                                ("post", "/api/schedule/pause", {"reason": "x"}), ("post", "/api/schedule/resume", None),
@@ -402,26 +406,17 @@ def test_reordering_is_audited(api, login, add_uploaded, services):
         ["Moved “B” to place 1 of 2 in the queue."]
 
 
-def test_cancel_run_is_for_schedulers_and_the_submitter(api, login, add_uploaded, services, fake):
+def test_cancel_run_is_for_staff(api, login, add_uploaded, services, fake):
     login()
     job = _submit(api, add_uploaded)["id"]
     services.storage.update_job(job, {"status": "Running"})  # as if the worker started it
-    other = _second_user(services, "limited")
-    r = other.post(f"/api/jobs/{job}/cancel")
-    assert r.status_code == 403 and r.json()["detail"] == \
-        "Only a BMU scheduler or the person who submitted the job can cancel its run."
-    fake.role_overrides["admin"] = ["ROLE_15_TENANT_READER"]  # the submitter needs no role
-    j = api.post(f"/api/jobs/{job}/cancel").json()
-    assert j["cancelRequested"]["by"] == "admin" and j["plan"]["kind"] == "running"
+    r = _second_user(services, "intern").post(f"/api/jobs/{job}/cancel")
+    assert r.status_code == 403 and r.json()["detail"] == REFUSED
+    fake.role_overrides["admin"] = ["ROLE_15_TENANT_READER"]  # the submitter lost the role: no longer theirs to cancel
+    assert api.post(f"/api/jobs/{job}/cancel").status_code == 403
+    j = _second_user(services, "limited").post(f"/api/jobs/{job}/cancel").json()  # any staff member, any job
+    assert j["cancelRequested"]["by"] == "limited" and j["plan"]["kind"] == "running"
     assert any(a["type"] == "Run cancelled" for a in services.storage.list_audit("pahma"))
-
-
-def test_a_scheduler_may_cancel_another_users_run(api, login, add_uploaded, services, fake):
-    fake.role_overrides["limited"] = ["ROLE_15_BMU_SCHEDULER"]
-    login()
-    job = _submit(api, add_uploaded)["id"]
-    services.storage.update_job(job, {"status": "Running"})
-    assert _second_user(services, "limited").post(f"/api/jobs/{job}/cancel").status_code == 200
 
 
 # ---- the worker ---------------------------------------------------------------------------------------------
