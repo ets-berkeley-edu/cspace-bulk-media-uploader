@@ -504,8 +504,6 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
         out: list[dict[str, str]] = []
         if not r.get("include"):
             r["checks"] = [{"level": "info", "text": "Excluded from the job: the BMU ignores this document."}]
-            if r.get("heldFor") == CREATOR:
-                r["checks"] = [dict(HELD_CHECK)]
             continue
         if (r.get("result") or {}).get("state") == "Done":
             r["checks"] = []
@@ -606,9 +604,6 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
 
 
 CREATOR = "creator"  # a check's level: the document needs a new Object, which this user can't create
-HELD_CHECK = {"level": "info", "text": "Left out when the job was submitted, because it needs a new Object and the person "
-                                       "who submitted can't create Object records. If you can, include it again and "
-                                       "submit the job."}
 
 
 def needs_creator(perms: dict[str, bool], lead: str = "This document needs a new Object") -> dict:
@@ -617,9 +612,9 @@ def needs_creator(perms: dict[str, bool], lead: str = "This document needs a new
     (perms["proxy"]) it is information for whoever submits the job."""
     if perms.get("proxy"):
         return {"level": CREATOR, "text": f"{lead}. The staff member who submits the job must be able to create Objects."}
-    return {"level": CREATOR, "text": f"{lead}, and your account can't create Object records. Someone who can create "
-                                      "Objects can submit it; or choose another handling, or have the Object created in "
-                                      "CollectionSpace and check again."}
+    return {"level": CREATOR, "text": f"{lead}, and your account can't create Object records. Leave the draft for a "
+                                      "colleague who can create Objects; or choose another handling, or have the Object "
+                                      "created in CollectionSpace and check again."}
 
 
 def permission_checks(tenant: Tenant, r: dict, perms: dict[str, bool], group_on: bool = False,

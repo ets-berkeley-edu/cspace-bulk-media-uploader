@@ -114,9 +114,11 @@
       variant="tonal"
     >
       <template v-if="isStaff(me)">
-        {{ counts.creator === 1 ? '1 document needs' : `${counts.creator} documents need` }} a new Object, which your account can't create.
-        Submit without {{ counts.creator === 1 ? 'it' : 'them' }}, change {{ counts.creator === 1 ? 'its' : 'their' }} handling, have the
-        Object{{ counts.creator === 1 ? '' : 's' }} created in CollectionSpace, or leave the draft for a colleague who can create Objects.
+        {{ counts.creator === 1 ? '1 document needs' : `${counts.creator} documents need` }} a new Object, which your account can't create,
+        so you can't submit this job. Leave the draft for a colleague who can create Objects, change
+        {{ counts.creator === 1 ? 'its' : 'their' }} handling, have the Object{{ counts.creator === 1 ? '' : 's' }} created in
+        CollectionSpace, or delete {{ counts.creator === 1 ? 'it' : 'them' }} from this job and add {{ counts.creator === 1 ? 'it' : 'them' }}
+        to a new draft. (Exclude makes the BMU ignore a document for good once the job completes.)
       </template>
       <template v-else>
         {{ counts.creator === 1 ? '1 document needs' : `${counts.creator} documents need` }} a new Object. The staff member who submits
@@ -130,27 +132,6 @@
         @click="showFilter('creator')"
       >
         Show {{ counts.creator === 1 ? 'it' : 'them' }}
-      </v-btn>
-    </v-alert>
-    <v-alert
-      v-if="job?.status === 'Draft' && counts.held"
-      id="held-note"
-      class="mb-3"
-      color="creator"
-      density="compact"
-      variant="tonal"
-    >
-      {{ counts.held === 1 ? '1 document was' : `${counts.held} documents were` }} left out when this job was submitted, because
-      {{ counts.held === 1 ? 'it needs' : 'they need' }} a new Object. If you can create Objects, include
-      {{ counts.held === 1 ? 'it' : 'them' }} again and submit.
-      <v-btn
-        id="show-held-btn"
-        class="ml-2"
-        size="small"
-        variant="text"
-        @click="showFilter('excluded')"
-      >
-        Show {{ counts.held === 1 ? 'it' : 'them' }}
       </v-btn>
     </v-alert>
     <v-alert
@@ -595,25 +576,13 @@
         </v-btn>
       </span>
       <!-- A preview of a queued, running or finished job has nothing to submit: that's done from its own tab -->
-      <!-- Design (Roles, Three kinds of result): the rest of the job goes ahead; those documents stay in it, excluded
-           and marked, for someone who can create Objects -->
-      <v-btn
-        v-if="!readonly && mode !== 'preview' && canSubmitWithout"
-        id="submit-without-btn"
-        color="primary"
-        :disabled="isBusy"
-        variant="outlined"
-        @click="schedule(true)"
-      >
-        Submit without the {{ counts.creator === 1 ? 'document that needs' : `${counts.creator} documents that need` }} a new Object
-      </v-btn>
       <span v-if="!readonly && mode !== 'preview'" :title="submitTitle">
         <v-btn
           id="submit-job-btn"
           color="primary"
           :disabled="!job || isBusy || !!scheduleBlocked || (job.status === 'Draft' && !editable)"
           :title="submitTitle"
-          @click="schedule()"
+          @click="schedule"
         >
           Submit job
         </v-btn>
@@ -816,8 +785,8 @@ const scheduleBlocked = computed(() => {
   if (checking.size) return 'Checking against CollectionSpace…'
   if (groupProblem.value) return 'Your account can\'t create groups, which this job\'s group needs'
   if (c.creator) {
-    return `${c.creator === 1 ? 'A document needs' : `${c.creator} documents need`} a new Object, which your account can't create`
-      + (c.creator < c.work ? `: submit without ${c.creator === 1 ? 'it' : 'them'}, or leave the draft for a colleague` : ': leave the draft for a colleague who can create Objects')
+    return `${c.creator === 1 ? 'A document needs' : `${c.creator} documents need`} a new Object, which your account can't create: `
+      + 'leave the draft for a colleague who can create Objects'
   }
   return ''
 })
@@ -832,13 +801,6 @@ const groupProblem = computed(() => {
   if (!isStaff(props.me) || !job.value?.groupOn || groupMade.value || props.me.perms.groups) return ''
   const joins = rows.value.some((r) => hasWork(r) && (r.group ?? true) && props.me.tenant.handling.find((h) => h.id === r.handling)?.object !== 'none')
   return joins ? GROUP_PROBLEM : ''
-})
-
-/** "Submit without the N documents that need a new Object": only that stands between this user and Submit. */
-const canSubmitWithout = computed(() => {
-  const c = counts.value
-  return isStaff(props.me) && job.value?.status === 'Draft' && editable.value && c.creator > 0 && c.creator < c.work && !c.block
-    && !c.uploading && !checking.size && !groupProblem.value && !(job.value.groupOn && !job.value.groupTitle?.trim())
 })
 
 async function load(id: string | null) {
@@ -1250,12 +1212,12 @@ function showFilter(filter: string) {
 }
 const showProblems = () => showFilter('problems')
 
-async function schedule(withoutCreator = false) {
+async function schedule() {
   if (!job.value) return
   isBusy.value = true
   try {
     await rename()
-    const j = await api.schedule(job.value.id, withoutCreator)
+    const j = await api.schedule(job.value.id)
     emit('scheduled', j)
   } catch (e) {
     await failed(e)

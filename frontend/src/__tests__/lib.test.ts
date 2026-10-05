@@ -83,9 +83,7 @@ describe('status by object behavior', () => {
     expect(rowStatus(creator, tenant)).toEqual({text: 'Needs an Object creator', tone: 'creator'})
     const both = {...creator, checks: [...creator.checks, {level: 'block' as const, text: 'bad date'}]}
     expect(rowStatus(both, tenant).text).toBe('Needs fixing')
-    const held = {...row('create', []), include: false, heldFor: 'creator'}
-    expect(rowStatus(held, tenant)).toEqual({text: 'Excluded — needs an Object creator', tone: 'creator'})
-    expect(jobCounts([creator, both, held, row('link', ['o1'])])).toMatchObject({work: 3, block: 1, creator: 1, held: 1})
+    expect(jobCounts([creator, both, row('link', ['o1'])])).toMatchObject({work: 3, block: 1, creator: 1})
   })
 
   it('counts them separately in the checks chip', () => {
@@ -95,7 +93,6 @@ describe('status by object behavior', () => {
     // someone who can create Objects sees which drafts wait for them
     expect(checksText({block: 0, warn: 0, creator: 0, newObjects: 2})).toBe('nothing to fix · 2 new Objects')
     expect(checksColor({block: 0, warn: 0, creator: 0, newObjects: 2})).toBe('success')
-    expect(checksText({block: 0, warn: 0, held: 1})).toBe('nothing to fix · 1 left out for an Object creator')
   })
 })
 

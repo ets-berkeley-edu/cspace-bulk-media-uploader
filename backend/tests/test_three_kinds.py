@@ -1,7 +1,6 @@
 """Three kinds of result (design: Roles): a problem with the job ("needs fixing"), a document that needs someone
 who can create Objects, and a problem with the user's account. Only the first is shown as a mistake in the job."""
 from test_flow import _second_user, new_job
-from test_roles import _audit
 
 MISSING, EXISTS = "20-0990", "15-1234"
 
@@ -26,7 +25,7 @@ def test_a_document_that_needs_a_new_object_is_not_a_mistake_in_the_job(api, log
     text = next(c["text"] for c in by[f"{MISSING}_1.jpg"]["checks"] if c["level"] == "creator")
     assert text.startswith(f"No object {MISSING} in CollectionSpace, so this document needs a new Object, and your account can't")
     assert "creator" not in _levels(by[f"{EXISTS}_1.jpg"])
-    assert r["counts"] == {"block": 0, "warn": 1, "creator": 1, "newObjects": 1, "held": 0}
+    assert r["counts"] == {"block": 0, "warn": 1, "creator": 1, "newObjects": 1}
     # "Create new object + link" can still be chosen, to prepare the document for a colleague
     row = api.patch(f"/api/jobs/{job}/rows/1", json={"handling": "create"}).json()["row"]
     assert _levels(row) == ["creator"]
@@ -41,35 +40,22 @@ def test_someone_who_can_create_objects_sees_which_drafts_wait_for_them(api, log
     assert counts["creator"] == 0 and counts["newObjects"] == 1  # nothing in their way; one Object will be created
 
 
-def test_submitting_them_is_refused_and_submit_without_them_leaves_them_in_the_job(api, login, add_uploaded, worker, services):
+def test_a_job_is_submitted_whole_by_someone_who_can_create_its_objects(api, login, add_uploaded, worker, services):
+    """A user who can't create Objects can't submit a job with documents that need a new one, and there is no
+    way to submit only the rest: the draft waits for a colleague who can."""
     login("limited")
     job = _draft(api, add_uploaded, [f"{MISSING}_1.jpg", f"{EXISTS}_1.jpg", "1-2345_1.jpg"])
     r = api.post(f"/api/jobs/{job}/schedule")
     assert r.status_code == 409 and r.json()["detail"]["code"] == "creator" and r.json()["detail"]["rows"] == [1]
-    assert "this document needs a new Object" in r.json()["detail"]["message"]
-    assert api.get(f"/api/jobs/{job}").json()["job"]["status"] == "Draft"
+    assert "this document needs a new Object. Leave the draft for a colleague who can create Objects" in r.json()["detail"]["message"]
+    assert api.post(f"/api/jobs/{job}/schedule", json={"withoutCreator": True}).status_code == 409  # no such option
+    data = api.get(f"/api/jobs/{job}").json()
+    assert data["job"]["status"] == "Draft" and all(x["include"] for x in data["rows"])  # nothing was changed
+    assert services.storage.get_credential(job) is None
+    api.post(f"/api/jobs/{job}/close")
 
-    r = api.post(f"/api/jobs/{job}/schedule", json={"withoutCreator": True})
-    assert r.status_code == 200 and r.json()["progress"]["total"] == 2
-    rows = {x["n"]: x for x in api.get(f"/api/jobs/{job}").json()["rows"]}
-    assert rows[1]["include"] is False and rows[1]["heldFor"] == "creator" and rows[1]["disabledBy"] == "limited"
-    assert rows[2]["include"] is True and "heldFor" not in rows[2]
-    assert "with 2 documents. 1 document that needs a new Object was left out, for someone who can create Objects." in _audit(services, "Submitted")[0]
-
-    worker.tick()
-    # everything submitted is done, but the job is not Completed: Completed jobs can't be reopened
-    job_now = api.get(f"/api/jobs/{job}").json()["job"]
-    assert job_now["status"] == "NeedsAttention" and job_now["code"] == "needs_object_creator"
-    assert job_now["codeDetail"] == "1 document left out at Submit: a new Object is needed"
-
-    # a colleague who can create Objects takes it from there
+    # a colleague who can create Objects submits all of it
     admin = _second_user(services, "admin")
-    assert admin.post(f"/api/jobs/{job}/fix").status_code == 200
-    held = next(x for x in admin.get(f"/api/jobs/{job}").json()["rows"] if x["n"] == 1)
-    assert "Left out when the job was submitted" in held["checks"][0]["text"]
-    assert admin.post(f"/api/jobs/{job}/check").json()["counts"]["held"] == 1
-    row = admin.patch(f"/api/jobs/{job}/rows/1", json={"include": True}).json()["row"]
-    assert "heldFor" not in row and _levels(row) == []
     assert admin.post(f"/api/jobs/{job}/schedule").status_code == 200
     worker.tick()
     assert admin.get(f"/api/jobs/{job}").json()["job"]["status"] == "Completed"
@@ -81,19 +67,19 @@ def services_objects():
     return list(store.objects.values())
 
 
-def test_submit_without_them_needs_something_left_to_submit(api, login, add_uploaded):
+def test_taking_the_documents_out_or_changing_their_handling_lets_the_rest_go(api, login, add_uploaded):
     login("limited")
-    job = _draft(api, add_uploaded, [f"{MISSING}_1.jpg"])
-    r = api.post(f"/api/jobs/{job}/schedule", json={"withoutCreator": True})
-    assert r.status_code == 409 and r.json()["detail"]["message"].startswith("Nothing to submit")
-    assert api.get(f"/api/jobs/{job}").json()["rows"][0]["include"] is True  # nothing was changed
+    job = _draft(api, add_uploaded, [f"{MISSING}_1.jpg", f"{EXISTS}_1.jpg"])
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 409
+    assert api.delete(f"/api/jobs/{job}/rows/1").status_code == 200
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
 
 
 def test_a_document_that_needs_fixing_still_comes_first(api, login, add_uploaded):
     login("limited")
     job = _draft(api, add_uploaded, [f"{MISSING}_1.jpg", f"{EXISTS}_1.jpg"])
     api.patch(f"/api/jobs/{job}/rows/2", json={"date": "sometime last spring"})
-    r = api.post(f"/api/jobs/{job}/schedule", json={"withoutCreator": True})
+    r = api.post(f"/api/jobs/{job}/schedule")
     assert r.status_code == 409 and "need fixing first" in r.json()["detail"]["message"]
 
 

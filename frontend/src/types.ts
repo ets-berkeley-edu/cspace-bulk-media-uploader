@@ -99,15 +99,13 @@ export interface JobPlan {
 export type CheckLevel = 'block' | 'creator' | 'warn' | 'info';
 /**
  * A job's checks, counted (design: Roles, Three kinds of result). creator: documents this user can't submit because
- * they need a new Object. newObjects: documents that will create one, whoever looks. held: documents left out of a
- * submit for that reason.
+ * they need a new Object. newObjects: documents that will create one, whoever looks.
  */
 export interface CheckCounts {
   block: number;
   warn: number;
   creator?: number;
   newObjects?: number;
-  held?: number;
 }
 export interface Check {
   level: CheckLevel;
@@ -216,7 +214,6 @@ export interface Row {
   softSignals?: string[]; // Object-level signals that only warn
   restrictedAuto?: boolean; // Restricted was turned on because the file is protected
   disabledBy?: string;
-  heldFor?: string; // 'creator': left out of a submit because it needs a new Object
   disabledAt?: number;
   skipLink?: boolean; // stop linking a Partial row's Media record to an object
   replacedFor?: number; // the run whose rejected or lost file this row's file replaces

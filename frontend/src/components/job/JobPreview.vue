@@ -466,7 +466,6 @@ const counts = computed(() => {
   return {
     block: work.filter(r => worstLevel(r) === 'block').length,
     creator: work.filter(r => worstLevel(r) === 'creator').length,
-    held: rows.value.filter(r => r.heldFor === 'creator').length,
     warn: work.filter(r => worstLevel(r) === 'warn').length
   }
 })

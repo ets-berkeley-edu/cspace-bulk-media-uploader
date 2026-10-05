@@ -32,7 +32,6 @@ export function rowStatus(r: Row, tenant: TenantInfo, checking = false): Badge {
     if (r.upload.s === 'verifying') return {text: 'Verifying…', tone: 'info'}
     if (r.upload.s === 'failed') return {text: 'Upload failed', tone: 'error'}
   }
-  if (!r.include && r.heldFor === 'creator') return {text: 'Excluded — needs an Object creator', tone: 'creator'}
   if (!r.include) return {text: 'Excluded — ignored', tone: 'info'}
   if (r.result?.state === 'Done') return {text: 'Done in last run', tone: 'success'}
   if (r.result?.state === 'Partial') {
@@ -74,7 +73,6 @@ export function jobCounts(rows: Row[]) {
     work: work.length,
     block: work.filter((r) => worstLevel(r) === 'block').length,
     creator: work.filter((r) => worstLevel(r) === 'creator').length,
-    held: rows.filter((r) => r.heldFor === 'creator').length,
     warn: work.filter((r) => worstLevel(r) === 'warn').length,
     uploaded: work.filter((r) => r.upload.s === 'done').length,
     uploading: work.filter((r) => ['pending', 'uploading', 'verifying'].includes(r.upload.s)).length,
@@ -133,9 +131,6 @@ export function checksText(c: CheckCounts): string {
   } else if (c.newObjects) {
     parts.push(`${c.newObjects} new Object${c.newObjects === 1 ? '' : 's'}`)
   }
-  if (c.held) {
-    parts.push(`${c.held} left out for an Object creator`)
-  }
   if (c.warn) {
     parts.push(`${c.warn} warning${c.warn === 1 ? '' : 's'}`)
   }
@@ -144,7 +139,7 @@ export function checksText(c: CheckCounts): string {
 
 /** The Vuetify colour of a job's checks chip. */
 export function checksColor(c: CheckCounts): string {
-  return c.block ? 'error' : c.creator || c.held ? 'creator' : c.warn ? 'warning' : 'success'
+  return c.block ? 'error' : c.creator ? 'creator' : c.warn ? 'warning' : 'success'
 }
 
 /** How a job's documents are handled, counted: "3 link to existing object, 1 media only". */

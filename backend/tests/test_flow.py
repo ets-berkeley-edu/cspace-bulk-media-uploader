@@ -744,7 +744,7 @@ def test_queued_jobs_run_in_the_order_shown_and_can_be_reordered(api, login, add
     a, b, c = (_queued_job(api, add_uploaded, [f]) for f in ["15-1234_a.jpg", "1-2345_1.jpg", "12-5678_1.jpg"])
     order = [j["id"] for j in api.post(f"/api/jobs/{c}/move", json={"toIndex": 0}).json()["jobs"]]
     assert order == [c, a, b]
-    assert api.get(f"/api/jobs/{a}").json()["job"]["checksAtSchedule"] == {"block": 0, "warn": 1, "creator": 0, "newObjects": 0, "held": 0}
+    assert api.get(f"/api/jobs/{a}").json()["job"]["checksAtSchedule"] == {"block": 0, "warn": 1, "creator": 0, "newObjects": 0}
     worker.tick()
     assert services.storage.get_job(c)["status"] == "Completed"
     assert services.storage.get_job(a)["status"] == "Queued" and services.storage.get_job(b)["status"] == "Queued"

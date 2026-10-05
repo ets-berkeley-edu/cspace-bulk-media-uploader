@@ -55,7 +55,7 @@ export function listSubmitBlocked(job: Pick<Job, 'rowCount' | 'editingBy' | 'edi
   if (job.groupOn && !job.groupTitle?.trim()) return 'Enter a group title, or turn off the job\'s group: open the draft with Edit'
   if (counts.creator) {
     return `${counts.creator === 1 ? 'A document needs' : `${counts.creator} documents need`} a new Object, which your account can't create: `
-      + `open the draft with Edit to submit without ${counts.creator === 1 ? 'it' : 'them'}, or leave it for a colleague who can create Objects`
+      + 'leave the draft for a colleague who can create Objects'
   }
   return ''
 }

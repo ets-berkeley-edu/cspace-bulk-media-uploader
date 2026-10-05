@@ -539,12 +539,6 @@ class Worker:
         states = [((r.get("result") or {}).get("state") or "Not started") for r in work]
         if code in STOPPED_JOB:
             status = "Failed"
-        elif all(st == "Done" for st in states) and any(r.get("heldFor") for r in rows):
-            # Design (Roles, Three kinds of result): documents were left out because they need a new Object. The job
-            # stays where staff who can create Objects find it and can fix it; Completed jobs can't be reopened.
-            status, code = "NeedsAttention", "needs_object_creator"
-            n = sum(1 for r in rows if r.get("heldFor"))
-            code_detail = f"{n} document{'' if n == 1 else 's'} left out at Submit: a new Object is needed"
         elif all(st == "Done" for st in states):
             status = "Completed"
         else:

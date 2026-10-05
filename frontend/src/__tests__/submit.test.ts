@@ -180,31 +180,18 @@ describe('three kinds of result in the editor (design: Roles)', () => {
     return {}
   }
 
-  it('a document that needs an Object creator stops Submit, and the rest can be submitted without it', async () => {
+  it('a document that needs an Object creator stops Submit; the job is submitted whole by someone who can create Objects', async () => {
     const calls = stub(routes([row, waiting]))
     const limited: Me = {user: 'limited', tenant: linked, perms: {...perms, objects: false}, role: 'staff'}
     const w = mount(JobEditor, {props: {me: limited, jobId: 'j1'}, global: {stubs: {DocumentThumbnail: true}}})
     await flushPromises()
-    expect(w.find('#creator-note').text()).toContain('1 document needs a new Object, which your account can\'t create.')
+    expect(w.find('#creator-note').text()).toContain('1 document needs a new Object, which your account can\'t create, so you can\'t submit this job.')
+    expect(w.find('#creator-note').text()).toContain('Leave the draft for a colleague who can create Objects')
     expect(w.find('#document-counts').text()).toContain('nothing to fix · 1 needs an Object creator')
     expect(w.find('#submit-job-btn').attributes('disabled')).toBeDefined()
-    expect(w.find('#submit-job-btn').attributes('title')).toContain('submit without it')
-    const without = w.find('#submit-without-btn')
-    expect(without.text()).toBe('Submit without the document that needs a new Object')
-    await without.trigger('click')
-    await flushPromises()
-    const sent = calls.find((c) => c.url.endsWith('/j1/schedule'))!
-    expect(JSON.parse(sent.body ?? '{}')).toEqual({withoutCreator: true})
-    w.unmount()
-  })
-
-  it('with nothing else to submit, there is no "Submit without"', async () => {
-    stub(routes([waiting]))
-    const limited: Me = {user: 'limited', tenant: linked, perms: {...perms, objects: false}, role: 'staff'}
-    const w = mount(JobEditor, {props: {me: limited, jobId: 'j1'}, global: {stubs: {DocumentThumbnail: true}}})
-    await flushPromises()
-    expect(w.find('#submit-without-btn').exists()).toBe(false)
     expect(w.find('#submit-job-btn').attributes('title')).toContain('leave the draft for a colleague who can create Objects')
+    expect(w.findAll('button').some((b) => b.text().startsWith('Submit without'))).toBe(false) // no submitting only the rest
+    expect(calls.some((c) => c.url.endsWith('/j1/schedule'))).toBe(false)
     w.unmount()
   })
 
@@ -228,7 +215,6 @@ describe('three kinds of result in the editor (design: Roles)', () => {
     const w = mount(JobEditor, {props: {me: intern, jobId: 'j1'}, global: {stubs: {DocumentThumbnail: true}}})
     await flushPromises()
     expect(w.find('#creator-note').text()).toContain('The staff member who submits this job must be able to create Objects.')
-    expect(w.find('#submit-without-btn').exists()).toBe(false)
     w.unmount()
   })
 })

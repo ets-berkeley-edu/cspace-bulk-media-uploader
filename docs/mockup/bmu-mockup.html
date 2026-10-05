@@ -500,7 +500,7 @@
       <li><strong>Large jobs:</strong> jobs can hold up to 1,000 documents, so the editor, job previews and job results show them in pages (25, 50 or 100 per page) with first / previous / next / last controls above and below the table. Click a column heading to sort (ascending, descending, then back to the original order); every table on every tab sorts this way, including the Drafts, Job queue and Finished jobs lists and the documents shown in an expanded job. Sorting the job queue only changes the view: the queue still runs in its own order, and dragging is off until the sort is cleared; a “Show” filter narrows to documents that need fixing, have warnings, are protected files, excluded or selected (in results: failed, partial, not started, excluded, done). The header checkbox selects the documents on the current page, with a link to select every matching document; bulk changes apply to everything selected, on any page. Try it with “Load 1,000 sample documents” in the bar at the top, or the “2026 digitization project, batch 1” job in Finished jobs. Expanded rows in the job lists show the 10 most important documents; the full preview or results shows them all.</li>
       <li><strong>Sign-in:</strong> the mockup opens on the sign-in screen, like the BMU. The BMU checks the username and password against CollectionSpace (Basic Auth) and reads the account's permissions and roles; here any username and password work, the password “wrong” shows a rejected sign-in, and the tenant, permissions and BMU role (staff or intern) are picked on the sign-in screen. Your username (top right) opens a menu, as in the BMU: Dark mode or Light mode (the choice is remembered in this browser; until you make one, your system's setting decides) and Sign out. Signing out stops editing the open draft; it stays in Drafts, saved, since every change is saved as it's made. Submitted jobs keep running after you sign out: each keeps its own sign-in until it finishes. The Mockup settings pane collapses to one line with the triangle at its left.</li>
       <li><strong>Roles:</strong> every BMU user has one of two CollectionSpace roles, which carry no permissions and only tell the BMU what the user may do. <strong>BMU_Staff</strong> do everything: edit any draft, submit jobs, change the schedule and the queue (reorder, Run now, run time, hold, pause), cancel any run, and fix or delete finished jobs. A <strong>BMU_Intern</strong> creates drafts and edits the drafts marked “Open to interns” (a draft an intern created; a staff member's is “Staff only”); an intern can't submit, can't take over a draft a staff member is editing, can't delete a draft that has already run, and sees the Job queue and Finished jobs without changing them. The header shows “Intern”. A user with neither role, or a staff account missing the permissions the BMU exists to use, is refused at sign-in with a message to contact their CollectionSpace administrator (not simulated here). Try it with the “BMU_Staff role” box in Mockup settings or on the sign-in screen: unticked, you are an intern. In Drafts, staff switch a draft between “Open to interns” and “Staff only” with one click (in the BMU the Create / edit job page has the same switch as a checkbox, not shown here), and an intern uses <strong>Hand over to staff…</strong> to give a draft that is ready to staff: it becomes staff only. Staff can also <strong>Submit…</strong> a draft from the list or its preview without opening it, when nothing needs fixing; the confirmation says how many documents it has, who created and last saved it, and that it runs with the submitter's sign-in. In the Job queue, <strong>Move to Drafts…</strong> takes a queued job out of the queue like Edit, but without opening it.</li>
-      <li><strong>Three kinds of result:</strong> the BMU never presents a permission problem as a mistake in the job. A check on a document ends one of three ways. <em>Needs fixing</em> (red) is a problem with the job, such as a wrong object number, for whoever edits the draft. <em>Needs an Object creator</em> (purple) means the document would create a new Object and the signed-in user can't create Objects: it is counted separately (“nothing to fix · 3 need an Object creator”), the job says so in one line at the top, and the handling list still offers “Create new object + link”, with a note, so anyone can prepare a job for a colleague. That user can't submit those documents, but <strong>Submit without the 3 documents that need a new Object</strong> submits the rest: the documents left out stay in the job, excluded and marked, and when the run ends the job waits under Finished jobs as “Waiting for someone who can create Objects” for a colleague's Fix and reschedule. A <em>problem with your account</em> (creating groups is the only one left after sign-in) is said once, beside the group, with a line to contact the CollectionSpace administrator; nothing is marked on the documents and only Submit is stopped. An intern is never told about their own permissions: they act for whoever submits, and see only that a document needs a new Object. Try it with the Permissions switch set to “Imaging staff” (can't create objects) or “Registrar assistant” (can't create groups), and a file named for an object that doesn't exist, such as 20-0990_1.jpg, with “Link to object (create if missing)”.</li>
+      <li><strong>Three kinds of result:</strong> the BMU never presents a permission problem as a mistake in the job. A check on a document ends one of three ways. <em>Needs fixing</em> (red) is a problem with the job, such as a wrong object number, for whoever edits the draft. <em>Needs an Object creator</em> (purple) means the document would create a new Object and the signed-in user can't create Objects: it is counted separately (“nothing to fix · 3 need an Object creator”), the job says so in one line at the top, and the handling list still offers “Create new object + link”, with a note, so anyone can prepare a job for a colleague. A job is submitted whole, by someone who can create its Objects: that user can't submit such a job at all. They leave the draft for a colleague (the Drafts list shows the colleague “3 new Objects” on it), change those documents' handling, have the Objects created in CollectionSpace, or delete those documents from the job and add them to a new draft. A <em>problem with your account</em> (creating groups is the only one left after sign-in) is said once, beside the group, with a line to contact the CollectionSpace administrator; nothing is marked on the documents and only Submit is stopped. An intern is never told about their own permissions: they act for whoever submits, and see only that a document needs a new Object. Try it with the Permissions switch set to “Imaging staff” (can't create objects) or “Registrar assistant” (can't create groups), and a file named for an object that doesn't exist, such as 20-0990_1.jpg, with “Link to object (create if missing)”.</li>
       <li><strong>Interns' checks:</strong> an intern's CollectionSpace account has no permissions, so the BMU makes the lookups an intern's draft needs (is the object there, is it protected, does a Media record with this number exist, authority terms, languages, dates) with one read-only CollectionSpace account per museum (role BMU_Reader). Its password is kept in AWS Secrets Manager, where only the web app can read it; staff always use their own sign-in, and every record is created with the submitting staff member's. An intern gets minimal answers: whether the object was found and whether the file is protected, but not why (“marked sensitive in CollectionSpace”), not the object's access notes (“a note about access in CollectionSpace”), and never a record's contents or images. Lookups are logged for each intern and limited per hour. Untick “BMU_Staff role” and add the sample files 3-4567 or 15-1240 to see the difference.</li>
       <li><strong>Job lists:</strong> Drafts, Job queue and Finished jobs show one line per job. The triangle at the start of a row expands it in place to show the job's details (handling mix, group, who and when, expiry or run history) and one line per document with its status and most important problem or result, with a link to the full preview or results. “Expand all / Collapse all” sits above each list; hover over dates and badges for who did what. In Drafts and the Job queue, a job's confirmation (Delete, Edit, Cancel run, Take over) opens in a full-width row under the job, where its text has room.</li>
       <li><strong>Worked example:</strong> in Finished jobs, open “example: fixed by excluding a document” with View results. Its run history shows run 1 needing attention because one document's Media record was rejected, that document then excluded by jdoe, and run 2 completing with the document shown as excluded. To try it yourself: use Fix and reschedule on “collections survey batch 4”, check Exclude for the documents that need fixing, press Submit job, then in the Job queue use Run now on it and Finish run (mockup) on the running jobs until it has run.</li>
@@ -838,7 +838,7 @@ var PERM_INTERN = { label: "Intern", media: true, relations: true, objects: fals
 var NEEDS_CREATOR = "Needs an Object creator";
 function needsCreator(lead) {
   lead = lead || "This document needs a new Object";
-  return { level: "creator", text: IS_STAFF ? lead + ", and your account can\u2019t create Object records. Someone who can create Objects can submit it; or choose another handling, or have the Object created in CollectionSpace and check again."
+  return { level: "creator", text: IS_STAFF ? lead + ", and your account can\u2019t create Object records. Leave the draft for a colleague who can create Objects; or choose another handling, or have the Object created in CollectionSpace and check again."
     : lead + ". The staff member who submits the job must be able to create Objects." };
 }
 var GROUP_PROBLEM = "Your account can\u2019t create groups in CollectionSpace, which this job\u2019s group needs. Contact your CollectionSpace administrator for the permission. Until then, leave the draft for a colleague to submit, turn off the job\u2019s group, or untick Group on each document.";
@@ -1253,7 +1253,6 @@ function isLocked(r) { return !!(r.result && (r.result.state === "Done" || r.res
 /* A Partial document may still leave the job's group while its Add to group step hasn't been done; once its object is in the group, it stays */
 function groupStepPending(r) { return !!(r.result && r.result.state === "Partial" && r.result.steps.some(function (st) { return st.name === "Add to group" && st.s !== "done"; })); }
 function statusFor(r, i) {
-  if (r.disabled && r.heldFor) return { text: "Excluded — needs an Object creator", cls: "badge-creator" };
   if (r.disabled) return { text: "Excluded — ignored", cls: "badge-accent" };
   if (r.result && r.result.state === "Done") return { text: "Done in last run", cls: "badge-success" };
   if (r.result && r.result.state === "Partial")   /* Needs fixing takes precedence over the run state */
@@ -1294,8 +1293,7 @@ var RERUN_TEXT = { "Create Media record": "create the Media record", "Find objec
 /* Each check: level "block" (must fix before scheduling), "warn" (can proceed) or "info" */
 function validations(r, i) {
   if (r.disabled) {
-    var dv = [r.heldFor ? { level: "info", text: "Left out when the job was submitted, because it needs a new Object and the person who submitted can\u2019t create Object records. If you can, uncheck Exclude and submit the job." }
-      : { level: "info", text: "Excluded from the job: the BMU ignores this document and won't create or change anything for it. Uncheck Exclude to use it again." }];
+    var dv = [{ level: "info", text: "Excluded from the job: the BMU ignores this document and won't create or change anything for it. Uncheck Exclude to use it again." }];
     if (r.result && r.result.state === "Partial") dv.push({ level: "info", text: "Its Media record (" + mediaStep(r).csid + ") already exists in CollectionSpace and stays as it is, unfinished." });
     return dv;
   }
@@ -2126,9 +2124,14 @@ function snap(rs) { return JSON.stringify(cleanRows(rs)); }
 function withRows(rs, fn) { var saved = rows; rows = rs; try { return fn(); } finally { rows = saved; } }
 function countLevels(rs) {
   return withRows(rs, function () {
-    var b = 0, w = 0, cr = 0, held = 0;
-    rows.forEach(function (r, i) { if (r.heldFor) held++; var l = worstLevel(r, i); if (l === "block") b++; else if (l === "creator") cr++; else if (l === "warn") w++; });
-    return { block: b, warn: w, creator: cr, held: held };
+    var b = 0, w = 0, cr = 0, nu = 0;
+    rows.forEach(function (r, i) {
+      var l = worstLevel(r, i); if (l === "block") b++; else if (l === "creator") cr++; else if (l === "warn") w++;
+      /* documents that will create an Object, whoever looks: someone who can create Objects sees which drafts wait for them */
+      var h = handlingById(r.handling);
+      if (l !== "block" && !r.disabled && !(r.result && r.result.state === "Done") && (h.object === "create" || (h.object === "either" && r.obj && !objectExists(r.obj)))) nu++;
+    });
+    return { block: b, warn: w, creator: cr, newObjects: nu };
   });
 }
 function creatorText(n) { return n + (n === 1 ? " needs" : " need") + " an Object creator"; }
@@ -2203,18 +2206,15 @@ function renderScheduleBar() {
   if (c.creator) parts.push(creatorText(c.creator));
   if (c.warn) parts.push(c.warn + (c.warn === 1 ? " has warnings" : " have warnings"));
   var gp = groupProblem(rows, groupOn(), groupMade()), one = c.creator === 1;
-  var creatorWhy = c.creator ? (one ? "A document needs" : c.creator + " documents need") + " a new Object, which your account can\u2019t create" + (c.creator < work ? ": submit without " + (one ? "it" : "them") + ", or leave the draft for a colleague" : ": leave the draft for a colleague who can create Objects") : "";
-  var canWithout = IS_STAFF && c.creator && c.creator < work && !c.block && !gp;
+  var creatorWhy = c.creator ? (one ? "A document needs" : c.creator + " documents need") + " a new Object, which your account can\u2019t create: leave the draft for a colleague who can create Objects" : "";
   document.getElementById("groupAccountNote").innerHTML = gp ? '<div class="msg msg-warn" id="groupAccountProblem" style="margin-top:6px">' + esc(gp) + "</div>" : "";
   document.getElementById("creatorNote").innerHTML =
     (c.creator ? '<div class="msg msg-creator" id="creatorLine" style="margin-bottom:8px">' + (IS_STAFF
-      ? (one ? "1 document needs" : c.creator + " documents need") + " a new Object, which your account can\u2019t create. Submit without " + (one ? "it" : "them") + ", change " + (one ? "its" : "their") + " handling, have the Object" + (one ? "" : "s") + " created in CollectionSpace, or leave the draft for a colleague who can create Objects."
-      : (one ? "1 document needs" : c.creator + " documents need") + " a new Object. The staff member who submits this job must be able to create Objects.") + "</div>" : "") +
-    (c.held ? '<div class="msg msg-creator" id="heldLine" style="margin-bottom:8px">' + (c.held === 1 ? "1 document was" : c.held + " documents were") + " left out when this job was submitted, because " + (c.held === 1 ? "it needs" : "they need") + " a new Object. If you can create Objects, include " + (c.held === 1 ? "it" : "them") + " again (uncheck Exclude) and submit.</div>" : "");
+      ? (one ? "1 document needs" : c.creator + " documents need") + " a new Object, which your account can\u2019t create, so you can\u2019t submit this job. Leave the draft for a colleague who can create Objects, change " + (one ? "its" : "their") + " handling, have the Object" + (one ? "" : "s") + " created in CollectionSpace, or delete " + (one ? "it" : "them") + " from this job and add " + (one ? "it" : "them") + " to a new draft. (Exclude makes the BMU ignore a document for good once the job completes.)"
+      : (one ? "1 document needs" : c.creator + " documents need") + " a new Object. The staff member who submits this job must be able to create Objects.") + "</div>" : "");
   document.getElementById("scheduleBar").innerHTML = '<span class="counts"><strong>' + esc(parts[0]) + "</strong> · " + esc(parts.slice(1).join(" · ")) + "</span>" +
     (c.block || c.warn ? '<button id="showProblemsBtn">Show documents with problems</button>' : "") +
     '<button id="saveDraftBtn" title="Save this job to Drafts, even if it is incomplete or has problems. Every change is already saved; this confirms it and restarts the draft\u2019s ' + (rows.some(function (r) { return !!sensitiveReason(r); }) ? "7-day expiry (it has protected files)" : "30-day expiry") + '">Save draft</button>' +
-    (canWithout ? '<button id="submitWithoutBtn" title="The rest of the job is submitted. ' + (one ? "That document stays" : "Those documents stay") + ' in the job, excluded and marked, for someone who can create Objects.">Submit without the ' + (one ? "document that needs" : c.creator + " documents that need") + " a new Object</button>" : "") +
     '<button id="submitBtn"' + (c.block || !work || !IS_STAFF || gp || c.creator ? " disabled" : "") + ' title="' + esc(!IS_STAFF ? INTERN_SUBMIT_WHY : c.block ? "Fix or exclude the documents marked Needs fixing first, or save a draft" : (!work ? "Nothing left to run: every document is done or excluded" : gp ? "Your account can\u2019t create groups, which this job\u2019s group needs" : creatorWhy ? creatorWhy : "Check the whole job again, then add it to the job queue; it runs at the next run time")) + '">Submit job</button>' +
     (scheduleMsg ? '<div class="result">' + scheduleMsg + "</div>" : "");
 }
@@ -2284,7 +2284,7 @@ function saveDraft() {
     ". Unless it's saved again, it expires on " + esc(shortDate(ex.at)) + (ex.sens ? " (7 days, because it contains protected files)." : " (30 days).");
   renderEditBanner(); renderScheduleBar(); updateCounts();
 }
-function submitJob(without) {
+function submitJob() {
   if (!IS_STAFF) { scheduleMsg = '<span class="badge badge-danger">Not submitted</span> ' + INTERN_SUBMIT_WHY; renderScheduleBar(); return; }
   var c = countLevels(rows);
   if (c.block) {
@@ -2293,12 +2293,9 @@ function submitJob(without) {
   }
   var gpNow = groupProblem(rows, groupOn(), groupMade());
   if (gpNow) { scheduleMsg = '<span class="badge badge-warning">Not submitted</span> ' + esc(gpNow); renderScheduleBar(); return; }
-  var held = 0;
-  if (c.creator) {
-    /* Design (Roles, Three kinds of result): never submitted by this user. "Submit without" leaves them in the job, excluded and marked */
-    if (!without || c.creator >= toRun(rows)) { scheduleMsg = '<span class="badge badge-creator">Not submitted</span> ' + (c.creator === 1 ? "A document needs" : c.creator + " documents need") + " a new Object, which your account can\u2019t create."; renderScheduleBar(); return; }
-    rows.forEach(function (r, i) { if (!r.disabled && worstLevel(r, i) === "creator") { r.disabled = true; r.disabledBy = "you"; r.disabledAt = nowLabel(); r.heldFor = "creator"; held++; } });
-    c = countLevels(rows);
+  if (c.creator) {   /* a job is submitted whole, by someone who can create its Objects */
+    scheduleMsg = '<span class="badge badge-creator">Not submitted</span> ' + (c.creator === 1 ? "A document needs" : c.creator + " documents need") + " a new Object, which your account can\u2019t create. Leave the draft for a colleague who can create Objects.";
+    renderScheduleBar(); return;
   }
   if (groupOn() && !document.getElementById("groupTitle").value.trim()) {
     scheduleMsg = '<span class="badge badge-danger">Not submitted</span> The job creates a group, so it needs a group title. Enter one, or turn off “Create a group”.';
@@ -2310,12 +2307,12 @@ function submitJob(without) {
   var job = { id: currentJob.id || "J-" + (jobSeq++), createdBy: currentJob.createdBy, name: name, submittedBy: "you", submittedAt: nowLabel(), queuedAtMs: Date.now(), run: (currentJob.run || 0) + 1,
     status: "Queued", credUntilMs: Date.now() + 72 * 36e5, rows: stampProt(stampGroup(cleanRows(rows))), groupOn: groupOn(), groupTitle: groupOn() ? document.getElementById("groupTitle").value.trim() : "", sensAll: sensAllOn(), deletedSinceRun: currentJob.deletedSinceRun || [], atSubmit: c, runsLog: currentJob.runsLog, groupStep: currentJob.groupStep };
   queueFor().push(job);
-  audit({ type: "Submitted", job: name, user: "you", detail: "Submitted “" + name + "” with " + toRun(job.rows) + " documents." + (held ? " " + held + (held === 1 ? " document that needs a new Object was" : " documents that need a new Object were") + " left out, for someone who can create Objects." : ""), csids: [] });
+  audit({ type: "Submitted", job: name, user: "you", detail: "Submitted “" + name + "” with " + toRun(job.rows) + " documents.", csids: [] });
   var S = schedFor(), ahead = jobsAhead(job), when;
   if (S.pause) when = "The queue is paused, so it waits until a staff member resumes it.";
   else if (dueInRun(job)) when = "A run is in progress, so it starts " + (ahead ? "after " + ahead + " other job" + (ahead === 1 ? "" : "s") : "now") + ".";
   else when = "It runs at the next run time, " + whenLabel(nextRunMs(S)) + (ahead ? ", after " + ahead + " other job" + (ahead === 1 ? "" : "s") : "") + ".";
-  flash.queue = "“" + name + "”" + (returning ? " (from Drafts)" : "") + " was submitted" + (c.warn ? " with " + c.warn + " document(s) carrying warnings" : "") + " and added to the end of the queue. " + (held ? held + (held === 1 ? " document that needs a new Object was" : " documents that need a new Object were") + " left out and " + (held === 1 ? "stays" : "stay") + " in the job for someone who can create Objects. " : "") + when + " It runs with your sign-in, which is deleted when the run ends.";
+  flash.queue = "“" + name + "”" + (returning ? " (from Drafts)" : "") + " was submitted" + (c.warn ? " with " + c.warn + " document(s) carrying warnings" : "") + " and added to the end of the queue. " + when + " It runs with your sign-in, which is deleted when the run ends.";
   kickQueue();
   if (job.status === "Running") flash.queue = "“" + name + "” was submitted and started right away. It runs with your sign-in, which is deleted when the run ends.";
   currentJob = newJobState();
@@ -2749,10 +2746,10 @@ function checksCell(j) {
   var c = countLevels(j.rows), txt = [];
   txt.push(c.block ? c.block + (c.block === 1 ? " needs fixing" : " need fixing") : "nothing to fix");
   if (c.creator) txt.push(creatorText(c.creator));
-  if (c.held) txt.push(c.held + " left out for an Object creator");
+  else if (c.newObjects) txt.push(c.newObjects + (c.newObjects === 1 ? " new Object" : " new Objects"));
   if (c.warn) txt.push(c.warn + (c.warn === 1 ? " warning" : " warnings"));
   var changed = j.atSubmit && (c.block !== j.atSubmit.block || c.warn !== j.atSubmit.warn);
-  return '<span class="badge ' + (c.block ? "badge-danger" : (c.creator || c.held ? "badge-creator" : (c.warn ? "badge-warning" : "badge-success"))) + '">' + esc(txt.join(" · ")) + "</span>" +
+  return '<span class="badge ' + (c.block ? "badge-danger" : (c.creator ? "badge-creator" : (c.warn ? "badge-warning" : "badge-success"))) + '">' + esc(txt.join(" · ")) + "</span>" +
     (changed ? '<div class="changed">Changed since submitted</div>' : "");
 }
 /* Which run of a job, in words: "first run", "second run", … and "run 11" beyond the tenth. */
@@ -2815,7 +2812,7 @@ function roleActions(j, locked, run) {
         : c.block ? "Fix or exclude the " + (c.block === 1 ? "document" : c.block + " documents") + " marked Needs fixing first: open the draft with Edit"
         : (j.groupOn && !(j.groupTitle || "").trim()) ? "Enter a group title, or turn off the job\u2019s group: open the draft with Edit"
         : groupProblem(j.rows, j.groupOn, j.groupStep && j.groupStep.s === "done") ? "Your account can\u2019t create groups, which this job\u2019s group needs: contact your CollectionSpace administrator, or leave the draft for a colleague"
-        : c.creator ? (c.creator === 1 ? "A document needs" : c.creator + " documents need") + " a new Object, which your account can\u2019t create: open the draft with Edit to submit without " + (c.creator === 1 ? "it" : "them") + ", or leave it for a colleague who can create Objects" : "";
+        : c.creator ? (c.creator === 1 ? "A document needs" : c.creator + " documents need") + " a new Object, which your account can\u2019t create: leave the draft for a colleague who can create Objects" : "";
       return '<button class="q-act" data-kind="submit" data-id="' + j.id + '"' + (why ? off(why) : ' title="Check the whole job again, then add it to the job queue, without opening it"') + ">Submit\u2026</button>" +
         '<button class="q-access" data-id="' + j.id + '" title="' + (j.internOpen ? "Interns can edit this draft now. Make it staff only." : "Only staff can edit this draft now. Let interns edit it too.") + '">' +
         (j.internOpen ? "Make staff only" : "Open to interns") + "</button>";
@@ -3152,10 +3149,9 @@ document.addEventListener("click", function (e) {
   var t = e.target, id = t.dataset && t.dataset.id;
   if (t.id === "showProblemsBtn") { var pp = pager("editor"); pp.filter = "problems"; pp.page = 1; rows.forEach(function (r, i) { var l = worstLevel(r, i); r.expanded = !r.disabled && (l === "block" || l === "warn"); }); render(); }
   if (t.id === "submitBtn") submitJob();
-  if (t.id === "submitWithoutBtn") submitJob(true);
   if (t.id === "bulkDisableBtn" || t.id === "bulkEnableBtn") {
     var on = t.id === "bulkDisableBtn";
-    rows.forEach(function (r) { if (r.selected && !(r.result && r.result.state === "Done") && !!r.disabled !== on) { r.disabled = on; r.disabledBy = "you"; r.disabledAt = nowLabel(); r.updated.include = true; if (!on) delete r.heldFor; } });
+    rows.forEach(function (r) { if (r.selected && !(r.result && r.result.state === "Done") && !!r.disabled !== on) { r.disabled = on; r.disabledBy = "you"; r.disabledAt = nowLabel(); r.updated.include = true; } });
     render();
   }
   if (t.id === "saveDraftBtn") saveDraft();
@@ -3231,7 +3227,7 @@ document.addEventListener("click", function (e) {
 /* ---------- Finished jobs: results, error messages, fix and reschedule ---------- */
 /* Failures a user must change something to get past (edit a field, replace a file, fix the object number or a permission).
    Others (sign-in, outage, worker stopped, cancelled, a one-off server error) only need the job scheduled again. */
-var FIX_CODES = ["value_missing", "upload_too_large", "file_type_rejected", "file_missing", "media_rejected", "object_gone", "object_ambiguous", "object_exists", "object_rejected", "no_permission", "group_failed", "needs_object_creator"];
+var FIX_CODES = ["value_missing", "upload_too_large", "file_type_rejected", "file_missing", "media_rejected", "object_gone", "object_ambiguous", "object_exists", "object_rejected", "no_permission", "group_failed"];
 function needsFix(j) {
   if (j.jobError && FIX_CODES.indexOf(j.jobError) >= 0) return true;
   if (countLevels(j.rows).block) return true;   // something must be fixed now, even if the last run's failure didn't need it
@@ -3312,10 +3308,6 @@ var ERRORS = {
     explain: "CollectionSpace refused the job's group, so no documents were added to a group. Everything else in each document still ran.",
     fix: "Check the group title and that you may create groups, then choose Fix and reschedule. Only the group steps run again.",
     detail: "POST groups → 403 Forbidden" },
-  needs_object_creator: { title: "Waiting for someone who can create Objects",
-    explain: "Everything that was submitted is done. Some documents were left out because they need a new Object, and the person who submitted the job can't create Object records.",
-    fix: "If you can create Objects, choose Fix and reschedule, include those documents again and submit. Otherwise leave the job for a colleague who can.",
-    detail: "Documents left out at Submit: a new Object is needed" },
   worker_stopped: { title: "The job stopped unexpectedly",
     explain: "The worker running the job stopped responding, so the job was stopped and its saved sign-in deleted. Every finished step was recorded.",
     fix: "Reschedule the job. Documents and steps already done are skipped.",
@@ -3554,17 +3546,13 @@ function simulateRun(id, stay) {
     j.groupStep = { s: "done", csid: fakeCsid(), run: runNo };
   var c = resultCounts({ rows: j.rows });
   var status = c["Failed"] || c["Partial"] || c["Not started"] ? "Needs attention" : "Completed";
-  /* Documents left out because they need a new Object: the job stays where someone who can create Objects can fix it (Completed jobs can't be reopened) */
-  var waits = status === "Completed" && j.rows.some(function (r) { return r.heldFor; });
-  if (waits) status = "Needs attention";
-  j.runsLog = (j.runsLog || []).concat([{ run: run, outcome: status, code: waits ? "needs_object_creator" : null, counts: countsText(j), started: j.startedAt || nowLabel(), at: nowLabel(), by: j.submittedBy || "you",
+  j.runsLog = (j.runsLog || []).concat([{ run: run, outcome: status, code: null, counts: countsText(j), started: j.startedAt || nowLabel(), at: nowLabel(), by: j.submittedBy || "you",
     disabled: j.rows.filter(function (r) { return r.disabled && r.disabledBy; }).map(function (r) { return r.file + " (excluded by " + r.disabledBy + ")"; }),
     deleted: (j.deletedSinceRun || []).slice() }]);
   j.deletedSinceRun = [];
   auditRun(j, j.runsLog[j.runsLog.length - 1]);
   removeJob(id);
   j.status = status; j.run = run; j.runBy = j.submittedBy || "you"; j.finishedAt = nowLabel(); j.finishedMs = Date.now(); delete j.jobError;
-  if (waits) j.jobError = "needs_object_creator";
   historyFor().unshift(j);
   flash.history = "“" + j.name + "” ran (run " + run + "): " + status.toLowerCase() + ".";
   resultsId = null;
@@ -4211,7 +4199,7 @@ document.addEventListener("change", function (e) {
       if (nv !== r.publish) { r.publish = nv; r.updated.publish = true; }
     render();
   }
-  else if (t.classList.contains("row-include")) { r.disabled = t.checked;  /* the box is "Exclude": checked = ignored */ r.disabledBy = "you"; r.disabledAt = nowLabel(); r.updated.include = true; if (!t.checked) delete r.heldFor; render(); }
+  else if (t.classList.contains("row-include")) { r.disabled = t.checked;  /* the box is "Exclude": checked = ignored */ r.disabledBy = "you"; r.disabledAt = nowLabel(); r.updated.include = true; render(); }
   else if (t.classList.contains("row-skiplink")) { r.skipLink = t.checked; r.updated.skipLink = true; render(); }
   else if (t.classList.contains("row-sens")) { r.sensManual = t.checked; r.sensBy = "you"; r.updated.sens = true; publishDefault(r); render(); }
   else if (t.classList.contains("row-group")) { r.group = t.checked; r.updated.group = true; render(); }

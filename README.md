@@ -144,11 +144,11 @@ who will submit the job.
 | Problem with your account | A staff member can't create groups, and the job has a group | One message beside the group; nothing on the documents; only Submit is stopped | The CollectionSpace administrator |
 
 - A user who can't create Objects can still choose "Create new object + link" (the list notes it), to prepare a
-  job for a colleague. They can't submit those documents. **Submit without the N documents that need a new
-  Object** submits the rest; the documents left out stay in the job, excluded and marked.
-- When that run ends with everything else done, the job is not Completed (a Completed job can't be reopened). It
-  waits under Finished jobs as "Waiting for someone who can create Objects". A colleague who can uses **Fix and
-  reschedule**, includes those documents again and submits.
+  job for a colleague.
+- A job is submitted whole, by someone who can create its Objects. A user who can't create Objects can't submit a
+  job with such documents, and there is no way to submit only the rest. They leave the draft for a colleague, change
+  those documents' handling, have the Objects created in CollectionSpace, or delete those documents from the job
+  and add them to a new draft.
 - The checks chip in Drafts counts them ("nothing to fix · 3 need an Object creator"). Someone who can create
   Objects reads "3 new Objects" there instead.
 - Try it as `limited` (can't create objects or groups) with a file named for an object that doesn't exist, such as

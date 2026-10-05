@@ -74,8 +74,7 @@ export const api = {
   check: (id: string, rows?: number[]) =>
     request<{ rows: Row[]; counts: CheckCounts }>('POST', `/api/jobs/${id}/check`, rows ? {rows} : {}),
   /** Submit job: check the whole job again and add it to the queue; the job comes back with its plan. */
-  /** withoutCreator: leave out the documents that need a new Object, which this user can't create. */
-  schedule: (id: string, withoutCreator = false) => request<Job>('POST', `/api/jobs/${id}/schedule`, withoutCreator ? {withoutCreator} : undefined),
+  schedule: (id: string) => request<Job>('POST', `/api/jobs/${id}/schedule`),
   /** Job scheduling (design: Job scheduling): the tenant's run times, pause, and per-job run controls (staff). */
   getSchedule: (poll = false) => request<Schedule>('GET', '/api/schedule', undefined, poll),
   putSchedule: (s: { days: number[]; start: string; end: string }) => request<Schedule>('PUT', '/api/schedule', s),
