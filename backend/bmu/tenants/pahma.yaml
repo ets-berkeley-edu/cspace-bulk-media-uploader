@@ -70,11 +70,27 @@ authority_fields:
   contributor: [person, organization]
   rightsHolder: [person, organization]
 
-# Job scheduling: members of these CollectionSpace roles (display names) are BMU schedulers. They change the
-# tenant's schedule, pause the queue and reorder, hold or run its jobs. CollectionSpace stores the role as
-# ROLE_<tenantId>_BMU_SCHEDULER (tenant.role_name has the naming rule).
-# `python scripts/check_cspace.py --roles` shows an account's roles.
-scheduler_roles: [BMU_Scheduler]
+# Roles (design: Roles): every BMU user has one of these CollectionSpace roles (display names). Staff do
+# everything; interns create drafts and edit the drafts that are open to interns. A user with both is staff, a
+# user with neither can't sign in. The roles carry no permissions in CollectionSpace: they only tell the BMU what
+# the user may do in the BMU. CollectionSpace stores a role as ROLE_<tenantId>_BMU_STAFF (tenant.role_name has
+# the naming rule). `python scripts/check_cspace.py --roles` shows an account's roles and what it lacks.
+roles:
+  staff: [BMU_Staff]
+  intern: [BMU_Intern]
+
+# What a staff account must be allowed to do in CollectionSpace to sign in (resource: action letters, as
+# accounts/0/accountperms reports them: Create, Read, Update). Creating Objects and creating groups are not
+# here: not every staff member may, and the BMU explains those per job.
+# VERIFY on the QA tenant that accountperms names the last two resources this way (check_cspace.py --roles).
+staff_permissions:
+  media: CRU                # create the Media record, attach its file (an update), and search for duplicates
+  relations: C              # link a Media record to its Object
+  collectionobjects: R      # find the Object, and read its sensitivity fields
+  personauthorities: R
+  orgauthorities: R
+  vocabularies: R
+  structureddates: R
 
 # Sensitivity and publishing (design: Protected files). The BMU reads the linked Object record and applies
 # these rules: a "protect" rule makes the document a protected file automatically (users can't set or clear

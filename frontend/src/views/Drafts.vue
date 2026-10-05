@@ -7,7 +7,7 @@
       :edit-why="editWhy"
       from="drafts"
       :job-id="session.previewing.drafts"
-      :scheduler="!!currentUser.scheduler"
+      :staff="currentUser.role === 'staff'"
       :tenant="currentUser.tenant"
       :user="currentUser.user"
       @back="session.previewing.drafts = null"
@@ -16,6 +16,7 @@
     <DraftsList
       v-else
       :edit-why="editWhy"
+      :staff="currentUser.role === 'staff'"
       :tenant="currentUser.tenant"
       @open="openJob"
     />
@@ -27,13 +28,13 @@ import {onMounted} from 'vue'
 import type {Me} from '@/types'
 import DraftsList from '@/components/job/DraftsList.vue'
 import JobPreview from '@/components/job/JobPreview.vue'
-import {editBlocked} from '@/lib/status'
 import {useContextStore} from '@/stores/context'
 import {useJobEditSessionStore} from '@/stores/job-edit-session'
 
 const contextStore = useContextStore()
 const currentUser = contextStore.currentUser as Me
-const editWhy = editBlocked(currentUser.perms)
+// Staff and interns both work in Drafts; which drafts an intern may change is decided per draft (design: Roles).
+const editWhy = ''
 const session = useJobEditSessionStore()
 
 onMounted(() => contextStore.loadingComplete('Drafts'))

@@ -14,7 +14,7 @@ const tenant = {key: 'pahma', name: 'PAHMA', filenameHint: 'hint', filenamePatte
   handling: [{id: 'link', label: 'Link to existing object', object: 'existing', id_rule: 'object'},
     {id: 'none', label: 'Media only', object: 'none', id_rule: 'image'}]} as unknown as TenantInfo
 const perms: Perms = {media: true, mediaUpdate: true, relations: true, objects: true, readObjects: true, authorities: true, groups: true}
-const me: Me = {user: 'admin', tenant, perms, scheduler: false}
+const me: Me = {user: 'admin', tenant, perms, role: 'staff'}
 const row: Row = {n: 1, file: '15-1234_a.jpg', size: 10, contentType: 'image/jpeg', handling: 'link', obj: '15-1234', objParsed: '15-1234',
   img: '15-1234_a', parseOk: true, idnum: '15-1234', date: '', restricted: false, type: [], creator: '', contributor: '',
   rightsHolder: '', description: '', copyright: '', include: true, upload: {s: 'done'}, checks: [], result: null}
@@ -214,15 +214,21 @@ describe('the signed-in page', () => {
     w.unmount()
   })
 
-  it('without Media permissions, New job is off and Create / edit job explains why', async () => {
-    signedIn = {...me, perms: {...perms, media: false}}
+  it('an intern can start a job, and the header says they are an intern', async () => {
+    signedIn = {...me, role: 'intern', perms: {media: false, relations: false, objects: false, readObjects: false, authorities: false, groups: false}}
     stubApi()
     const w = await mountApp('/')
-    expect(w.find('#btn-new-job').attributes('disabled')).toBeDefined()
-    expect(w.find('#new-job').attributes('title')).toContain('can\'t create and update Media records')
-    expect(w.find('#view-only').text()).toContain('View only')
-    expect(w.find('#edit-blocked').text()).toContain('so it can\'t create or edit jobs. You can still view them in Drafts, Job queue and Finished jobs.')
-    expect(w.find('.dropzone').exists()).toBe(false)
+    expect(w.find('#btn-new-job').attributes('disabled')).toBeUndefined()
+    expect(w.find('#user-role').text()).toBe('Intern')
+    expect(w.find('#user-role').attributes('title')).toContain('drafts that are open to interns')
+    expect(w.find('.dropzone').exists()).toBe(true)
+    w.unmount()
+  })
+
+  it('staff see no role chip', async () => {
+    stubApi()
+    const w = await mountApp('/')
+    expect(w.find('#user-role').exists()).toBe(false)
     w.unmount()
   })
 })
@@ -301,7 +307,7 @@ describe('the job being worked on, across the tabs', () => {
       w.unmount()
       return text
     }
-    expect(await run({kind: 'paused'}, false)).toContain('The queue is paused, so it waits until a BMU scheduler resumes it.')
+    expect(await run({kind: 'paused'}, false)).toContain('The queue is paused, so it waits until a staff member resumes it.')
     expect(await run({at: Date.now() / 1000, ahead: 0}, true)).toContain('Development setting: every moment counts as run time, so it starts now.')
   })
 
@@ -361,16 +367,6 @@ describe('the job being worked on, across the tabs', () => {
     expect(useJobEditSessionStore().jobId).toBeNull()
     expect(w.find('#notice').text()).toContain('The job at that address isn\'t there')
     expect((w.find('#job-name').element as HTMLInputElement).value).toBe('')
-    w.unmount()
-  })
-
-  it('without Media permissions, an address with a draft still only explains', async () => {
-    signedIn = {...me, perms: {...perms, media: false}}
-    stubApi(routes)
-    const w = await mountApp('/job/d1')
-    expect(router.currentRoute.value.path).toBe('/job')
-    expect(w.find('#edit-blocked').exists()).toBe(true)
-    expect(calls.some(c => c.url.endsWith('/open'))).toBe(false)
     w.unmount()
   })
 

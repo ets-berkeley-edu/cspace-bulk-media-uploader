@@ -77,6 +77,30 @@
           {{ error }}
         </v-alert>
 
+        <v-card
+          v-if="users.length"
+          id="demo-sign-in-as"
+          class="demo-box my-2 pa-3"
+          variant="outlined"
+        >
+          <h3 class="text-body-2 font-weight-bold">Sign in as</h3>
+          <div id="demo-current-user" class="text-caption text-medium-emphasis">{{ currentUserText }}</div>
+          <div class="demo-row">
+            <span v-for="u in users" :key="u.user" :title="userTitle(u.user)">
+              <v-btn
+                :id="`demo-sign-in-as-${u.user}-btn`"
+                :disabled="isBusy || u.user === status.user"
+                size="small"
+                :title="userTitle(u.user)"
+                variant="outlined"
+                @click="() => signInAs(u.user)"
+              >
+                {{ userLabel(u) }}
+              </v-btn>
+            </span>
+          </div>
+        </v-card>
+
         <div class="demo-grid my-2">
           <v-card id="demo-speeds" class="demo-box pa-3" variant="outlined">
             <h3 class="text-body-2 font-weight-bold">Slow down file transfers</h3>
@@ -448,7 +472,11 @@ import {ApiError} from '@/api'
  * Demo tools (demo builds only; see lib/demo.ts): slow the transfers down, make the simulated CollectionSpace fail
  * or change its terms, reset things, and how to run the check scripts. Collapsible; remembered in this browser.
  */
-const emit = defineEmits<{jobsDeleted: [message: string]}>()
+const emit = defineEmits<{
+  jobsDeleted: [message: string],
+  // Demo tools signed in as someone else: the app starts again as that user.
+  userChanged: [user: string]
+}>()
 
 const OPEN_KEY = 'bmuDemoPaneOpen'
 const BROWSER_SPEEDS = [0, 10, 5, 2, 1, 0.5]
@@ -588,6 +616,28 @@ const resetEverything = () => run(async () => {
   await demoApi.resetEverything()
   emit('jobsDeleted', 'Demo tools reset everything: no jobs, drafts, files or audit entries, and the schedule is back to its default.')
 }, 'Everything is reset: the prototype is as it starts.')
+
+// ---- Sign in as: one of the simulator's users, with a click ----
+// An older server, or a real CollectionSpace, lists none: the box is left out
+const users = computed(() => status.value?.users ?? [])
+const currentUserText = computed(() => `You are signed in as ${status.value?.user} (${status.value?.role}). `
+  + 'A click signs you in as another of the simulator\'s users, as if you had typed their sign-in; a draft you have open is closed first.')
+const userLabel = (u: {user: string, about: string}) => `${u.about} (${u.user})`
+const userTitle = (user: string) => (user === status.value?.user ? 'You are signed in as this user' : `Sign in as ${user}`)
+const signInAs = async (user: string) => {
+  isBusy.value = true
+  error.value = ''
+  message.value = ''
+  try {
+    await demoApi.signInAs(user)
+    emit('userChanged', user)
+  } catch (e) {
+    // An account the BMU doesn't let in: the usual sign-in message. You stay signed in as you were.
+    error.value = `${user}: ${(e as Error).message}`
+  } finally {
+    isBusy.value = false
+  }
+}
 
 const confirmed = () => {
   const what = confirming.value

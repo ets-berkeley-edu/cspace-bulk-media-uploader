@@ -8,7 +8,7 @@ Relations) using a tiny generated image; those records stay.
   export CSPACE_URL=https://pahma.qa.collectionspace.org CSPACE_USER=... CSPACE_PASSWORD=...
   python scripts/check_cspace.py --object 1-2345 --term smith [--create]
   python scripts/check_cspace.py --vocabularies   # only list the Person and Organization vocabularies
-  python scripts/check_cspace.py --roles          # only show the account's roles and whether it is a BMU scheduler
+  python scripts/check_cspace.py --roles          # only show the account's roles, its BMU role, and what a staff account lacks
   python scripts/check_cspace.py --terms person:7475 "urn:cspace:...:item:name(abc)'Name'"
                                                   # only read authority terms one by one, as the BMU's term check does
 
@@ -107,8 +107,8 @@ def main():
     ap.add_argument("--vocabularies", action="store_true",
                     help="only list the server's Person and Organization vocabularies (is there a 'shared' one?)")
     ap.add_argument("--roles", action="store_true",
-                    help="only show the account's tenant id and roles (accounts/0/accountroles) and whether it is a "
-                         "BMU scheduler for the tenant (design: Job scheduling)")
+                    help="only show the account's tenant id and roles (accounts/0/accountroles), its BMU role for the "
+                         "tenant, and which of the tenant's staff_permissions it lacks (design: Roles)")
     ap.add_argument("--terms", nargs="+", metavar="TERM",
                     help="only read these authority terms one by one, as the BMU's term check does, and show what "
                          "CollectionSpace returns (workflow state, refName, every field) and what the BMU concludes. "
@@ -130,9 +130,18 @@ def main():
         if roles is not None:
             print(f"     tenantId: {roles.tenant_id or '(none)'}")
             print(f"     roles: {', '.join(roles.role_names) or '(none)'}")
-            wanted = t.scheduler_role_names(roles.tenant_id)
-            print(f"     BMU scheduler for {t.key}: {'yes' if t.is_scheduler(roles.tenant_id, roles.role_names) else 'no'}"
-                  f" (scheduler roles: {', '.join(wanted) or 'none configured'})")
+            role = t.role_of(roles.tenant_id, roles.role_names)
+            print(f"     BMU role for {t.key}: {role or 'none (the BMU refuses the sign-in)'}"
+                  f" (staff roles: {', '.join(t.staff_roles) or 'none configured'};"
+                  f" intern roles: {', '.join(t.intern_roles) or 'none configured'})")
+        perms = step("accountperms", lambda: c.account_permissions())
+        if perms is not None:
+            # every resource the tenant's staff_permissions names, as this server reports it (is the name right?)
+            for res, letters in t.staff_permissions.items():
+                have = "".join(sorted(perms.resources.get(res, set()))) or "not listed"
+                print(f"     {res}: needs {letters}, has {have}")
+            missing = perms.missing(t.staff_permissions)
+            print("     as BMU staff this account lacks: " + (", ".join(f"{a} on {r}" for r, a in missing) or "nothing"))
         return
     if a.vocabularies:
         configured = {cfg["service"]: cfg["vocabulary"] for cfg in t.authorities.values()}

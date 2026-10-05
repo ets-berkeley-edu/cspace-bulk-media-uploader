@@ -23,10 +23,10 @@
     <div v-if="schedule.alwaysRunTime" id="schedule-development-setting" class="mb-2 text-caption text-medium-emphasis">
       Development setting: every moment counts as run time.
     </div>
-    <div v-if="!scheduler" id="schedule-scheduler-only" class="mb-2 text-caption text-medium-emphasis">
-      Only BMU schedulers can change the schedule or the order of the queue.
+    <div v-if="!staff" id="schedule-scheduler-only" class="mb-2 text-caption text-medium-emphasis">
+      Only staff can change the schedule or the order of the queue.
     </div>
-    <div v-if="scheduler" class="align-center d-flex flex-wrap mb-3 schedule-tools">
+    <div v-if="staff" class="align-center d-flex flex-wrap mb-3 schedule-tools">
       <v-btn
         id="schedule-settings-btn"
         :disabled="!!settings"
@@ -59,7 +59,7 @@
       </v-btn>
     </div>
     <v-sheet
-      v-if="scheduler && pausing && !schedule.paused"
+      v-if="staff && pausing && !schedule.paused"
       id="pause-queue-panel"
       border
       class="mb-3 pa-3 schedule-panel text-body-2"
@@ -94,7 +94,7 @@
         </v-btn>
       </div>
       <div class="mt-2 text-caption text-medium-emphasis">
-        A running job finishes; no other job starts until a BMU scheduler resumes the queue. Queued jobs’ sign-in clocks keep running.
+        A running job finishes; no other job starts until a staff member resumes the queue. Queued jobs’ sign-in clocks keep running.
       </div>
       <v-alert
         v-if="pausing.error"
@@ -108,7 +108,7 @@
       </v-alert>
     </v-sheet>
     <v-sheet
-      v-if="scheduler && settings"
+      v-if="staff && settings"
       id="schedule-settings-panel"
       aria-label="Schedule settings"
       border
@@ -202,15 +202,15 @@ import {api} from '@/api'
 
 /**
  * The Job queue's schedule (design: Job scheduling): the banner with the run times and the next one, and, for BMU
- * schedulers, Schedule settings, Pause queue and Resume queue. What the server refuses (422) shows in the panel.
+ * staff, Schedule settings, Pause queue and Resume queue. What the server refuses (422) shows in the panel.
  */
 const props = defineProps({
   schedule: {
     required: true,
     type: Object as PropType<Schedule>
   },
-  // The signed-in user has the BMU_Scheduler role.
-  scheduler: {
+  // The signed-in user is BMU staff, not an intern (design: Roles).
+  staff: {
     required: false,
     type: Boolean
   },
@@ -273,7 +273,7 @@ const pause = async () => {
   try {
     const s = await api.pauseQueue(reason)
     pausing.value = null
-    emit('changed', s, 'You paused the queue. A running job finishes; no other job starts until a BMU scheduler resumes it.')
+    emit('changed', s, 'You paused the queue. A running job finishes; no other job starts until a staff member resumes it.')
   } catch (e) {
     edit.error = (e as Error).message
   } finally {

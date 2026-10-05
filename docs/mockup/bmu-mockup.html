@@ -344,7 +344,7 @@
       <div class="login-mock-row">
         <label for="loginTenant">Tenant</label><select id="loginTenant"></select>
         <label for="loginPerm">Permissions</label><select id="loginPerm"></select>
-        <label><input type="checkbox" id="loginSched" checked> BMU_Scheduler role</label>
+        <label><input type="checkbox" id="loginSched" checked> BMU_Staff role (untick for a BMU_Intern)</label>
       </div>
     </div>
   </section>
@@ -354,6 +354,7 @@
     <strong id="sessTenant">PAHMA</strong>
     <span class="spacer"></span>
     <div class="user-menu">
+      <span id="roleChip" class="badge badge-warning" title="You can create drafts and edit the drafts that are open to interns. Everything else is view-only." style="display:none">Intern</span>
       <button id="userMenuBtn" aria-haspopup="menu" aria-expanded="false" aria-controls="userMenu"><span class="sr-only">Signed in as </span><span id="sessUser"></span><span class="sr-only">. Menu</span> <span aria-hidden="true">▾</span></button>
       <div id="userMenu" class="user-menu-list" role="menu" hidden>
         <button id="darkModeBtn" role="menuitem">Dark mode</button>
@@ -378,13 +379,13 @@
     <span id="tenantSummary" style="color:var(--text-secondary);font-size:12px"></span>
     <label for="permSelect" style="margin-left:auto"><strong>Permissions</strong></label>
     <select id="permSelect"></select>
-    <label class="sched-role" title="Mockup only: simulates the CollectionSpace role that lets a user change the job schedule and the job queue"><input type="checkbox" id="schedRole" checked> Has the BMU_Scheduler role</label>
+    <label class="sched-role" title="Mockup only: simulates the user's BMU role, read from their CollectionSpace roles. Ticked: BMU_Staff, who do everything. Unticked: BMU_Intern, who create drafts and edit the drafts that are open to interns; everything else is view-only for them."><input type="checkbox" id="schedRole" checked> BMU_Staff role (untick: BMU_Intern)</label>
     <label class="sched-role" title="Mockup only: pretend these were deleted from CollectionSpace (or merged into another term): the Person John Adams, the Organization University of California, Berkeley (the Botanical Garden and UCJEPS contributor preset), the language Latin, and the media types slide, Slide (Photograph) (UCJEPS's Slide preset) and sound. Documents using them must be fixed."><input type="checkbox" id="termsGone"> Demo: terms deleted in CollectionSpace</label>
     <label class="sched-role" title="Mockup only: pretend the Person Thomas Jefferson was renamed in CollectionSpace to “Thomas Jefferson (1743–1826)” (same term, new display name). Documents in the editor switch to the new name with a note; queued jobs' previews say the job will use it; a run uses it and adds a notice."><input type="checkbox" id="termRenamed"> Demo: term renamed in CollectionSpace</label>
     <label class="sched-role" title="Mockup only: pretend an object in the queued sample job “scans from the imaging lab” was marked sensitive in CollectionSpace after the job was submitted. Preview that job in the Job queue: the document is now protected, its publish setting stays as submitted, and it carries a warning."><input type="checkbox" id="protLater"> Demo: object protected after submission</label>
     <button id="load1000Btn" title="Fill the job being edited with 1,000 generated sample documents, to try paging, sorting and filtering">Load 1,000 sample documents</button>
     <button id="resetDemoBtn" title="Put the mockup back to its starting state: sample jobs and files, PAHMA, full permissions, panel open">Reset demo</button>
-    <div class="hint">Mockup only: the Permissions switch simulates the permissions the BMU reads from CollectionSpace at login (hover an option to see them): creating Media records, relations (needed to link to objects and to add to a group), objects and groups, and seeing protected previews. Options a user lacks are shown disabled, and documents that need them are marked “Must fix”; a user who can't create and update Media records can only view jobs. The editor starts on a new, empty job: click the drop zone to add the tenant's sample files, or use “Load 1,000 sample documents”. Switching tenants reloads that tenant's sample configuration and starts a new, empty job. In the real BMU the tenant comes from the login, and its handling options, lists and fields come from tenant configuration and CollectionSpace. The “Has the BMU_Scheduler role” box simulates the CollectionSpace role that lets a user change the job schedule and the job queue; untick it to see the Job queue as other users do. The “Demo: terms deleted in CollectionSpace” box pretends that some values were deleted from CollectionSpace since they were chosen (hover it to see which), so the documents using them must be fixed; at the Botanical Garden it removes the term the contributor preset points to. Documents already queued keep those values; when they run, each one fails its check before anything is created, and the rest of the job goes on. The “Demo: term renamed in CollectionSpace” box renames the Person Thomas Jefferson to “Thomas Jefferson (1743–1826)”: choose him as a creator, then tick the box to see the editor switch to the new name, a queued job's preview mention it, and a run use it. The “Demo: object protected after submission” box pretends that an object in the queued sample job “scans from the imaging lab” became protected after that job was submitted: preview the job in the Job queue to see the warning.</div>
+    <div class="hint">Mockup only: the Permissions switch simulates the permissions the BMU reads from CollectionSpace at login (hover an option to see them): creating Media records, relations (needed to link to objects and to add to a group), objects and groups, and seeing protected previews. Options a user lacks are shown disabled, and documents that need them are marked “Must fix”. A staff account that can't create and update Media records, create relations, or read what the checks need can't sign in to the BMU at all, so those aren't options here. For an intern (untick BMU_Staff role) the Permissions switch has no effect: an intern's account has no permissions. The editor starts on a new, empty job: click the drop zone to add the tenant's sample files, or use “Load 1,000 sample documents”. Switching tenants reloads that tenant's sample configuration and starts a new, empty job. In the real BMU the tenant comes from the login, and its handling options, lists and fields come from tenant configuration and CollectionSpace. The “BMU_Staff role” box simulates the user's BMU role; untick it to see the BMU as an intern does. The “Demo: terms deleted in CollectionSpace” box pretends that some values were deleted from CollectionSpace since they were chosen (hover it to see which), so the documents using them must be fixed; at the Botanical Garden it removes the term the contributor preset points to. Documents already queued keep those values; when they run, each one fails its check before anything is created, and the rest of the job goes on. The “Demo: term renamed in CollectionSpace” box renames the Person Thomas Jefferson to “Thomas Jefferson (1743–1826)”: choose him as a creator, then tick the box to see the editor switch to the new name, a queued job's preview mention it, and a run use it. The “Demo: object protected after submission” box pretends that an object in the queued sample job “scans from the imaging lab” became protected after that job was submitted: preview the job in the Job queue to see the warning.</div>
     </div>
   </div>
 
@@ -483,7 +484,7 @@
       <li><strong>Audit log (future feature):</strong> at the bottom of the Finished jobs tab, collapsed until you open it. It lists every submitted job, run, cancelled or completed run, move to Drafts, draft takeover, row deletion and job deletion for the tenant; drafts, finished jobs and saved sign-ins that expired, reverted fixes and removed protected files; creator initials changes; and every change to the job schedule, queue order or a queued job’s run settings (Run now, run time, hold), newest first, for about a year, even after the jobs are gone; filter by event, search by job, user, filename or CSID, sort any column, and open an entry's CSIDs. This view is not in the first release and isn't a priority; the audit log itself is recorded from day one.</li>
       <li><strong>Uploads:</strong> new files upload in the background while you edit. A row's Status shows “Uploading 35%” with a bar, then “Verifying”, then its normal checks; a failed upload shows Retry and Remove. The line above the table counts them. A draft can be saved while files upload, but the job can't be submitted until every file is uploaded and verified. A running job in the Job queue shows done, failed and remaining documents with a bar and the document in progress. Only JPEG, TIFF, PNG, PDF, WAV, MP3, AAC, MP4 and X3D files are added, for every tenant, up to 2 GB each; other files, and files over 2 GB, are skipped with a message naming them.</li>
       <li><strong>Protected files</strong> (the BMU's own handling flag, formerly “Sensitive”): set only automatically, when the tenant's configuration and CollectionSpace data show the object is sensitive to the museum; users can't set or clear it. Only some rules also hide every image of the object on the public portal (PAHMA sample 3-4567, “culturally” with Human Remains); other protected files (PAHMA sample 12-5678, NAGPRA) follow the image's own publish setting, with a warning if it would publish them. The “Sensitivity and publishing” panel above the job explains each museum's rules, and the Public portal column shows whether each image will appear publicly. Their filenames stay visible to everyone; only the preview is restricted (see Thumbnails). A softer signal (PAHMA sample 15-1240, a restriction at the “recommendation” level) is a warning suggesting you withhold the image; once you do, it stays on the row as information. A protected file's upload is deleted from the BMU 7 days after its job stopped; if the document still needs it, Fix and reschedule asks for the file again with Replace file (PAHMA finished job “consultation photos, box 3”).</li>
-      <li><strong>Jobs that collide in the queue:</strong> not simulated in this mockup. In the BMU, a job is also checked against the jobs ahead of it in the queue. A “Create new object + link” document whose object an earlier job creates first is “Must fix” (the earlier job would create the object, and this document would then fail); the message names the other job and offers “Link to object (create if missing)”. A document with the same identification number as one in an earlier job gets a warning. In the Job queue, a scheduler who moves a job, or uses Run now, Hold or a run time, in a way that would make a document fail is told which document and asked first (“Move anyway” or Cancel), in the row under the job. If they go ahead, the job that would fail shows “needs fixing” at once in “Checks now”, and a box above the list names the documents and offers <em>Reorder to avoid failures…</em> to schedulers, which says what it will move before moving it.</li>
+      <li><strong>Jobs that collide in the queue:</strong> not simulated in this mockup. In the BMU, a job is also checked against the jobs ahead of it in the queue. A “Create new object + link” document whose object an earlier job creates first is “Must fix” (the earlier job would create the object, and this document would then fail); the message names the other job and offers “Link to object (create if missing)”. A document with the same identification number as one in an earlier job gets a warning. In the Job queue, a staff member who moves a job, or uses Run now, Hold or a run time, in a way that would make a document fail is told which document and asked first (“Move anyway” or Cancel), in the row under the job. If they go ahead, the job that would fail shows “needs fixing” at once in “Checks now”, and a box above the list names the documents and offers <em>Reorder to avoid failures…</em> to staff, which says what it will move before moving it.</li>
       <li><strong>Queue safeguards:</strong> each queued job shows how long its saved sign-in lasts, with a warning when it's close to the 72-hour limit; a job that runs out moves to Drafts with a note (see “weekend imaging batch”). Edit on a queued job first warns that it leaves the queue and loses its sign-in. A running job has <strong>Cancel run</strong>: it stops after the document in progress and appears in Finished jobs as needing attention. In Drafts, the expiry column says whether a draft will be deleted or, for a fix of a job that already ran, reverted.</li>
       <li><strong>Group:</strong> tick “Create a group of this job’s objects” to have the job create one new group; the title is required and starts empty. Type one, or use “Use the job name” (the job name exactly as typed) or “Use a timestamp” (bmu-YYYY-MM-DD-HH-MM-SS, Pacific time, like the legacy BMU's =job title); changing the job name later doesn't change the title. Every document linked to an object is in the group by default; untick its Group box (or use the side panel) to leave it out. An object joins only after its document's Media record is created and linked, so a document whose Media record failed adds nothing to the group. Reruns reuse the same group. Once a run has created the group, reopening the job (Fix and reschedule, Reschedule or Edit) locks “Create a group” and the title, with a note saying which run created it (try “collections survey batch 4”).</li>
       <li><strong>Editable Media fields per tenant</strong> are the fields each tenant's current BMU form offers, plus the values the current BMU fills in automatically per handling option (media type, contributor, copyright), which become editable presets. PAHMA's automatic values are blank today, so its media type, contributor and copyright start empty; BAMPFA and Cinefiles have no form fields, so they edit only Language.</li>
@@ -493,14 +494,15 @@
       <li><strong>Thumbnails:</strong> every document row in the editor, previews, results and expanded job rows starts with a thumbnail; click it for a larger view (Esc or Close to dismiss). Here they are drawn stand-ins by file type (object photo, label, TIFF, audio, video, 3D model). In the real BMU the browser makes the thumbnail for JPEG and PNG, the server makes one for TIFF, and video, audio and 3D files show a type icon; thumbnails carry no EXIF or GPS data and are served only through the web app. A BMU thumbnail is deleted once its file is in CollectionSpace, and from then on CollectionSpace's own derivative is shown (hover a thumbnail to see which). <strong>Protected files</strong> (🔒) get no stored thumbnail: the person who added the file sees a local preview in their own browser, and everyone else sees a lock until the file is in CollectionSpace, whose derivative is then shown only to users allowed to read the record. Save and reopen a draft, or switch the signed-in user, to see the difference.</li>
       <li><strong>Layout:</strong> the “change selected documents” controls sit in a panel to the left of the document table and stay in view while you scroll, with a count of how many documents are selected. The arrow button in its header slides it closed to a slim rail that shows how many documents are selected, giving the table more room; the same button, or a click anywhere on the rail, slides it open again. The page remembers your choice. On narrow screens the panel moves above the table.</li>
       <li><strong>Large jobs:</strong> jobs can hold up to 1,000 documents, so the editor, job previews and job results show them in pages (25, 50 or 100 per page) with first / previous / next / last controls above and below the table. Click a column heading to sort (ascending, descending, then back to the original order); every table on every tab sorts this way, including the Drafts, Job queue and Finished jobs lists and the documents shown in an expanded job. Sorting the job queue only changes the view: the queue still runs in its own order, and dragging is off until the sort is cleared; a “Show” filter narrows to documents that need fixing, have warnings, are protected files, excluded or selected (in results: failed, partial, not started, excluded, done). The header checkbox selects the documents on the current page, with a link to select every matching document; bulk changes apply to everything selected, on any page. Try it with “Load 1,000 sample documents” in the bar at the top, or the “2026 digitization project, batch 1” job in Finished jobs. Expanded rows in the job lists show the 10 most important documents; the full preview or results shows them all.</li>
-      <li><strong>Sign-in:</strong> the mockup opens on the sign-in screen, like the BMU. The BMU checks the username and password against CollectionSpace (Basic Auth) and reads the account's permissions and roles; here any username and password work, the password “wrong” shows a rejected sign-in, and the tenant, permissions and scheduler role are picked on the sign-in screen. Your username (top right) opens a menu, as in the BMU: Dark mode or Light mode (the choice is remembered in this browser; until you make one, your system's setting decides) and Sign out. Signing out stops editing the open draft; it stays in Drafts, saved, since every change is saved as it's made. Submitted jobs keep running after you sign out: each keeps its own sign-in until it finishes. The Mockup settings pane collapses to one line with the triangle at its left.</li>
+      <li><strong>Sign-in:</strong> the mockup opens on the sign-in screen, like the BMU. The BMU checks the username and password against CollectionSpace (Basic Auth) and reads the account's permissions and roles; here any username and password work, the password “wrong” shows a rejected sign-in, and the tenant, permissions and BMU role (staff or intern) are picked on the sign-in screen. Your username (top right) opens a menu, as in the BMU: Dark mode or Light mode (the choice is remembered in this browser; until you make one, your system's setting decides) and Sign out. Signing out stops editing the open draft; it stays in Drafts, saved, since every change is saved as it's made. Submitted jobs keep running after you sign out: each keeps its own sign-in until it finishes. The Mockup settings pane collapses to one line with the triangle at its left.</li>
+      <li><strong>Roles:</strong> every BMU user has one of two CollectionSpace roles, which carry no permissions and only tell the BMU what the user may do. <strong>BMU_Staff</strong> do everything: edit any draft, submit jobs, change the schedule and the queue (reorder, Run now, run time, hold, pause), cancel any run, and fix or delete finished jobs. A <strong>BMU_Intern</strong> creates drafts and edits the drafts marked “Open to interns” (a draft an intern created; a staff member's is “Staff only”); an intern can't submit, can't take over a draft a staff member is editing, can't delete a draft that has already run, and sees the Job queue and Finished jobs without changing them. The header shows “Intern”. A user with neither role, or a staff account missing the permissions the BMU exists to use, is refused at sign-in with a message to contact their CollectionSpace administrator (not simulated here). Try it with the “BMU_Staff role” box in Mockup settings or on the sign-in screen: unticked, you are an intern. Changing a draft between “Open to interns” and “Staff only” comes in a later step.</li>
       <li><strong>Job lists:</strong> Drafts, Job queue and Finished jobs show one line per job. The triangle at the start of a row expands it in place to show the job's details (handling mix, group, who and when, expiry or run history) and one line per document with its status and most important problem or result, with a link to the full preview or results. “Expand all / Collapse all” sits above each list; hover over dates and badges for who did what. In Drafts and the Job queue, a job's confirmation (Delete, Edit, Cancel run, Take over) opens in a full-width row under the job, where its text has room.</li>
       <li><strong>Worked example:</strong> in Finished jobs, open “example: fixed by excluding a document” with View results. Its run history shows run 1 needing attention because one document's Media record was rejected, that document then excluded by jdoe, and run 2 completing with the document shown as excluded. To try it yourself: use Fix and reschedule on “collections survey batch 4”, check Exclude for the documents that need fixing, press Submit job, then in the Job queue use Run now on it and Finish run (mockup) on the running jobs until it has run.</li>
       <li><strong>Excluding documents:</strong> the Exclude checkbox at the end of each row (unchecked by default; hover its heading for “To exclude a document from a job, check the box.”) tells the BMU to ignore a document, for example one with a problem that can't be fixed yet. Excluded rows are grayed out, their fields can't be changed, and they are left out of the checks, so they never block submitting; unchecking Exclude restores the row as it was. Exclude selected / Include selected in the side panel work on several rows at once. Done rows have nothing to ignore. <strong>Deleting documents:</strong> the trash button at the very end of each row (after Exclude) deletes that document from the job permanently, after a confirmation in the row; its uploaded file is removed and nothing in CollectionSpace is touched. <strong>Delete selected</strong>, under Exclude selected / Include selected in the side panel, does the same for all selected documents after a confirmation in the panel. Excluded documents can be deleted too. Only documents that haven't created anything in CollectionSpace, and that the last run didn't stop on while working on them (BAMPFA's “loan documentation”), can be deleted (finding an existing object doesn't count): for the others the trash button is disabled, its tooltip and the expanded row explain why, Delete selected leaves them in place and says how many it skipped, and they can only be excluded. Deleting the job's last document, or every document at once, deletes the job too. Each deleted document is written to the audit log (Row deleted). In the BMU a document shows “Deleting…” in its Status, and Delete selected reads “Deleting…”, until the server has removed it; this mockup deletes at once. A partial row can be excluded too; its Media record stays in CollectionSpace, unfinished.</li>
       <li><strong>Finished jobs:</strong> jobs that have run, with their outcome (Completed, Needs attention, Failed), how many documents were done, partial, failed or not started, and who ran them. View results shows every document's steps with the CSIDs created, and for each failure a plain explanation, what to do, and the technical detail on request. <strong>Fix and reschedule</strong> (or just <strong>Reschedule</strong>, when every failure only needs another run, such as a sign-in failure, an outage or a cancelled run) moves a job that needs attention or failed into Drafts: documents already created are read-only (🔒), a partial document shows why its fields are locked (its Media record already exists, and the BMU never updates records; change them in CollectionSpace instead) and only allows what the rerun still needs: a corrected object number, a replacement file, stopping the link to an object, or leaving the job's group (untick Group while its Add to group step hasn't been done; the rerun then shows that step as not needed), and submitting queues a rerun that skips everything already done. The BMU checks every document against CollectionSpace again just before creating anything for it: its values (renamed terms are used under their current names, with a notice), the permissions its handling needs, its object and its file. A document that fails this check (a value that no longer exists, an object that is gone or that now exists for “Create new object + link”, a missing permission) has nothing created for it, while the rest of the job goes on: in its results, the first step, Check the document in CollectionSpace, failed and the other steps were skipped. Completed jobs are removed after 30 days.</li>
       <li><strong>Drafts:</strong> Save draft keeps a job at any stage, even incomplete or with documents that need fixing, under the Drafts tab. Everyone signed in to the tenant can see and edit drafts, one person at a time: opening a draft shows it as “being edited by” that person. Others can preview it, or take it over after a warning; the first person's page then becomes read-only. Every change is saved as it's made, so closing a draft or starting a new job needs no prompt. In the BMU the draft being edited is part of the page's address, so reloading the page (or a bookmark) reopens it; this mockup starts over when reloaded. Editing a queued job moves it to Drafts until it is submitted again. Drafts expire 30 days after they were last changed or saved, or 7 days if any document is a protected file; the Drafts tab shows each expiry date and highlights those due within 3 days.</li>
-      <li><strong>Job queue:</strong> name the job and press Submit job. If nothing needs fixing, the whole job is checked again and moved to the Job queue tab, and the editor starts a new, empty job. “+ New job” at the right of the tabs starts one at any time (the current job stays in Drafts); in this mockup, click the drop zone to add the tenant's sample files. The queue lists each job with its documents, handling mix, group, who submitted it, its status and its checks <em>as of now</em>, flagging jobs whose checks changed since they were submitted. Preview shows the whole job read-only with freshly re-run checks. Edit moves a queued job to Drafts and opens it in the editor; it returns to the end of the queue only when you press Submit job. Delete asks for confirmation. BMU schedulers can drag jobs (or use the arrows) to change the order workers take them in; everyone else sees the order but can't change it. Running jobs stay first. Each tenant runs one job at a time. Running jobs can be previewed, and cancelled by a BMU scheduler or the person who submitted the job. A running job works through its documents on its own, a few seconds each (the document in progress shows its step, and a bar while its file is sent); “Finish run (mockup)” finishes it at once. Two sample jobs from other users are included; in one, a Media record with a matching ID was created in CollectionSpace after the job was submitted, so its preview shows a new warning. The BMU checks every document's values against CollectionSpace again when the run starts and just before creating each document: renamed terms are used under their current names (with a notice), and a document whose value no longer exists fails before anything is created for it, while the rest of the job goes on.</li>
-      <li><strong>Job scheduling:</strong> jobs no longer start when they're submitted. Each tenant has a schedule of run times (by default every day at 7:00 PM, Pacific time, optionally with a time after which no new jobs start), and at each run time the queued jobs start in queue order, one at a time. A job submitted while a run is in progress waits for the next run time. Only users whose CollectionSpace account has the <strong>BMU_Scheduler</strong> role can change the schedule or the queue; the “Has the BMU_Scheduler role” box in the top bar simulates it (ticked at first; untick it to see the read-only view). This is separate from editing rights: a scheduler without create and update on Media records can manage the queue but not edit jobs. The banner at the top of the Job queue tab shows the schedule and the next run time; schedulers get <strong>Schedule settings…</strong> (run days, start time, optional end time) and <strong>Pause queue…</strong> (with a reason) / <strong>Resume queue</strong>. Run days can't be more than 3 days apart, because a queued job's saved sign-in lasts 72 hours. The <strong>Runs at</strong> column shows when each job will start, and warns when that is after its sign-in expires. Schedulers can use <strong>Run now</strong> (next, as soon as no job is running, even outside the run times, but not while the queue is paused), <strong>Set run time…</strong> (between now and the job's sign-in expiry; Clear returns it to the schedule) and <strong>Hold</strong> / <strong>Release</strong> (a held job is skipped; its sign-in clock keeps running). Only schedulers can reorder the queue. A run can be cancelled by a scheduler or by the person who submitted the job. Every change is written to the audit log. The mockup has no real clock for the schedule: “Demo: it's run time now” starts the due jobs one after another (use Finish run (mockup) on the running job to move on); a job's own run time starts it when that time comes while the page is open.</li>
+      <li><strong>Job queue:</strong> name the job and press Submit job. If nothing needs fixing, the whole job is checked again and moved to the Job queue tab, and the editor starts a new, empty job. “+ New job” at the right of the tabs starts one at any time (the current job stays in Drafts); in this mockup, click the drop zone to add the tenant's sample files. The queue lists each job with its documents, handling mix, group, who submitted it, its status and its checks <em>as of now</em>, flagging jobs whose checks changed since they were submitted. Preview shows the whole job read-only with freshly re-run checks. Edit moves a queued job to Drafts and opens it in the editor; it returns to the end of the queue only when you press Submit job. Delete asks for confirmation. staff can drag jobs (or use the arrows) to change the order workers take them in; everyone else sees the order but can't change it. Running jobs stay first. Each tenant runs one job at a time. Running jobs can be previewed, and cancelled by a staff member or the person who submitted the job. A running job works through its documents on its own, a few seconds each (the document in progress shows its step, and a bar while its file is sent); “Finish run (mockup)” finishes it at once. Two sample jobs from other users are included; in one, a Media record with a matching ID was created in CollectionSpace after the job was submitted, so its preview shows a new warning. The BMU checks every document's values against CollectionSpace again when the run starts and just before creating each document: renamed terms are used under their current names (with a notice), and a document whose value no longer exists fails before anything is created for it, while the rest of the job goes on.</li>
+      <li><strong>Job scheduling:</strong> jobs no longer start when they're submitted. Each tenant has a schedule of run times (by default every day at 7:00 PM, Pacific time, optionally with a time after which no new jobs start), and at each run time the queued jobs start in queue order, one at a time. A job submitted while a run is in progress waits for the next run time. Only staff (the <strong>BMU_Staff</strong> role) can change the schedule or the queue; the “BMU_Staff role” box in the top bar simulates it (ticked at first; untick it to see the read-only view an intern gets). The banner at the top of the Job queue tab shows the schedule and the next run time; staff get <strong>Schedule settings…</strong> (run days, start time, optional end time) and <strong>Pause queue…</strong> (with a reason) / <strong>Resume queue</strong>. Run days can't be more than 3 days apart, because a queued job's saved sign-in lasts 72 hours. The <strong>Runs at</strong> column shows when each job will start, and warns when that is after its sign-in expires. Staff can use <strong>Run now</strong> (next, as soon as no job is running, even outside the run times, but not while the queue is paused), <strong>Set run time…</strong> (between now and the job's sign-in expiry; Clear returns it to the schedule) and <strong>Hold</strong> / <strong>Release</strong> (a held job is skipped; its sign-in clock keeps running). Only staff can reorder the queue. Any staff member can cancel a run. Every change is written to the audit log. The mockup has no real clock for the schedule: “Demo: it's run time now” starts the due jobs one after another (use Finish run (mockup) on the running job to move on); a job's own run time starts it when that time comes while the page is open.</li>
       <li><strong>Checks while editing:</strong> each document's problems appear in its expanded row as “Must fix” (blocks submitting) or “Warning” (can proceed), and the bar under the table counts them. Submit job stays disabled until nothing needs fixing, then re-checks the whole job before adding it to the queue. “Show documents with problems” expands just those rows. Sample cases: an object number matching two objects, objects not found, duplicate IDs in CollectionSpace or within the job, TIFF quality, and dates CollectionSpace can't interpret.</li>
       <li><strong>Date:</strong> pre-filled from the image's EXIF data where there is one, and parsed the way CollectionSpace parses dates (simulated here: e.g. 2026-08-30, 1920s, circa 1850, 1901–1905, March 3, 1911). The parsed earliest/latest dates show under the field. A date CollectionSpace can't interpret must be corrected or cleared before the job can be submitted.</li>
       <li><strong>Permissions:</strong> switch the signed-in user to see options the user isn't allowed to use disabled, with the reason, and documents already set that way flagged as needing fixing. A document is also blocked when a check it needs can't run: without read on Media records (try “Imaging assistant”), or with a creator, contributor or rights holder from an authority the user can't read (try “Uploader without authority access”). Creating or editing a job needs create and update on Media records: a user without them (try “Viewer”) can view and preview jobs in Drafts, Job queue and Finished jobs, but the Create / edit job tab explains why it can't be used, and New job, Edit, Take over, Fix and reschedule, Reschedule and Delete are disabled with that reason.</li>
@@ -814,17 +816,24 @@ var PERM_PROFILES = {
   noobjects:   { label: "Imaging staff: can link to existing objects, can't create objects", media: true, relations: true, objects: false, groups: true, sensitive: true, authorities: "read" },
   nogroups:    { label: "Registrar assistant: everything except creating groups", media: true, relations: true, objects: true, groups: false, sensitive: true, authorities: "read" },
   nosensitive: { label: "Student assistant: can create and link, but can't see protected previews", media: true, relations: true, objects: true, groups: true, sensitive: false, authorities: "read" },
-  limited:     { label: "Media only: can link, but can't create objects or groups, or see protected previews", media: true, relations: true, objects: false, groups: false, sensitive: false, authorities: "read" },
-  norelations: { label: "Media uploader: can't create relations, so no linking to objects or groups", media: true, relations: false, objects: false, groups: false, sensitive: false, authorities: "none" },
-  noreadmedia: { label: "Imaging assistant: can't read Media records, so duplicate IDs can't be checked", media: true, relations: true, objects: false, groups: false, sensitive: false, authorities: "read", readMedia: false },
-  noreadobjects: { label: "Media uploader without object access: can't read Objects, so documents can't be linked", media: true, relations: true, objects: false, groups: false, sensitive: false, authorities: "read", readObjects: false },
-  noauthorities: { label: "Uploader without authority access: can't read Persons or Organizations", media: true, relations: true, objects: false, groups: false, sensitive: false, authorities: "none" },
-  viewer:      { label: "Viewer: can see and preview jobs, but can't create or edit them (no create and update on Media records)", media: false, relations: false, objects: false, groups: false, sensitive: false, authorities: "read" }
+  limited:     { label: "Media only: can link, but can't create objects or groups, or see protected previews", media: true, relations: true, objects: false, groups: false, sensitive: false, authorities: "read" }
 };
 var PERMS = PERM_PROFILES.full;
 /* Creating or editing a job needs create and update on Media records; without them a user can only view jobs */
-var NO_EDIT_WHY = "Your CollectionSpace account can't create and update Media records, so it can't create or edit jobs. You can still view them in Drafts, Job queue and Finished jobs.";
-function canEdit() { return !!PERMS.media && PERMS.mediaUpdate !== false; }
+/* Roles (design: Roles): staff do everything. An intern creates drafts and edits the drafts that are open to interns;
+   queued, running and finished jobs are view-only for them. An intern's account has no permissions, and the intern
+   acts for the staff member who will submit, so no control is switched off for lack of permissions (PERM_INTERN). */
+var NO_EDIT_WHY = "Only staff can do this.", STAFF_DRAFT_WHY = "This draft is for staff only.";
+var STAFF_EDITING_WHY = "A staff member is editing this draft. Only staff can take it over.", RAN_DELETE_WHY = "This job has already run, so only staff can delete it.";
+var INTERN_SUBMIT_WHY = "Only staff can submit a job. A staff member submits it when the draft is ready.";
+var PERM_INTERN = { label: "Intern", media: true, relations: true, objects: true, groups: true, sensitive: false, authorities: "read" };
+function canEdit(j) { return IS_STAFF || !j || ((j.status === "Draft" || !j.status) && j.internOpen === true); }
+function noEditWhy(j) { return canEdit(j) ? "" : (j && j.status === "Draft" ? STAFF_DRAFT_WHY : NO_EDIT_WHY); }
+function applyRole() {
+  var ps = document.getElementById("permSelect");
+  PERMS = IS_STAFF ? (PERM_PROFILES[ps.value] || PERM_PROFILES.full) : PERM_INTERN;
+  var chip = document.getElementById("roleChip"); if (chip) chip.style.display = IS_STAFF ? "none" : "";
+}
 function applyEditPerm() {
   var ok = canEdit(), v = document.getElementById("editorView"), p = document.getElementById("noEditPane");
   v.classList.toggle("no-edit", !ok); p.hidden = ok;
@@ -2148,7 +2157,7 @@ function seedLists() {
       rows: cleanRows(fresh.slice(0, 3)), groupTitle: "", editingBy: null, run: 1, fixing: true, fixFrom: "Needs attention" },
     { id: "J-" + (jobSeq++), name: T.name + " — weekend imaging batch", createdBy: "agarcia", lastSavedBy: "BMU", lastSavedAt: "Today, 6:00 AM", lastSavedMs: Date.now() - DAY / 4, status: "Draft",
       rows: cleanRows(fresh.slice(0, 2)), groupTitle: "", editingBy: null, note: "Sign-in expired while waiting in the queue; submit it again to run it with your sign-in." },
-    { id: "J-" + (jobSeq++), name: T.name + " — student project scans (incomplete)", createdBy: "dchen", lastSavedBy: "dchen", lastSavedAt: shortDate(Date.now() - 28 * DAY) + ", 11:20 AM", lastSavedMs: Date.now() - 28 * DAY, status: "Draft",
+    { id: "J-" + (jobSeq++), name: T.name + " — student project scans (incomplete)", createdBy: "dchen", createdByRole: "intern", internOpen: true, lastSavedBy: "dchen", lastSavedAt: shortDate(Date.now() - 28 * DAY) + ", 11:20 AM", lastSavedMs: Date.now() - 28 * DAY, status: "Draft",
       rows: cleanRows(fresh.slice(0, 2)), groupTitle: "", editingBy: null }
   ];
 }
@@ -2165,7 +2174,7 @@ function renderScheduleBar() {
   document.getElementById("scheduleBar").innerHTML = '<span class="counts"><strong>' + esc(parts[0]) + "</strong> · " + esc(parts.slice(1).join(" · ")) + "</span>" +
     (c.block || c.warn ? '<button id="showProblemsBtn">Show documents with problems</button>' : "") +
     '<button id="saveDraftBtn" title="Save this job to Drafts, even if it is incomplete or has problems. Every change is already saved; this confirms it and restarts the draft\u2019s ' + (rows.some(function (r) { return !!sensitiveReason(r); }) ? "7-day expiry (it has protected files)" : "30-day expiry") + '">Save draft</button>' +
-    '<button id="submitBtn"' + (c.block || !work ? " disabled" : "") + ' title="' + (c.block ? "Fix or exclude the documents marked Needs fixing first, or save a draft" : (!work ? "Nothing left to run: every document is done or excluded" : "Check the whole job again, then add it to the job queue; it runs at the next run time")) + '">Submit job</button>' +
+    '<button id="submitBtn"' + (c.block || !work || !IS_STAFF ? " disabled" : "") + ' title="' + (!IS_STAFF ? INTERN_SUBMIT_WHY : c.block ? "Fix or exclude the documents marked Needs fixing first, or save a draft" : (!work ? "Nothing left to run: every document is done or excluded" : "Check the whole job again, then add it to the job queue; it runs at the next run time")) + '">Submit job</button>' +
     (scheduleMsg ? '<div class="result">' + scheduleMsg + "</div>" : "");
 }
 function hasUnsaved() { return isDirty() && !!(currentJob.id || rows.length || document.getElementById("jobName").value.trim()); }
@@ -2220,7 +2229,8 @@ function saveDraft() {
   var name = document.getElementById("jobName").value.trim() || ("Untitled job, " + nowLabel());
   var f = currentJob.id ? findJob(currentJob.id) : null, job = f ? f.job : null;
   if (!job) {
-    job = { id: currentJob.id || "J-" + (jobSeq++), createdBy: currentJob.createdBy, status: "Draft", run: currentJob.run || 0 };
+    job = { id: currentJob.id || "J-" + (jobSeq++), createdBy: currentJob.createdBy, status: "Draft", run: currentJob.run || 0,
+            createdByRole: IS_STAFF ? "staff" : "intern", internOpen: !IS_STAFF };   // design (Roles): open to interns only if an intern created it
     draftsFor().unshift(job);
   }
   job.name = name; job.rows = cleanRows(rows); job.groupOn = groupOn(); job.groupTitle = groupOn() ? document.getElementById("groupTitle").value.trim() : ""; job.sensAll = sensAllOn(); job.deletedSinceRun = currentJob.deletedSinceRun || [];
@@ -2234,6 +2244,7 @@ function saveDraft() {
   renderEditBanner(); renderScheduleBar(); updateCounts();
 }
 function submitJob() {
+  if (!IS_STAFF) { scheduleMsg = '<span class="badge badge-danger">Not submitted</span> ' + INTERN_SUBMIT_WHY; renderScheduleBar(); return; }
   var c = countLevels(rows);
   if (c.block) {
     scheduleMsg = '<span class="badge badge-danger">Not submitted</span> The whole-job check found ' + c.block + " document(s) that need fixing. Save a draft to finish later.";
@@ -2251,7 +2262,7 @@ function submitJob() {
   queueFor().push(job);
   audit({ type: "Submitted", job: name, user: "you", detail: "Submitted “" + name + "” with " + toRun(job.rows) + " documents.", csids: [] });
   var S = schedFor(), ahead = jobsAhead(job), when;
-  if (S.pause) when = "The queue is paused, so it waits until a BMU scheduler resumes it.";
+  if (S.pause) when = "The queue is paused, so it waits until a staff member resumes it.";
   else if (dueInRun(job)) when = "A run is in progress, so it starts " + (ahead ? "after " + ahead + " other job" + (ahead === 1 ? "" : "s") : "now") + ".";
   else when = "It runs at the next run time, " + whenLabel(nextRunMs(S)) + (ahead ? ", after " + ahead + " other job" + (ahead === 1 ? "" : "s") : "") + ".";
   flash.queue = "“" + name + "”" + (returning ? " (from Drafts)" : "") + " was submitted" + (c.warn ? " with " + c.warn + " document(s) carrying warnings" : "") + " and added to the end of the queue. " + when + " It runs with your sign-in, which is deleted when the run ends.";
@@ -2263,9 +2274,8 @@ function submitJob() {
 }
 /* Editing a queued job moves it to Drafts until it's scheduled again */
 function editJob(id) {
-  if (!canEdit()) return;
   var f = findJob(id);
-  if (!f) return;
+  if (!f || !canEdit(f.job)) return;
   var job = f.job;
   if (job.status === "Running") return;
   if (job.editingBy && job.editingBy !== "you" && confirmTakeoverId !== id) return;
@@ -2300,16 +2310,16 @@ function deleteJob(id) {
   flash.queue = flash.drafts = flash.history = "Deleted the job."; confirmDeleteId = null; previewId = null; updateCounts(); render_lists();
 }
 
-/* ----- Job scheduling: each tenant's run times, the BMU_Scheduler role, and per-job run controls ----- */
-/* Queued jobs start at the tenant's next run time, in queue order, one at a time. Only users whose CollectionSpace
-   account has the BMU_Scheduler role may change the schedule or the queue (mockup: the checkbox in the top bar). */
-var IS_SCHEDULER = true;              // mockup only; separate from PERMS (editing rights)
+/* ----- Job scheduling: each tenant's run times, and staff's per-job run controls ----- */
+/* Queued jobs start at the tenant's next run time, in queue order, one at a time. Only staff (the BMU_Staff role) may
+   change the schedule or the queue; interns (BMU_Intern) see them (mockup: the checkbox in the top bar). */
+var IS_STAFF = true;              // mockup only: BMU_Staff when true, BMU_Intern when false (design: Roles)
 var SCHED = {};                       // per tenant: { days: [Sun..Sat], start: "19:00", end: null | "06:00", pause: null | {by, at, atMs, reason}, demoRun: false | the demo run's start (ms) }
 var schedEdit = null, pauseEdit = null, runAtEdit = null;
-var NO_CANCEL_WHY = "Only a BMU scheduler or the person who submitted the job can cancel its run.";
+var NO_CANCEL_WHY = "Only staff can cancel a run.";
 var DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 var PT_TZ = "America/Los_Angeles", PT_FMT = null;
-function canCancelRun(j) { return IS_SCHEDULER || j.submittedBy === "you"; }
+function canCancelRun(j) { return IS_STAFF; }
 function schedFor() { return SCHED[tenantKey] || (SCHED[tenantKey] = { days: [true, true, true, true, true, true, true], start: "19:00", end: null, pause: null, demoRun: false }); }
 function pad2(n) { return (n < 10 ? "0" : "") + n; }
 /* Pacific wall-clock parts of an instant, and the instant of a Pacific wall-clock time */
@@ -2395,7 +2405,7 @@ function runsAt(j) {
   var S = schedFor(), q = queueFor(), now = Date.now(), running = q.some(isRunning), r;
   if (j.status === "Running") return { text: "Running", key: 0 };
   if (j.held) return { text: "Held by " + j.held.by, sub: "since " + j.held.at + "; its sign-in clock keeps running", key: 9e15 };
-  if (S.pause) return { text: "Paused", sub: "until a BMU scheduler resumes the queue", key: 8e15 };
+  if (S.pause) return { text: "Paused", sub: "until a staff member resumes the queue", key: 8e15 };
   var ahead = jobsAhead(j), aj = ahead ? " · after " + ahead + " job" + (ahead === 1 ? "" : "s") : "";
   /* due now (Run now, its own run time has come, or in the current run): it starts after the due jobs ahead of it in queue order (kickQueue) */
   if (j.runNow || (j.runAtMs && j.runAtMs <= now) || dueInRun(j))
@@ -2410,7 +2420,7 @@ function runsAtCell(j) {
   var r = runsAt(j);
   var h = '<td class="runs-at">' + esc(r.text) + (r.sub ? '<div class="sub">' + esc(r.sub) + "</div>" : "") +
     (r.warn ? '<div class="sub" style="color:var(--text-warning)" title="Its saved sign-in expires ' + esc(absLabel(j.credUntilMs)) + '; if the job hasn’t started by then, it moves to Drafts">⚠ sign-in expires before its run time</div>' : "");
-  if (IS_SCHEDULER && j.status === "Queued") {
+  if (IS_STAFF && j.status === "Queued") {
     if (runAtEdit && runAtEdit.id === j.id) {
       var now = Date.now(), until = j.credUntilMs || now + 72 * 36e5;
       h += '<div class="runat-edit"><input type="datetime-local" id="runAtInput" aria-label="Run time for ' + esc(j.name) + ' (Pacific time)" min="' + ptInputVal(now) + '" max="' + ptInputVal(until) + '" value="' + esc(runAtEdit.val || (j.runAtMs ? ptInputVal(j.runAtMs) : "")) + '">' +
@@ -2430,18 +2440,18 @@ function runsAtCell(j) {
 }
 function scheduleBannerHtml() {
   var S = schedFor(), html = "", nr = nextRunMs(S);
-  if (S.pause) html += '<div class="banner warn">The queue is paused by ' + esc(S.pause.by) + " since " + esc(S.pause.at) + ": " + esc(S.pause.reason) + ". No job starts until a BMU scheduler resumes it.</div>";
+  if (S.pause) html += '<div class="banner warn">The queue is paused by ' + esc(S.pause.by) + " since " + esc(S.pause.at) + ": " + esc(S.pause.reason) + ". No job starts until a staff member resumes it.</div>";
   html += '<div class="banner" id="schedBanner">' + esc(schedSummary(S)) + " Next run time: " + esc(whenLabel(nr, { today: true })) + "." + (S.demoRun ? " A run is in progress (demo)." : "") + "</div>";
-  if (!IS_SCHEDULER) html += '<div class="section-hint" style="color:var(--text-muted);margin:-6px 0 8px">Only BMU schedulers can change the schedule or the order of the queue.</div>';
+  if (!IS_STAFF) html += '<div class="section-hint" style="color:var(--text-muted);margin:-6px 0 8px">Only staff can change the schedule or the order of the queue.</div>';
   html += '<div class="sched-tools">' +
-    (IS_SCHEDULER ? '<button id="schedOpen"' + (schedEdit ? " disabled" : "") + '>Schedule settings…</button>' +
+    (IS_STAFF ? '<button id="schedOpen"' + (schedEdit ? " disabled" : "") + '>Schedule settings…</button>' +
       (S.pause ? '<button id="resumeBtn">Resume queue</button>' : '<button id="pauseOpen"' + (pauseEdit ? " disabled" : "") + ' title="Stop new jobs from starting; a running job finishes">Pause queue…</button>') : "") +
     '<span class="demo">Mockup only: <button id="demoRunTime" title="Pretend the next run time has come: due jobs start one after another, respecting pause, holds, Run now and the queue order">Demo: it’s run time now</button></span></div>';
-  if (IS_SCHEDULER && pauseEdit && !S.pause)
+  if (IS_STAFF && pauseEdit && !S.pause)
     html += '<div class="sched-panel"><div class="row"><label for="pauseReason">Reason for pausing</label><input type="text" id="pauseReason" style="width:320px" placeholder="Shown to everyone in ' + esc(T.name) + '" value="' + esc(pauseEdit.val || "") + '">' +
-      '<button id="pauseYes">Pause</button><button id="pauseNo">Cancel</button></div><div class="sub" style="font-size:12px;color:var(--text-muted)">A running job finishes; no other job starts until a BMU scheduler resumes the queue. Queued jobs’ sign-in clocks keep running.</div>' +
+      '<button id="pauseYes">Pause</button><button id="pauseNo">Cancel</button></div><div class="sub" style="font-size:12px;color:var(--text-muted)">A running job finishes; no other job starts until a staff member resumes the queue. Queued jobs’ sign-in clocks keep running.</div>' +
       (pauseEdit.err ? '<div class="msg msg-danger">' + esc(pauseEdit.err) + "</div>" : "") + "</div>";
-  if (IS_SCHEDULER && schedEdit) {
+  if (IS_STAFF && schedEdit) {
     var e = schedEdit;
     html += '<div class="sched-panel" id="schedPanel"><strong>Schedule for ' + esc(T.name) + '</strong>' +
       '<div class="row days"><span>Run days</span>' + DAY_NAMES.map(function (n, k) { return '<label><input type="checkbox" class="sched-day" data-d="' + k + '"' + (e.days[k] ? " checked" : "") + "> " + n + "</label>"; }).join("") + "</div>" +
@@ -2498,7 +2508,7 @@ function schedClick(t, id) {
       : "It’s run time, but no job is due (held jobs and jobs with their own run time wait).";
     renderQueue(); return true;
   }
-  if (!IS_SCHEDULER) return false;
+  if (!IS_STAFF) return false;
   if (t.id === "schedOpen") { schedEdit = { days: S.days.slice(), start: S.start, endOn: !!S.end, end: S.end || "06:00", err: "" }; renderQueue(); return true; }
   if (t.id === "schedCancel") { schedEdit = null; renderQueue(); return true; }
   if (t.id === "schedSave") {
@@ -2523,7 +2533,7 @@ function schedClick(t, id) {
     if (!reason) { pauseEdit = { err: "Enter a reason, so others know why the queue is paused.", val: "" }; renderQueue(); return true; }
     S.pause = { by: "you", at: nowLabel(), atMs: Date.now(), reason: reason }; pauseEdit = null;
     audit({ type: "Queue paused", job: "—", user: "you", detail: "Reason: " + reason, csids: [] });
-    flash.queue = "You paused the queue. A running job finishes; no other job starts until a BMU scheduler resumes it.";
+    flash.queue = "You paused the queue. A running job finishes; no other job starts until a staff member resumes it.";
     renderQueue(); return true;
   }
   if (t.id === "resumeBtn") {
@@ -2581,7 +2591,7 @@ function schedClick(t, id) {
 }
 
 /* ----- Lists ----- */
-/* Every queued job holds its scheduler's sign-in for at most 72 hours from scheduling; if it hasn't started by then it moves to Drafts */
+/* Every queued job holds its submitter's sign-in for at most 72 hours from scheduling; if it hasn't started by then it moves to Drafts */
 function credNote(j) {
   if (j.status !== "Queued") return "";
   var until = j.credUntilMs || Date.now() + 72 * 36e5, h = Math.max(0, Math.round((until - Date.now()) / 36e5));
@@ -2731,15 +2741,17 @@ function confirmRow(j, cols) {
 function actionsFor(j, inPreview) {
   var run = j.status === "Running", locked = lockedByOther(j), open = confirmFor(j);
   if (open) return inPreview ? open : "";
-  var why = run ? "A running job can\u2019t be changed" : (locked ? j.editingBy + " is editing this job" : (!canEdit() ? NO_EDIT_WHY : ""));
-  var noEdit = canEdit() ? "" : ' disabled title="' + esc(NO_EDIT_WHY) + '"';
+  var why = run ? "A running job can\u2019t be changed" : (locked ? j.editingBy + " is editing this job" : (!canEdit(j) ? noEditWhy(j) : ""));
+  var draft = j.status === "Draft", ranWhy = !IS_STAFF && draft && canEdit(j) && (j.run || j.fixFrom) ? RAN_DELETE_WHY : "";
+  var noEditText = noEditWhy(j) || (locked && !IS_STAFF ? STAFF_EDITING_WHY : "");   // the mockup's other users are staff
+  var noEdit = noEditText ? ' disabled title="' + esc(noEditText) + '"' : "";
   return (inPreview ? "" : '<button class="q-preview" data-id="' + j.id + '">Preview</button>') +
     (run ? '<button class="q-finish" data-id="' + j.id + '" title="Mockup only: pretend the worker finished this run now">Finish run (mockup)</button>' : "") +
     (locked && !run
       ? '<button class="q-takeover" data-id="' + j.id + '"' + (noEdit || ' title="' + esc(j.editingBy) + ' is editing this draft"') + '>Take over…</button>'
       : (run ? '<button class="q-cancel" data-id="' + j.id + '"' + (canCancelRun(j) ? ' title="Stop after the document in progress"' : ' disabled title="' + esc(NO_CANCEL_WHY) + '"') + '>Cancel run</button>'
              : '<button class="q-edit" data-id="' + j.id + '"' + noEdit + '>' + (j.editingBy === "you" ? "Continue editing" : "Edit") + "</button>")) +
-    '<button class="q-del" data-id="' + j.id + '"' + (run || locked || !canEdit() ? ' disabled title="' + esc(why) + '"' : ' title="Delete job"') + ">" + JOB_DEL_INNER + "</button>";
+    '<button class="q-del" data-id="' + j.id + '"' + (run || locked || !canEdit(j) || ranWhy ? ' disabled title="' + esc(why || ranWhy) + '"' : ' title="Delete job"') + ">" + JOB_DEL_INNER + "</button>";
 }
 /* ----- Collapsed / expanded job rows (Drafts, Job queue, Finished jobs) ----- */
 var openJobs = {};
@@ -2837,7 +2849,7 @@ function renderDrafts() {
   var v = document.getElementById("draftsView"), d = draftsFor();
   updateCounts();
   if (previewId && previewFrom === "drafts") { renderPreview(v); return; }
-  var html = '<h2 style="font-size:15px;margin:0 0 4px">Drafts</h2><div class="section-hint">Jobs saved but not submitted, including incomplete jobs and jobs with problems. Everyone signed in to ' + esc(T.name) + " can see and edit them, one person at a time; you can take over a draft someone else is editing. Drafts expire 30 days after they were last saved, or 7 days if they contain protected files. Checks are re-run against CollectionSpace each time this list is shown.</div>";
+  var html = '<h2 style="font-size:15px;margin:0 0 4px">Drafts</h2><div class="section-hint">Jobs saved but not submitted, including incomplete jobs and jobs with problems. Everyone signed in to ' + esc(T.name) + " can see them. Staff can edit every draft, and interns the drafts that are open to interns, one person at a time; you can take over a draft someone else is editing. Drafts expire 30 days after they were last saved, or 7 days if they contain protected files. Checks are re-run against CollectionSpace each time this list is shown.</div>";
   if (flash.drafts) html += '<div class="banner ok">' + esc(flash.drafts) + "</div>";
   if (!d.length) html += '<div class="empty">No drafts. Press Save draft in the Create / edit job tab to keep a job you are not ready to submit.</div>';
   else {
@@ -2851,7 +2863,7 @@ function renderDrafts() {
       expires: function (i) { return expiryInfo(d[i]).at; }
     }).forEach(function (j) {
       var ex = expiryInfo(j);
-      html += '<tr class="job-row' + (openJobs[j.id] ? " open" : "") + '"><td>' + jobToggle(j) + '</td><td class="job-name"><span class="nm">' + esc(j.name) + "</span></td>" +
+      html += '<tr class="job-row' + (openJobs[j.id] ? " open" : "") + '"><td>' + jobToggle(j) + '</td><td class="job-name"><span class="nm">' + esc(j.name) + '</span><div class="sub">' + (j.internOpen ? "Open to interns" : "Staff only") + "</div></td>" +
         "<td>" + j.rows.length + "</td><td>" + checksCell(j).replace(/<div class="changed">.*?<\/div>/, "") + "</td>" +
         '<td title="by ' + esc(j.lastSavedBy || "—") + '">' + esc(j.lastSavedAt || "—") + "</td>" +
         "<td>" + (j.editingBy ? '<span class="lock" title="since ' + esc(j.editingSince) + '">🔒 ' + esc(j.editingBy === "you" ? "You" : j.editingBy) + "</span>" : '<span class="sub">—</span>') + "</td>" +
@@ -2870,7 +2882,7 @@ function renderQueue() {
   var v = document.getElementById("queueView"), q = queueFor();
   updateCounts();
   if (previewId && previewFrom === "queue") { renderPreview(v); return; }
-  var html = '<h2 style="font-size:15px;margin:0 0 4px">Job queue</h2><div class="section-hint">Jobs submitted to run, in the order workers pick them up. Queued jobs start at ' + esc(T.name) + '\u2019s next run time, in this order, one job at a time, so each job waits for the ones above it; running jobs stay first. ' + (IS_SCHEDULER ? "Drag a job, or use its arrows, to change the order. " : "") + 'Editing a queued job moves it to Drafts until it is submitted again. Checks are re-run against CollectionSpace each time this list is shown.</div>';
+  var html = '<h2 style="font-size:15px;margin:0 0 4px">Job queue</h2><div class="section-hint">Jobs submitted to run, in the order workers pick them up. Queued jobs start at ' + esc(T.name) + '\u2019s next run time, in this order, one job at a time, so each job waits for the ones above it; running jobs stay first. ' + (IS_STAFF ? "Drag a job, or use its arrows, to change the order. " : "") + 'Editing a queued job moves it to Drafts until it is submitted again. Checks are re-run against CollectionSpace each time this list is shown.</div>';
   html += scheduleBannerHtml();
   if (flash.queue) html += '<div class="banner ok">' + esc(flash.queue) + "</div>";
   if (!q.length) html += '<div class="empty">No jobs in the queue. Create one in the Create / edit job tab and submit it.</div>';
@@ -2878,7 +2890,7 @@ function renderQueue() {
     html += listTools(q) + '<div class="table-wrap"><table class="qtable"><thead><tr><th style="width:40px"></th>' + sortTh("queueList", "order", "Order", "width:90px") + sortTh("queueList", "name", "Job", "min-width:200px") + sortTh("queueList", "docs", "Docs", "width:60px") +
       sortTh("queueList", "checks", "Checks now", "width:170px") + sortTh("queueList", "scheduled", "Submitted", "width:120px") + sortTh("queueList", "runs", "Runs at", "width:170px") + sortTh("queueList", "status", "Status", "width:150px") + '<th style="width:260px"></th></tr></thead><tbody>';
     var qp = pager("queueList"), reordering = !qp.sort || qp.sort === "order" && qp.dir === 1;
-    if (!reordering) html = html.replace('<div class="table-wrap"><table class="qtable">', '<div class="banner" style="margin:6px 0">Sorted view. The queue still runs in its own order; <button class="link-btn sort-clear" data-pager="queueList">clear the sort</button> to ' + (IS_SCHEDULER ? "drag or move jobs" : "see it in run order") + '.</div><div class="table-wrap"><table class="qtable">');
+    if (!reordering) html = html.replace('<div class="table-wrap"><table class="qtable">', '<div class="banner" style="margin:6px 0">Sorted view. The queue still runs in its own order; <button class="link-btn sort-clear" data-pager="queueList">clear the sort</button> to ' + (IS_STAFF ? "drag or move jobs" : "see it in run order") + '.</div><div class="table-wrap"><table class="qtable">');
     var firstMovable = q.findIndex(function (x) { return x.status !== "Running"; });
     listView("queueList", q, {
       order: function (i) { return i; }, name: function (i) { return q[i].name; }, docs: function (i) { return q[i].rows.length; },
@@ -2886,7 +2898,7 @@ function renderQueue() {
       scheduled: function (i) { return q[i].submittedAt || ""; }, status: function (i) { return q[i].status === "Running" ? 0 : 1; },
       runs: function (i) { return runsAt(q[i]).key; }
     }).forEach(function (j) {
-      var qi = q.indexOf(j), movable = j.status !== "Running" && reordering && IS_SCHEDULER;
+      var qi = q.indexOf(j), movable = j.status !== "Running" && reordering && IS_STAFF;
       html += '<tr data-id="' + j.id + '" class="job-row' + (openJobs[j.id] ? " open" : "") + (movable ? ' draggable" draggable="true" title="Drag to change the order"' : '"' + (j.status === "Running" ? ' title="Running jobs stay first"' : "")) + ">" +
         '<td>' + jobToggle(j) + '</td><td>' + (j.status === "Running" ? '<span class="run-spin" role="img" aria-label="Running" title="Running"></span>'
           : '<span class="grip" aria-hidden="true">' + (movable ? "⋮⋮" : "") + "</span>") + " " + (qi + 1) +
@@ -2972,7 +2984,7 @@ function renderPreview(v) {
 /* Reordering: running jobs stay at the top; queued and draft jobs can be moved among themselves */
 function moveJob(id, toIndex) {
   var q = queueFor(), from = q.findIndex(function (j) { return j.id === id; });
-  if (!IS_SCHEDULER || from < 0 || q[from].status === "Running") return;
+  if (!IS_STAFF || from < 0 || q[from].status === "Running") return;
   var firstMovable = q.findIndex(function (j) { return j.status !== "Running"; });
   toIndex = Math.max(firstMovable, Math.min(q.length - 1, toIndex));
   if (toIndex === from) return;
@@ -2985,7 +2997,7 @@ function moveJob(id, toIndex) {
 var dragId = null;
 document.addEventListener("dragstart", function (e) {
   var tr = e.target.closest && e.target.closest("#queueView tr.draggable");
-  if (!tr || !IS_SCHEDULER) return;
+  if (!tr || !IS_STAFF) return;
   dragId = tr.dataset.id; tr.classList.add("dragging");
   if (e.dataTransfer) { e.dataTransfer.effectAllowed = "move"; try { e.dataTransfer.setData("text/plain", dragId); } catch (x) {} }
 });
@@ -3442,7 +3454,7 @@ function cancelRun(id) {
     cancelledBy: "you", disabled: [], deleted: [] }]);
   removeJob(id);
   auditRun(j, j.runsLog[j.runsLog.length - 1]);
-  audit({ type: "Run cancelled", job: j.name, user: "you", detail: "Run " + run + " cancelled by you (" + (j.submittedBy === "you" ? "you submitted it" : "as a BMU scheduler; submitted by " + (j.submittedBy || "someone else")) + "). It stopped after the document in progress.", csids: [] });
+  audit({ type: "Run cancelled", job: j.name, user: "you", detail: "Run " + run + " cancelled by you (" + (j.submittedBy === "you" ? "you submitted it" : "submitted by " + (j.submittedBy || "someone else")) + "). It stopped after the document in progress.", csids: [] });
   kickQueue();
   j.status = "Needs attention"; j.jobError = "cancelled"; j.run = run; j.runBy = j.submittedBy || "you"; j.finishedAt = nowLabel(); j.finishedMs = Date.now();
   historyFor().unshift(j);
@@ -3476,7 +3488,7 @@ function historyActions(j, inList) {
   if (confirmDeleteId === j.id)
     return inList ? "" : deleteConfirmHtml(j);
   var html = '<button class="h-results" data-id="' + j.id + '">View results</button>';
-  if (j.status !== "Completed" && !canEdit()) html += '<button class="q-edit" data-id="' + j.id + '" disabled title="' + esc(NO_EDIT_WHY) + '">' + (needsFix(j) ? "Fix and reschedule" : "Reschedule") + '</button><button class="q-del" data-id="' + j.id + '" disabled title="' + esc(NO_EDIT_WHY) + '">' + JOB_DEL_INNER + '</button>';
+  if (j.status !== "Completed" && !canEdit(j)) html += '<button class="q-edit" data-id="' + j.id + '" disabled title="' + esc(NO_EDIT_WHY) + '">' + (needsFix(j) ? "Fix and reschedule" : "Reschedule") + '</button><button class="q-del" data-id="' + j.id + '" disabled title="' + esc(NO_EDIT_WHY) + '">' + JOB_DEL_INNER + '</button>';
   else if (j.status !== "Completed") html += '<button class="q-edit" data-id="' + j.id + '" title="' + (needsFix(j) ? "Opens the job in Drafts to fix the documents that need it, then submit it again" : "Nothing needs changing; opens the job in Drafts so you can submit it again") + '">' + (needsFix(j) ? "Fix and reschedule" : "Reschedule") + '</button><button class="q-del" data-id="' + j.id + '" title="Delete job">' + JOB_DEL_INNER + '</button>';
   else html += '<span class="sub">Removed ' + esc(shortDate(j.finishedMs + 30 * DAY)) + "</span>";
   return html;
@@ -4044,11 +4056,10 @@ document.addEventListener("change", function (e) {
   if (t.id === "protLater") { PROT_LATER_ON = t.checked; previewCheckedAt = nowLabel(); render(); render_lists(); return; }
   if (t.id === "termRenamed") { TERM_RENAMED = t.checked; (draftsFor() || []).forEach(function (d) { applyRenames(d.rows); });   /* drafts switch to the current name too */ renderInitPane(); render(); render_lists(); return; }
   if (t.id === "termsGone") { TERMS_GONE = t.checked; renderInitPane(); buildBulkBar(); render(); render_lists(); return; }
-  if (t.id === "schedRole") { IS_SCHEDULER = t.checked; schedEdit = null; pauseEdit = null; runAtEdit = null; render_lists(); return; }
+  if (t.id === "schedRole") { IS_STAFF = t.checked; applyRole(); schedEdit = null; pauseEdit = null; runAtEdit = null; render(); render_lists(); return; }
   if (t.id === "schedEndOn") { var se = document.getElementById("schedEnd"); if (se) se.disabled = !t.checked; return; }
   if (t.id === "permSelect") {
-    PERMS = PERM_PROFILES[t.value] || PERM_PROFILES.full;
-    if (!canEdit() && currentJob && (currentJob.id || rows.length)) { if (rows.length) saveDraft(); startNewJob(); }   // a viewer can't keep a job open: it stays in Drafts
+    applyRole();
     applyEditPerm();
     if (!canGroup()) setGroupUi(false, ""); else setGroupUi(groupOn(), document.getElementById("groupTitle").value);
     scheduleMsg = ""; for (var pi = 0; pi < rows.length; pi++) if (!rows[pi].touched.creator && !isLocked(rows[pi])) reparse(rows[pi]);
@@ -4090,7 +4101,7 @@ Object.keys(TENANTS).forEach(function (k) { KNOWN0[k] = JSON.parse(JSON.stringif
 function resetDemo() {
   Object.keys(TENANTS).forEach(function (k) { TENANTS[k].known = JSON.parse(JSON.stringify(KNOWN0[k])); });
   QUEUES = {}; DRAFTS = {}; HISTORY = {}; AUDIT = {}; PAGERS = {}; openJobs = {}; openDetails = {};
-  SCHED = {}; IS_SCHEDULER = true; schedEdit = null; pauseEdit = null; runAtEdit = null; document.getElementById("schedRole").checked = true;
+  SCHED = {}; IS_STAFF = true; schedEdit = null; pauseEdit = null; runAtEdit = null; document.getElementById("schedRole").checked = true;
   TERMS_GONE = false; document.getElementById("termsGone").checked = false;
   TERM_RENAMED = false; document.getElementById("termRenamed").checked = false;
   PROT_LATER_ON = false; PROT_LATER = {}; document.getElementById("protLater").checked = false;
@@ -4117,7 +4128,7 @@ loadTenant("pahma");
 /* ---------- Mockup settings pane: collapses to one line (remembered in this browser) ---------- */
 function configSummaryText() {
   var ps = document.getElementById("permSelect"), bits = [T.name, (PERM_PROFILES[ps.value] || PERM_PROFILES.full).label.split(":")[0]];
-  bits.push(IS_SCHEDULER ? "BMU_Scheduler role" : "no BMU_Scheduler role");
+  bits.push(IS_STAFF ? "BMU_Staff" : "BMU_Intern");
   var demos = [["termsGone", "terms deleted"], ["termRenamed", "term renamed"], ["protLater", "object protected later"]]
     .filter(function (d) { var el = document.getElementById(d[0]); return el && el.checked; }).map(function (d) { return d[1]; });
   if (demos.length) bits.push("demos: " + demos.join(", "));
@@ -4149,7 +4160,7 @@ function fillLoginMock() {
   var lt = document.getElementById("loginTenant"), lp = document.getElementById("loginPerm");
   lt.innerHTML = document.getElementById("tenantSelect").innerHTML; lt.value = document.getElementById("tenantSelect").value;
   lp.innerHTML = document.getElementById("permSelect").innerHTML; lp.value = document.getElementById("permSelect").value;
-  document.getElementById("loginSched").checked = IS_SCHEDULER;
+  document.getElementById("loginSched").checked = IS_STAFF;
 }
 function setControl(id, prop, value) {
   var el = document.getElementById(id);
@@ -4160,6 +4171,7 @@ function signIn(user) {
   setControl("tenantSelect", "value", document.getElementById("loginTenant").value);
   setControl("permSelect", "value", document.getElementById("loginPerm").value);
   setControl("schedRole", "checked", document.getElementById("loginSched").checked);
+  applyRole();
   SIGNED_IN = user;
   document.getElementById("sessUser").textContent = user;
   document.getElementById("loginMsg").innerHTML = "";

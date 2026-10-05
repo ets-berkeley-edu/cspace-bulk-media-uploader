@@ -10,7 +10,9 @@ const sim = {
   languages: {spa: 'Spanish'}, term_names: {LeslieFreund1: 'Leslie Freund'},
 }
 const status = (p: Partial<DemoStatus> = {}): DemoStatus => ({browserUploadMbps: 0, cspaceUrl: 'http://localhost:8180', alwaysRunTime: false,
-  sim: {...sim}, simError: '', ...p})
+  sim: {...sim}, simError: '', user: 'admin', role: 'staff',
+  users: [{user: 'admin', about: 'Staff with every permission'}, {user: 'intern', about: 'Intern: no CollectionSpace permissions'},
+          {user: 'reader', about: 'Neither BMU role: sign-in refused'}], ...p})
 
 let calls: { url: string; method: string; body: unknown }[] = []
 function stub(routes: (url: string, method: string) => { status?: number; body: unknown }) {
@@ -122,6 +124,37 @@ describe('Demo tools', () => {
     await flushPromises()
     expect(w.find('#demo-error').text()).toContain('“Spring batch” is running')
     expect(w.emitted('jobsDeleted')).toBeUndefined()
+  })
+
+  it('signs in as another of the simulator\'s users with a click, and tells the app to start again', async () => {
+    stub((url) => ({body: url.includes('sign-in-as') ? {user: 'intern', role: 'intern'} : status()}))
+    const w = mount(DemoPane)
+    await flushPromises()
+    expect(w.find('#demo-current-user').text()).toContain('You are signed in as admin (staff).')
+    expect(w.find('#demo-sign-in-as-admin-btn').attributes('disabled')).toBeDefined() // already this user
+    expect(w.find('#demo-sign-in-as-intern-btn').text()).toBe('Intern: no CollectionSpace permissions (intern)')
+    await w.find('#demo-sign-in-as-intern-btn').trigger('click')
+    await flushPromises()
+    expect(calls.find((c) => c.url === '/api/_demo/sign-in-as')!.body).toEqual({user: 'intern'})
+    expect(w.emitted('userChanged')![0]).toEqual(['intern'])
+  })
+
+  it('shows why an account is refused, and stays as it was', async () => {
+    stub((url) => (url.includes('sign-in-as') ? {status: 403, body: {detail: {code: 'no_role', message: 'Your CollectionSpace account doesn\'t have the BMU_Staff or BMU_Intern role, which the BMU needs.'}}}
+      : {body: status()}))
+    const w = mount(DemoPane)
+    await flushPromises()
+    await w.find('#demo-sign-in-as-reader-btn').trigger('click')
+    await flushPromises()
+    expect(w.find('#demo-error').text()).toContain('reader: Your CollectionSpace account doesn\'t have the BMU_Staff or BMU_Intern role')
+    expect(w.emitted('userChanged')).toBeUndefined()
+  })
+
+  it('has no Sign in as box against a real CollectionSpace (no simulator users)', async () => {
+    stub(() => ({body: status({users: []})}))
+    const w = mount(DemoPane)
+    await flushPromises()
+    expect(w.find('#demo-sign-in-as').exists()).toBe(false)
   })
 
   it('names changed terms by their display names, and says what a failure does', async () => {

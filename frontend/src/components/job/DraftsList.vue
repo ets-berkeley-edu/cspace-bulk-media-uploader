@@ -1,8 +1,9 @@
 <template>
   <div>
     <p id="drafts-description" class="mb-3 text-body-2 text-medium-emphasis">
-      Jobs saved but not submitted, including incomplete jobs and jobs with problems. Everyone signed in can see and
-      edit them, one person at a time; you can take over a draft someone else is editing. A draft that has never run is deleted
+      Jobs saved but not submitted, including incomplete jobs and jobs with problems. Everyone signed in can see
+      them. Staff can edit every draft, and interns the drafts that are open to interns, one person at a time; you can take over
+      a draft someone else is editing. A draft that has never run is deleted
       30 days after it was last changed or saved (7 days if it has protected files); a fix of a job that has run is reverted instead,
       and the job returns to Finished jobs. Checks are re-run against CollectionSpace each time this list is shown.
     </p>
@@ -114,6 +115,7 @@
           </td>
           <td>
             <div :id="`job-${job.id}-name`" class="font-weight-medium">{{ nameOf(job) }}</div>
+            <div :id="`job-${job.id}-access`" class="text-caption text-medium-emphasis">{{ accessOf(job) }}</div>
             <div class="text-caption text-medium-emphasis">created by {{ job.createdBy }}</div>
             <div v-if="job.fixFrom" :id="`job-${job.id}-fixing`" class="text-caption text-medium-emphasis">
               <v-icon :icon="mdiWrench" size="x-small" /> fixing after run {{ job.fixFrom.run }} ({{ job.fixFrom.status === 'Failed' ? 'failed' : 'needed attention' }})
@@ -171,6 +173,7 @@
               :edit-why="editWhy"
               :job="job"
               kind="drafts"
+              :staff="staff"
               @confirming="on => setConfirming(job.id, on)"
               @done="() => refresh()"
               @error="message => error = message"
@@ -212,14 +215,19 @@ import {api} from '@/api'
 
 /**
  * The Drafts page (design: Drafts, scheduling and the job queue): every draft in the tenant, which anyone can
- * preview and edit, one person at a time. Checks are re-run against CollectionSpace each time it is shown.
+ * preview. Staff edit any of them, and interns the ones that are open to interns (design: Roles), one person at a time. Checks are re-run against CollectionSpace each time it is shown.
  */
 defineProps({
-  // Why this user can't create or edit jobs (design: Permissions in the UI); '' when they can.
+  // Why this user can't change any draft; '' when they can (what an intern may do depends on the draft).
   editWhy: {
     default: '',
     required: false,
     type: String
+  },
+  // The signed-in user is BMU staff, not an intern (design: Roles).
+  staff: {
+    required: false,
+    type: Boolean
   },
   tenant: {
     required: true,
@@ -258,6 +266,8 @@ const setConfirming = (id: string, on: boolean) => {
 }
 
 const nameOf = (job: Job) => job.name || 'Untitled job'
+// Whether interns may edit the draft (design: Roles)
+const accessOf = (job: Job) => (job.internOpen ? 'Open to interns' : 'Staff only')
 const countsOf = (id: string): {block: number, warn: number} | null => {
   const c = checks.get(id)
   return c && c !== 'checking' ? c : null

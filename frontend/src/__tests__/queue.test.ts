@@ -39,13 +39,13 @@ function mockApi(schedule: Partial<Schedule> = {}, reply?: (url: string, method:
 // A job's rows: its line, its confirmation and its details share a tbody.
 const rowOf = (w: ReturnType<typeof mount>, name: string) => w.findAll('tbody').find((r) => r.text().includes(name))!
 const btn = (w: { findAll: ReturnType<typeof mount>['findAll'] }, text: string) => w.findAll('button').find((b) => b.text() === text)
-const scheduler = {tenant, user: 'admin', scheduler: true}
-const viewer = {tenant, user: 'vwong', scheduler: false}
+const staff = {tenant, user: 'admin', staff: true}
+const viewer = {tenant, user: 'vwong', staff: false}
 
 describe('Job queue (design: The job queue)', () => {
   it('shows the running job first with its progress, then queued jobs in order, with sign-in and check changes', async () => {
     mockApi()
-    const w = mount(QueueList, {props: scheduler})
+    const w = mount(QueueList, {props: staff})
     await flushPromises()
     const names = w.findAll('tr.job-row').map((r) => r.text())
     expect(names[0]).toContain('running one')
@@ -67,7 +67,7 @@ describe('Job queue (design: The job queue)', () => {
     let rows = [doc(1, 'In progress'), doc(2, null)]
     mockApi({}, (url) => (url.endsWith('/api/jobs') ? {status: 200, body: {jobs: [{...jobs[0], rowCount: 2, progress, currentFile: '1-0001.jpg'}]}}
       : url.endsWith('/api/jobs/r') ? {status: 200, body: {job: jobs[0], rows, runs: [], created: {}}} : undefined))
-    const w = mount(QueueList, {props: scheduler, global: {stubs: {DocumentThumbnail: true}}})
+    const w = mount(QueueList, {props: staff, global: {stubs: {DocumentThumbnail: true}}})
     await flushPromises()
     await w.find('#job-r-toggle-btn').trigger('click')
     await flushPromises()
@@ -91,7 +91,7 @@ describe('Job queue (design: The job queue)', () => {
 
   it('moves a queued job, asks before Edit and Cancel run', async () => {
     mockApi()
-    const w = mount(QueueList, {props: scheduler})
+    const w = mount(QueueList, {props: staff})
     await flushPromises()
     await rowOf(w, 'second queued').find('button[aria-label="Move second queued up"]').trigger('click')
     await flushPromises()
@@ -105,7 +105,7 @@ describe('Job queue (design: The job queue)', () => {
 
   it('sorting only changes the view: moving is off until the sort is cleared', async () => {
     mockApi()
-    const w = mount(QueueList, {props: scheduler})
+    const w = mount(QueueList, {props: staff})
     await flushPromises()
     await w.findAll('.sort-col-btn').find((b) => b.text().startsWith('Job'))!.trigger('click')
     const names = w.findAll('tr.job-row').map((r) => r.text())
@@ -119,7 +119,7 @@ describe('Job queue (design: The job queue)', () => {
 
   it('sorted by Order ascending is the queue order, so jobs can still be moved; descending turns moving off', async () => {
     mockApi()
-    const w = mount(QueueList, {props: scheduler})
+    const w = mount(QueueList, {props: staff})
     await flushPromises()
     const orderBtn = () => w.findAll('.sort-col-btn').find((b) => b.text().startsWith('Order'))!
     const up = () => rowOf(w, 'second queued').find('button[aria-label="Move second queued up"]')
@@ -147,7 +147,7 @@ describe('Job queue: jobs that collide (design: Jobs that collide in the queue)'
       }
       return url.endsWith('/api/queue/collisions') ? {status: 200, body: confirmed ? {...noPlan, problems: [problem]} : noPlan} : undefined
     })
-    const w = mount(QueueList, {props: scheduler})
+    const w = mount(QueueList, {props: staff})
     await flushPromises()
     await w.find('#job-q3-move-up-btn').trigger('click')
     await flushPromises()
@@ -177,7 +177,7 @@ describe('Job queue: jobs that collide (design: Jobs that collide in the queue)'
 
   it('Run now and Hold ask the same way, with their own button', async () => {
     mockApi({}, (url) => (url.endsWith('/run-now') || url.endsWith('/hold') ? wouldFail : undefined))
-    const w = mount(QueueList, {props: scheduler})
+    const w = mount(QueueList, {props: staff})
     await flushPromises()
     await btn(rowOf(w, 'second queued'), 'Run now')!.trigger('click')
     await flushPromises()
@@ -188,7 +188,7 @@ describe('Job queue: jobs that collide (design: Jobs that collide in the queue)'
     w.unmount()
   })
 
-  it('a scheduler reorders the queue to avoid failures, after seeing what will move', async () => {
+  it('a staff reorders the queue to avoid failures, after seeing what will move', async () => {
     let plan = {problems: [problem], order: ['q1', 'q2', 'q3'], moves: ['“second queued” ahead of “third queued”'], remaining: [] as string[], changes: true}
     mockApi({}, (url, method) => {
       if (url.endsWith('/api/queue/reorder-to-avoid-failures') && method === 'POST') {
@@ -197,7 +197,7 @@ describe('Job queue: jobs that collide (design: Jobs that collide in the queue)'
       }
       return url.endsWith('/api/queue/collisions') ? {status: 200, body: plan} : undefined
     })
-    const w = mount(QueueList, {props: scheduler})
+    const w = mount(QueueList, {props: staff})
     await flushPromises()
     expect(w.find('#queue-collisions').exists()).toBe(true)
     await w.find('#queue-reorder-btn').trigger('click')
@@ -211,7 +211,7 @@ describe('Job queue: jobs that collide (design: Jobs that collide in the queue)'
     w.unmount()
   })
 
-  it('someone who isn\'t a scheduler sees what would fail, without the button; and what a reorder can\'t fix is explained', async () => {
+  it('someone who isn\'t a staff sees what would fail, without the button; and what a reorder can\'t fix is explained', async () => {
     const remaining = ['“20-0501.jpg” in “second queued”: “third queued” would create object 20-0501 first (“third queued” has Run now, so it runs first whatever its place; undo Run now to change that).']
     mockApi({}, (url) => (url.endsWith('/api/queue/collisions')
       ? {status: 200, body: {problems: [problem], order: [], moves: [], remaining, changes: false}} : undefined))
@@ -222,12 +222,12 @@ describe('Job queue: jobs that collide (design: Jobs that collide in the queue)'
     expect(w.find('#queue-collisions-remaining').text()).toContain('Reordering the queue can’t fix this:')
     expect(w.find('#queue-collisions-remaining').text()).toContain('has Run now')
     w.unmount()
-    // a reorder would help, but only a scheduler can do it
+    // a reorder would help, but only a staff can do it
     mockApi({}, (url) => (url.endsWith('/api/queue/collisions')
       ? {status: 200, body: {problems: [problem], order: [], moves: ['“a” ahead of “b”'], remaining: [], changes: true}} : undefined))
     const v = mount(QueueList, {props: viewer})
     await flushPromises()
-    expect(v.find('#queue-reorder-why').text()).toBe('A BMU scheduler can reorder the queue to avoid this.')
+    expect(v.find('#queue-reorder-why').text()).toBe('A staff member can reorder the queue to avoid this.')
     v.unmount()
   })
 
@@ -259,7 +259,7 @@ describe('Job queue: sorting by Status (design: User interface, every table is s
 
   it('the Status heading sorts Running, then queued jobs waiting their turn, then paused, then held; again to reverse, then queue order', async () => {
     mockApi({}, (url) => (url.endsWith('/api/jobs') ? {status: 200, body: {jobs: list}} : undefined))
-    const w = mount(QueueList, {props: scheduler})
+    const w = mount(QueueList, {props: staff})
     await flushPromises()
     expect(order(w)).toEqual(['running one', 'job a', 'job h', 'job b', 'job p'])
     const status = () => w.findAll('.sort-col-btn').find((b) => b.text().startsWith('Status'))!
@@ -292,33 +292,34 @@ describe('Job queue: scheduling (design: Job scheduling; UI mockup scheduleBanne
     w.unmount()
   })
 
-  it('a non-scheduler can\'t change the schedule, the order or a job\'s run time, nor cancel another\'s run', async () => {
+  it('an intern can\'t change the schedule, the order or a job\'s run time, nor cancel another\'s run', async () => {
     mockApi()
     const w = mount(QueueList, {props: viewer})
     await flushPromises()
-    expect(w.text()).toContain('Only BMU schedulers can change the schedule or the order of the queue.')
+    expect(w.text()).toContain('Only staff can change the schedule or the order of the queue.')
     for (const t of ['Schedule settings…', 'Pause queue…', 'Run now', 'Undo Run now', 'Set run time…', 'Hold', 'Release']) expect(btn(w, t)).toBeUndefined()
     expect(w.find('.order-btns').exists()).toBe(false)
     expect(rowOf(w, 'second queued').find('tr.job-row').attributes('draggable')).toBe('false')
     const cancel = btn(rowOf(w, 'running one'), 'Cancel run')!
     expect(cancel.attributes('disabled')).toBeDefined()
-    expect(cancel.attributes('title')).toBe('Only a BMU scheduler or the person who submitted the job can cancel its run.')
+    expect(cancel.attributes('title')).toBe('Only staff can cancel a run.')
     w.unmount()
   })
 
-  it('the submitter may cancel their own run without the role', async () => {
+  it('an intern cannot cancel a run, even one they prepared', async () => {
     mockApi()
-    const w = mount(QueueList, {props: {tenant, user: 'admin', scheduler: false}})
+    const w = mount(QueueList, {props: {tenant, user: 'admin', staff: false}})
     await flushPromises()
-    expect(btn(rowOf(w, 'running one'), 'Cancel run')!.attributes('disabled')).toBeUndefined()
+    expect(btn(rowOf(w, 'running one'), 'Cancel run')!.attributes('disabled')).toBeDefined()
+    expect(btn(rowOf(w, 'running one'), 'Cancel run')!.attributes('title')).toBe('Only staff can cancel a run.')
     w.unmount()
   })
 
   it('shows the paused banner and the development setting', async () => {
     mockApi({paused: {by: 'jlee', at: now - 600, reason: 'CollectionSpace upgrade'}, alwaysRunTime: true})
-    const w = mount(QueueList, {props: scheduler})
+    const w = mount(QueueList, {props: staff})
     await flushPromises()
-    expect(w.find('#queue-paused').text()).toMatch(/^The queue is paused by jlee since .+: CollectionSpace upgrade\. No job starts until a BMU scheduler resumes it\.$/)
+    expect(w.find('#queue-paused').text()).toMatch(/^The queue is paused by jlee since .+: CollectionSpace upgrade\. No job starts until a staff member resumes it\.$/)
     expect(w.text()).toContain('Development setting: every moment counts as run time.')
     expect(btn(w, 'Pause queue…')).toBeUndefined()
     await btn(w, 'Resume queue')!.trigger('click')
@@ -328,10 +329,10 @@ describe('Job queue: scheduling (design: Job scheduling; UI mockup scheduleBanne
     w.unmount()
   })
 
-  it('a scheduler edits the schedule; the server\'s 422 message shows in the panel', async () => {
+  it('a staff edits the schedule; the server\'s 422 message shows in the panel', async () => {
     mockApi({}, (url, method) => (url.endsWith('/api/schedule') && method === 'PUT'
       ? {status: 422, body: {detail: 'Run days can\'t be more than 3 days apart.'}} : undefined))
-    const w = mount(QueueList, {props: scheduler})
+    const w = mount(QueueList, {props: staff})
     await flushPromises()
     await btn(w, 'Schedule settings…')!.trigger('click')
     const panel = () => w.find('#schedule-settings-panel')
@@ -350,10 +351,10 @@ describe('Job queue: scheduling (design: Job scheduling; UI mockup scheduleBanne
     w.unmount()
   })
 
-  it('a scheduler saves a schedule and sees it summarised', async () => {
+  it('a staff saves a schedule and sees it summarised', async () => {
     mockApi({}, (url, method) => (url.endsWith('/api/schedule') && method === 'PUT'
       ? {status: 200, body: {...baseSchedule, days: [1, 2, 3, 4, 5], end: '06:00'}} : undefined))
-    const w = mount(QueueList, {props: scheduler})
+    const w = mount(QueueList, {props: staff})
     await flushPromises()
     await btn(w, 'Schedule settings…')!.trigger('click')
     await btn(w.find('#schedule-settings-panel'), 'Save')!.trigger('click')
@@ -364,7 +365,7 @@ describe('Job queue: scheduling (design: Job scheduling; UI mockup scheduleBanne
 
   it('pausing needs a reason', async () => {
     mockApi()
-    const w = mount(QueueList, {props: scheduler})
+    const w = mount(QueueList, {props: staff})
     await flushPromises()
     await btn(w, 'Pause queue…')!.trigger('click')
     await btn(w.find('#pause-queue-panel'), 'Pause')!.trigger('click')
@@ -380,7 +381,7 @@ describe('Job queue: scheduling (design: Job scheduling; UI mockup scheduleBanne
   it('per-job controls: Run now / Undo, Hold / Release, Set run time… in Pacific time', async () => {
     mockApi({}, (url) => (url.endsWith('/q2/run-at') && calls.filter((c) => c.url.endsWith('/run-at')).length > 1
       ? {status: 422, body: {detail: 'The latest run time is when the job\'s saved sign-in expires.'}} : undefined))
-    const w = mount(QueueList, {props: scheduler})
+    const w = mount(QueueList, {props: staff})
     await flushPromises()
     await btn(rowOf(w, 'first queued'), 'Undo Run now')!.trigger('click')
     await flushPromises()

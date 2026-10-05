@@ -91,8 +91,12 @@ class UploadSpeed(BaseModel):
     mbps: float = Field(ge=0, le=1000)
 
 
+class SignInAs(BaseModel):
+    user: str = Field(min_length=1, max_length=200)
+
+
 def register(app: FastAPI) -> None:
-    from .app import FIXABLE, Services, Session, _delete_job, current_session, svc
+    from .app import FIXABLE, Services, Session, _delete_job, _sign_in, current_session, svc
 
     def demo_on(s: Services = Depends(svc)) -> Services:
         if not s.settings.demo:
@@ -119,8 +123,13 @@ def register(app: FastAPI) -> None:
             sim, sim_error = sim_call(s, "GET", "/_fake/settings"), ""
         except HTTPException as e:
             sim, sim_error = None, e.detail
+        try:  # the simulator's users, for "Sign in as"; never their passwords
+            users = [{"user": u["user"], "about": u.get("about", "")} for u in sim_call(s, "GET", "/_fake/users")]
+        except HTTPException:
+            users = []
         return {"browserUploadMbps": s.demo.browser_upload_mbps, "cspaceUrl": s.settings.cspace_url,
-                "alwaysRunTime": s.settings.always_run_time, "sim": sim, "simError": sim_error}
+                "alwaysRunTime": s.settings.always_run_time, "sim": sim, "simError": sim_error,
+                "user": sess.user, "role": sess.role, "users": users}
 
     @app.post("/api/_demo/browser-upload")
     def browser_upload(body: UploadSpeed, sess: Session = Depends(current_session), s: Services = Depends(demo_on)):
@@ -143,6 +152,20 @@ def register(app: FastAPI) -> None:
     def sim_objects(sess: Session = Depends(current_session), s: Services = Depends(demo_on)):
         """The simulator's sample Object records: which object numbers exist, and which are sensitive."""
         return {"objects": sim_call(s, "GET", "/_fake/objects")}
+
+    @app.post("/api/_demo/sign-in-as")
+    def sign_in_as(body: SignInAs, response: Response, sess: Session = Depends(current_session), s: Services = Depends(demo_on)):
+        """Sign in as one of the simulated CollectionSpace's users, to try the BMU as staff or as an intern without
+        typing. Only with the simulator, which is where the users and their passwords come from: a real server has
+        no such list, so this answers 502 there. The sign-in itself is the ordinary one, so an account the BMU
+        doesn't let in is refused with the usual message, and whoever is signed in stays signed in."""
+        known = {u["user"]: u["password"] for u in sim_call(s, "GET", "/_fake/users")}
+        if body.user not in known:
+            raise HTTPException(404, f"The simulator has no user “{body.user}”.")
+        me = _sign_in(s, response, body.user, known[body.user])  # raises before anything changes if refused
+        s.storage.end_session(sess.key, sess.tenant)  # the session this replaces, with its hold on any draft
+        log.info("demo: %s signed in as %s (%s)", sess.user, body.user, me["role"])
+        return me
 
     @app.post("/api/_demo/delete-all-jobs")
     def delete_all_jobs(sess: Session = Depends(current_session), s: Services = Depends(demo_on)):

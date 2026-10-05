@@ -13,14 +13,14 @@
         <div id="tenant-name" class="font-weight-bold mr-3">{{ currentUser.tenant.name }}</div>
         <EnvironmentChip class="mr-3" />
         <v-chip
-          v-if="editWhy"
-          id="view-only"
+          v-if="currentUser.role === 'intern'"
+          id="user-role"
           color="warning"
           size="small"
-          :title="editWhy"
+          title="You can create drafts and edit the drafts that are open to interns. Everything else is view-only."
           variant="flat"
         >
-          View only: your account can't create and update Media records
+          Intern
         </v-chip>
         <v-spacer />
         <v-menu>
@@ -64,7 +64,12 @@
           Prototype · creates Media records, files, Objects and Relations in CollectionSpace using your own account.
         </p>
         <!-- Demo tools: only in demo builds (lib/demo.ts). In a production build its code isn't in the bundle. -->
-        <component :is="DemoPane" v-if="DemoPane" @jobs-deleted="session.jobsDeleted" />
+        <component
+          :is="DemoPane"
+          v-if="DemoPane"
+          @jobs-deleted="session.jobsDeleted"
+          @user-changed="startAgain"
+        />
         <v-alert
           v-if="session.notice"
           id="notice"
@@ -95,11 +100,10 @@
               {{ tab.title }}
             </v-tab>
           </v-tabs>
-          <span id="new-job" :title="editWhy">
+          <span id="new-job">
             <v-btn
               id="btn-new-job"
               color="primary"
-              :disabled="!!editWhy"
               :prepend-icon="mdiPlus"
               @click="session.newJob"
             >
@@ -128,7 +132,6 @@ import type {Me} from '@/types'
 import EnvironmentChip from '@/components/util/EnvironmentChip.vue'
 import Snackbar from '@/components/util/Snackbar.vue'
 import {alertScreenReader, putFocusNextTick, rememberDarkMode} from '@/lib/utils'
-import {editBlocked} from '@/lib/status'
 import {logOut} from '@/api/auth'
 import {useContextStore} from '@/stores/context'
 import {useJobEditSessionStore} from '@/stores/job-edit-session'
@@ -150,8 +153,9 @@ const tabs = computed(() => [
   {id: 'finished', title: 'Finished jobs', path: '/finished'}
 ])
 
-// Without create and update on Media the user can view jobs but not create or edit them (design: Permissions in the UI).
-const editWhy = computed(() => editBlocked(currentUser.perms))
+
+// Demo tools signed in as another user: load the app afresh, so nothing of the previous user's stays on the page.
+const startAgain = () => window.location.assign(router.resolve('/').href)
 
 const signOut = () => {
   logOut().catch(() => undefined).then(() => {

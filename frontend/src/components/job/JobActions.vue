@@ -65,12 +65,12 @@
         Preview
       </v-btn>
       <template v-if="kind === 'drafts'">
-        <span v-if="lockedByOther" :title="noEdit || `${job.editingBy} is editing this draft`">
+        <span v-if="lockedByOther" :title="noTakeOver || `${job.editingBy} is editing this draft`">
           <v-btn
             :id="`job-${job.id}-take-over-btn`"
-            :disabled="!!noEdit || !!confirming"
+            :disabled="!!noTakeOver || !!confirming"
             size="small"
-            :title="noEdit || `${job.editingBy} is editing this draft`"
+            :title="noTakeOver || `${job.editingBy} is editing this draft`"
             variant="outlined"
             @click="confirming = 'takeover'"
           >
@@ -139,6 +139,7 @@ import {mdiTrashCanOutline} from '@mdi/js'
 import type {Created, Job} from '@/types'
 import DeleteJobConfirm from '@/components/job/DeleteJobConfirm.vue'
 import {formatTime} from '@/lib/files'
+import {draftBlocked, draftDeleteBlocked, takeOverBlocked} from '@/lib/roles'
 import {NO_CANCEL_WHY, canCancelRun} from '@/lib/schedule'
 import {api} from '@/api'
 
@@ -155,7 +156,7 @@ const props = defineProps({
     required: false,
     type: Object as PropType<HTMLElement>
   },
-  // Why this user can't create or edit jobs (design: Permissions in the UI); '' when they can.
+  // Why this user can't change the jobs of this list at all (an intern, in the Job queue); '' when they can.
   editWhy: {
     default: '',
     required: false,
@@ -173,8 +174,8 @@ const props = defineProps({
     required: true,
     type: String as PropType<'drafts' | 'queue'>
   },
-  // Cancel run is only for BMU schedulers and whoever submitted the job (design: Job scheduling).
-  scheduler: {
+  // The signed-in user is BMU staff, not an intern: what an intern may do depends on the draft (design: Roles).
+  staff: {
     required: false,
     type: Boolean
   },
@@ -203,13 +204,16 @@ const isBusy = ref(false)
 watch(confirming, now => emit('confirming', !!now))
 const isRunning = computed(() => props.job.status === 'Running')
 const lockedByOther = computed(() => props.job.status === 'Draft' && !!props.job.editingBy && !props.job.editingByYou)
-const noEdit = computed(() => props.editWhy ?? '')
-const noCancel = computed(() => (canCancelRun(props.job, {user: props.user, scheduler: props.scheduler}) ? '' : NO_CANCEL_WHY))
+const isDraft = computed(() => props.kind === 'drafts')
+const noEdit = computed(() => props.editWhy || (isDraft.value ? draftBlocked(props.job, props.staff) : ''))
+const noTakeOver = computed(() => props.editWhy || takeOverBlocked(props.job, props.staff))
+const noCancel = computed(() => (canCancelRun({staff: props.staff}) ? '' : NO_CANCEL_WHY))
 const deleteWhy = computed(() => {
   if (props.kind === 'queue' && isRunning.value) {
     return 'A running job can\'t be deleted'
   }
-  return noEdit.value || (lockedByOther.value ? `${props.job.editingBy} is editing this draft` : '')
+  return noEdit.value || (isDraft.value ? draftDeleteBlocked(props.job, props.staff) : '')
+    || (lockedByOther.value ? `${props.job.editingBy} is editing this draft` : '')
 })
 const deleteTitle = computed(() => deleteWhy.value || 'Delete job')
 

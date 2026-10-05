@@ -211,11 +211,11 @@ class Storage:
         self.sessions.update_item(Key={"PK": key}, UpdateExpression="SET perms = :p",
                                   ExpressionAttributeValues={":p": perms}, ConditionExpression="attribute_exists(PK)")
 
-    def update_session_scheduler(self, key: str, scheduler: bool) -> None:
-        """The session's scheduler flag, after the roles were read again (design: Job scheduling)."""
+    def update_session_role(self, key: str, role: str) -> None:
+        """The session's BMU role, after the roles were read again (design: Roles)."""
         try:
-            self.sessions.update_item(Key={"PK": key}, UpdateExpression="SET scheduler = :s",
-                                      ExpressionAttributeValues={":s": scheduler}, ConditionExpression="attribute_exists(PK)")
+            self.sessions.update_item(Key={"PK": key}, UpdateExpression="SET #r = :r", ExpressionAttributeNames={"#r": "role"},
+                                      ExpressionAttributeValues={":r": role}, ConditionExpression="attribute_exists(PK)")
         except ClientError as e:
             if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
                 raise
@@ -232,14 +232,17 @@ class Storage:
         self.sessions.delete_item(Key={"PK": key})
 
     # ---- jobs and rows ------------------------------------------------------------------
-    def create_job(self, tenant: str, user: str, name: str, session: str = "", draft_days: int = 30) -> dict:
-        """A new job is a draft, open for editing by the session that created it."""
+    def create_job(self, tenant: str, user: str, name: str, session: str = "", draft_days: int = 30,
+                   role: str = "staff") -> dict:
+        """A new job is a draft, open for editing by the session that created it. It keeps who created it and
+        their BMU role then, and starts open to interns only if an intern created it (design: Roles)."""
         t = now()
         job = {"id": uuid.uuid4().hex[:12], "tenant": tenant, "name": name, "status": "Draft",
-               "createdBy": user, "created": t, "updated": t, "rowCount": 0, "nextRow": 1, "run": 0,
+               "createdBy": user, "createdByRole": role, "internOpen": role == "intern",
+               "created": t, "updated": t, "rowCount": 0, "nextRow": 1, "run": 0,
                "lastSavedBy": user, "lastSavedAt": t, "expiresAt": t + draft_days * 86400}
         if session:
-            job.update(editingBy=user, editingSession=session, editingSince=t)
+            job.update(editingBy=user, editingSession=session, editingSince=t, editingRole=role)
         self.jobs.put_item(Item=_dyn({"PK": f"JOB#{job['id']}", "SK": "META", **job}))
         return job
 
@@ -258,17 +261,19 @@ class Storage:
             kw["ExclusiveStartKey"] = r["LastEvaluatedKey"]
 
     # ---- drafts: one editor at a time (design: Drafts, scheduling and the job queue) ------------
-    def open_draft(self, job_id: str, user: str, session: str, take_over_since: float | None = None) -> bool:
+    def open_draft(self, job_id: str, user: str, session: str, take_over_since: float | None = None,
+                   role: str = "staff") -> bool:
         """Become the draft's editor: if nobody is editing it, if this session already is, or (take-over) if
-        the editor is still the one the user was warned about (same editingSince)."""
+        the editor is still the one the user was warned about (same editingSince). The editor's BMU role is kept
+        beside their name, to tell whether an intern may take the draft over (design: Roles)."""
         cond = Attr("status").eq("Draft") & (Attr("editingSession").not_exists() | Attr("editingSession").eq(session))
         if take_over_since is not None:
             cond = Attr("status").eq("Draft") & (cond | Attr("editingSince").eq(_dyn(take_over_since)))
         try:
             self.jobs.update_item(
                 Key={"PK": f"JOB#{job_id}", "SK": "META"}, ConditionExpression=cond,
-                UpdateExpression="SET editingBy = :u, editingSession = :s, editingSince = :t",
-                ExpressionAttributeValues=_dyn({":u": user, ":s": session, ":t": now()}))
+                UpdateExpression="SET editingBy = :u, editingSession = :s, editingSince = :t, editingRole = :r",
+                ExpressionAttributeValues=_dyn({":u": user, ":s": session, ":t": now(), ":r": role}))
             return True
         except ClientError as e:
             if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
@@ -603,7 +608,7 @@ class Storage:
         return self._transact([update, delete])
 
     def claim_job(self, job_id: str, fields: dict) -> bool:
-        """The worker claims a queued job, only if it is still Queued and not held (a scheduler may have held it
+        """The worker claims a queued job, only if it is still Queued and not held (a staff member may have held it
         since the worker chose it; design: Job scheduling), and its sign-in is still stored and valid."""
         check = {"ConditionCheck": {"TableName": self.credentials.name, "Key": _dyn({"PK": f"JOB#{job_id}"}),
                                     "ConditionExpression": "attribute_exists(PK) AND #e > :now",

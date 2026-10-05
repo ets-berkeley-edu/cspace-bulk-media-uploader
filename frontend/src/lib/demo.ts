@@ -28,6 +28,11 @@ export interface DemoStatus {
   alwaysRunTime: boolean;
   sim: SimSettings | null;
   simError: string;
+  /** Who is signed in, and their BMU role. */
+  user: string;
+  role: 'staff' | 'intern';
+  /** The simulator's users, for "Sign in as" (empty against a real CollectionSpace). */
+  users: { user: string; about: string }[];
 }
 
 export const demoApi = {
@@ -36,6 +41,8 @@ export const demoApi = {
   sim: (action: string, params: Record<string, unknown> = {}) => request<SimSettings>('POST', `/api/_demo/sim/${action}`, {params}),
   objects: () => request<{ objects: { objectNumber: string; note: string; deleted: boolean; sensitivity?: unknown }[] }>('GET', '/api/_demo/sim/objects'),
   deleteAllJobs: () => request<{ deleted: number; skipped: string[] }>('POST', '/api/_demo/delete-all-jobs'),
+  /** Sign in as one of the simulator's users; whoever was signed in is signed out. Refused accounts say why. */
+  signInAs: (user: string) => request<{ user: string; role: 'staff' | 'intern' }>('POST', '/api/_demo/sign-in-as', {user}),
   /** Every job, draft, file and audit entry deleted; the schedule, the simulator and the upload speeds back to the start. */
   resetEverything: () => request<{ items: number; objects: number }>('POST', '/api/_demo/reset-everything'),
 }
@@ -77,7 +84,7 @@ export const COMMANDS: { title: string; note: string; lines: string }[] = [
       'cd backend',
       'export CSPACE_URL=https://pahma.qa.collectionspace.org CSPACE_USER=<your QA username>',
       'read -rs CSPACE_PASSWORD && export CSPACE_PASSWORD',
-      'PYTHONPATH=. python ../scripts/check_cspace.py --roles          # your roles; are you a BMU scheduler?',
+      'PYTHONPATH=. python ../scripts/check_cspace.py --roles          # your roles; your BMU role, and what a staff account lacks',
       'PYTHONPATH=. python ../scripts/check_cspace.py --vocabularies   # the Person and Organization vocabularies',
       'PYTHONPATH=. python ../scripts/check_cspace.py --terms <refName or person:shortId>   # read terms as the BMU\'s check does',
       'PYTHONPATH=. python ../scripts/check_cspace.py --object <object number> --term <text>  # object lookup and term search',
@@ -110,7 +117,7 @@ export const COMMANDS: { title: string; note: string; lines: string }[] = [
   {
     title: 'Run a job at once, without waiting for a run time',
     note: 'BMU_ALWAYS_RUN_TIME=true (web app and worker) makes every moment a run time, so a submitted job starts at the next worker poll. '
-      + 'Development only. Otherwise use Run now in the Job queue (BMU schedulers).',
+      + 'Development only. Otherwise use Run now in the Job queue (staff).',
     lines: 'BMU_ALWAYS_RUN_TIME=true docker compose up',
   },
 ]

@@ -7,7 +7,7 @@
       :edit-why="editWhy"
       from="queue"
       :job-id="session.previewing.queue"
-      :scheduler="!!currentUser.scheduler"
+      :staff="currentUser.role === 'staff'"
       :tenant="currentUser.tenant"
       :user="currentUser.user"
       @back="session.previewing.queue = null"
@@ -16,7 +16,7 @@
     <QueueList
       v-else
       :edit-why="editWhy"
-      :scheduler="!!currentUser.scheduler"
+      :staff="currentUser.role === 'staff'"
       :user="currentUser.user"
       :tenant="currentUser.tenant"
       @open="openJob"
@@ -29,13 +29,14 @@ import {onMounted} from 'vue'
 import type {Me} from '@/types'
 import QueueList from '@/components/job/QueueList.vue'
 import JobPreview from '@/components/job/JobPreview.vue'
-import {editBlocked} from '@/lib/status'
+import {staffOnly} from '@/lib/roles'
 import {useContextStore} from '@/stores/context'
 import {useJobEditSessionStore} from '@/stores/job-edit-session'
 
 const contextStore = useContextStore()
 const currentUser = contextStore.currentUser as Me
-const editWhy = editBlocked(currentUser.perms)
+// Only staff change a submitted job (design: Roles).
+const editWhy = staffOnly(currentUser)
 const session = useJobEditSessionStore()
 
 onMounted(() => contextStore.loadingComplete('Job queue'))

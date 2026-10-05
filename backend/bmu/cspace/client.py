@@ -78,6 +78,11 @@ class Permissions:
     def can(self, resource: str, action: str) -> bool:
         return action in self.resources.get(resource, set())
 
+    def missing(self, required: dict[str, str]) -> list[tuple[str, str]]:
+        """The (resource, action letter) pairs of `required` (resource -> letters, e.g. {"media": "CRU"}) that
+        this account lacks, in the order given."""
+        return [(res, a) for res, letters in required.items() for a in letters if not self.can(res, a)]
+
     @property
     def summary(self) -> dict[str, bool]:
         return {

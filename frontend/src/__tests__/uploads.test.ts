@@ -66,7 +66,7 @@ function stub(rows: Row[] = [], formReply?: (n: number) => Promise<unknown>) {
   return calls
 }
 const editor = async (me: Partial<Me> = {}) => {
-  const w = mount(JobEditor, {props: {me: {user: 'admin', tenant, perms, scheduler: false, ...me}, jobId: 'j1'}, global: {stubs: {DocumentThumbnail: true}}})
+  const w = mount(JobEditor, {props: {me: {user: 'admin', tenant, perms, role: 'staff', ...me}, jobId: 'j1'}, global: {stubs: {DocumentThumbnail: true}}})
   await flushPromises()
   return w
 }

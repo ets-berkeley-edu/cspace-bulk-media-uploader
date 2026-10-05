@@ -71,7 +71,7 @@ export const api = {
     request<{ rows: Row[]; counts: { block: number; warn: number } }>('POST', `/api/jobs/${id}/check`, rows ? {rows} : {}),
   /** Submit job: check the whole job again and add it to the queue; the job comes back with its plan. */
   schedule: (id: string) => request<Job>('POST', `/api/jobs/${id}/schedule`),
-  /** Job scheduling (design: Job scheduling): the tenant's run times, pause, and per-job run controls (schedulers). */
+  /** Job scheduling (design: Job scheduling): the tenant's run times, pause, and per-job run controls (staff). */
   getSchedule: (poll = false) => request<Schedule>('GET', '/api/schedule', undefined, poll),
   putSchedule: (s: { days: number[]; start: string; end: string }) => request<Schedule>('PUT', '/api/schedule', s),
   pauseQueue: (reason: string) => request<Schedule>('POST', '/api/schedule/pause', {reason}),
@@ -81,7 +81,7 @@ export const api = {
   hold: (id: string, on: boolean, confirm = false) => request<{ job: Job }>('POST', `/api/jobs/${id}/hold`, {on, confirm}),
   /** The documents that would fail because of a job ahead of theirs, and how a reorder would avoid it. */
   queueCollisions: (poll = false) => request<QueuePlan>('GET', '/api/queue/collisions', undefined, poll),
-  /** Reorder to avoid failures (BMU schedulers): applies queueCollisions' plan; answers the plan afterwards. */
+  /** Reorder to avoid failures (staff): applies queueCollisions' plan; answers the plan afterwards. */
   reorderToAvoidFailures: () => request<QueuePlan>('POST', '/api/queue/reorder-to-avoid-failures'),
   /** CollectionSpace's date parser (structureddates), for the preview under the Date field. */
   parseDate: (text: string) =>

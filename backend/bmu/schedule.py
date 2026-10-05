@@ -3,7 +3,7 @@
 Each tenant has one schedule: run days (ISO weekday numbers, 1 = Monday … 7 = Sunday), a start time and an
 optional end time ("don't start new jobs after"), in Pacific time, and a pause. A queued job without a run time
 of its own starts at the first scheduled start after it was submitted, and not after that start's run window
-ends; a scheduler can also run a job now, give it its own run time, or hold it.
+ends; staff can also run a job now, give it its own run time, or hold it.
 
 Every start is computed as a local wall-clock time on its day (zoneinfo), so the run time stays 7:00 PM across
 the changes to and from daylight saving time. A start that falls in the spring-forward gap (e.g. 2:30 AM) runs

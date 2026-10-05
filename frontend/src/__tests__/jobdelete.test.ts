@@ -13,7 +13,7 @@ const del = (w: ReturnType<typeof mount>) => w.find('button.job-del')
 describe('a job\'s Delete button', () => {
   it('is the trash icon, labelled for screen readers, with a tooltip', () => {
     for (const [j, kind] of [[job(), 'drafts'], [job({status: 'Queued'}), 'queue']] as const) {
-      const b = del(mount(JobActions, {props: {job: j, kind}}))
+      const b = del(mount(JobActions, {props: {job: j, kind, staff: true}}))
       expect(b.find('svg').exists()).toBe(true)
       expect(b.text()).toBe('')
       expect(b.attributes('aria-label')).toBe('Delete')
@@ -24,13 +24,13 @@ describe('a job\'s Delete button', () => {
   })
 
   it('keeps the reason as its tooltip when it can\'t be used', () => {
-    const b = del(mount(JobActions, {props: {job: job({status: 'Running'}), kind: 'queue'}}))
+    const b = del(mount(JobActions, {props: {job: job({status: 'Running'}), kind: 'queue', staff: true}}))
     expect(b.attributes('disabled')).toBeDefined()
     expect(b.attributes('title')).toBe('A running job can\'t be deleted')
   })
 
   it('opens the in-row confirmation when clicked', async () => {
-    const w = mount(JobActions, {props: {job: job(), kind: 'drafts'}})
+    const w = mount(JobActions, {props: {job: job(), kind: 'drafts', staff: true}})
     await del(w).trigger('click')
     expect(w.text()).toContain('Delete this draft?')
   })
