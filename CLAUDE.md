@@ -125,6 +125,18 @@ Built like the team's other apps (BOA, Damien, Diablo); `README.md`, Frontend, h
   sign-in to a finished run.
 - Frontend: Vitest with `@vue/test-utils`. Find a job with `#job-<id>`, a job's line with `tr.job-row`.
 
+## License
+
+Copyright ©2026 The Regents of the University of California. `LICENSE` is the same license as UC Berkeley RTL's
+other applications (BOA, Damien, Diablo): free to use, copy, modify and distribute for educational, research and
+not-for-profit purposes; commercial use needs a license from UC Berkeley's Office of Technology Licensing.
+
+- Don't change `LICENSE`'s text. The README's License section, `"license"` in `frontend/package.json` and `license`
+  in `backend/pyproject.toml` all refer to it; keep them in step if it ever changes.
+- Source files carry no license header; don't add one.
+- Don't copy code into the repo from a source whose license is incompatible (GPL and the like). A new package must
+  have a permissive license (MIT, BSD, Apache 2.0, ISC or similar).
+
 ## Documents kept in step with the code
 
 - **UI mockup** — `docs/mockup/bmu-mockup.html` (plain HTML; the same layout and functions as the prototype, not
