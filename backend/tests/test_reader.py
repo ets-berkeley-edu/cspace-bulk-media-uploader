@@ -49,8 +49,8 @@ def test_with_the_reader_account_an_interns_documents_are_really_checked(service
     assert exists == ["A Media record with ID 15-1234 already exists in CollectionSpace."]
     assert "CSID" not in json.dumps(found) and not any(found["lookups"]["media"]["csids"])
     assert "(CSID " in json.dumps(services.storage.get_row(job, found["n"])["checks"])  # staff still get it
-    # the permission checks on the intern's own account are still there until they are skipped for interns (part 4)
-    assert any("can't create relations" in t for t in _blocks(found))
+    # nothing is held against the intern's own account: the intern acts for whoever submits (design: Roles)
+    assert _blocks(found) == []
     # the lookups were the reader account's, not the intern's
     assert {c["user"] for c in fake.calls if "collectionobjects" in c["path"]} == {"bmureader"}
 

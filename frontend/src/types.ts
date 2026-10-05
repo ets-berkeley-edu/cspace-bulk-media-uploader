@@ -96,7 +96,19 @@ export interface JobPlan {
   signInExpiresFirst: boolean;
 }
 
-export type CheckLevel = 'block' | 'warn' | 'info';
+export type CheckLevel = 'block' | 'creator' | 'warn' | 'info';
+/**
+ * A job's checks, counted (design: Roles, Three kinds of result). creator: documents this user can't submit because
+ * they need a new Object. newObjects: documents that will create one, whoever looks. held: documents left out of a
+ * submit for that reason.
+ */
+export interface CheckCounts {
+  block: number;
+  warn: number;
+  creator?: number;
+  newObjects?: number;
+  held?: number;
+}
 export interface Check {
   level: CheckLevel;
   text: string;
@@ -204,6 +216,7 @@ export interface Row {
   softSignals?: string[]; // Object-level signals that only warn
   restrictedAuto?: boolean; // Restricted was turned on because the file is protected
   disabledBy?: string;
+  heldFor?: string; // 'creator': left out of a submit because it needs a new Object
   disabledAt?: number;
   skipLink?: boolean; // stop linking a Partial row's Media record to an object
   replacedFor?: number; // the run whose rejected or lost file this row's file replaces
@@ -263,7 +276,7 @@ export interface Job {
   expiresAt?: number;
   // the job queue (design: The job queue)
   queuePos?: number | null;
-  checksAtSchedule?: { block: number; warn: number };
+  checksAtSchedule?: CheckCounts;
   credentialExpires?: number;
   cancelRequested?: { by: string; at: number } | null;
   cancelledBy?: string;

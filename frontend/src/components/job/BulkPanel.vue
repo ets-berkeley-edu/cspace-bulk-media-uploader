@@ -45,7 +45,7 @@
               :title="handlingBlocked(h, perms)"
               :value="h.id"
             >
-              {{ h.label }}{{ handlingBlocked(h, perms) ? ' (no permission)' : '' }}
+              {{ h.label }}{{ handlingNote(h, perms) }}
             </option>
           </select>
           <span v-else class="text-caption text-medium-emphasis">Handling: {{ tenant.handling[0]?.label }} (only option)</span>
@@ -248,7 +248,7 @@ import type {Option, Perms, Row, TenantInfo} from '@/types'
 import AuthorityInput from '@/components/util/AuthorityInput.vue'
 import {applyAllTargets, bulkCheck, includeTargets} from '@/lib/bulk'
 import {createdSomething} from '@/lib/results'
-import {handlingBlocked} from '@/lib/status'
+import {handlingBlocked, handlingNote} from '@/lib/status'
 import {putFocusNextTick} from '@/lib/utils'
 
 /**

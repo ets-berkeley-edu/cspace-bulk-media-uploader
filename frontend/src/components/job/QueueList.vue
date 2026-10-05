@@ -598,7 +598,7 @@
 import type {PropType} from 'vue'
 import {computed, onBeforeUnmount, onMounted, reactive, ref} from 'vue'
 import {mdiAlert, mdiArrowDown, mdiArrowUp, mdiChevronRight, mdiDragVertical} from '@mdi/js'
-import type {Job, QueuePlan, QueueProblem, Row, Schedule, TenantInfo} from '@/types'
+import type {CheckCounts, Job, QueuePlan, QueueProblem, Row, Schedule, TenantInfo} from '@/types'
 import CurrentDocument from '@/components/job/CurrentDocument.vue'
 import JobActions from '@/components/job/JobActions.vue'
 import JobDetails from '@/components/job/JobDetails.vue'
@@ -656,7 +656,7 @@ const isReordering = ref(false)
 const pending = ref<{jobId: string, text: string, label: string, done: string, busy: boolean, run: (confirm: boolean) => Promise<unknown>} | null>(null)
 // The order and the settings that decide it, as last seen: when someone else changes them, the checks are run again
 let orderSeen = ''
-const checks = reactive(new Map<string, {block: number, warn: number}>())
+const checks = reactive(new Map<string, CheckCounts>())
 const error = ref('')
 const message = ref('')
 const dragId = ref<string | null>(null)

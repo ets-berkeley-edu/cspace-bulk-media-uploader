@@ -81,7 +81,8 @@ def test_no_object_found_offers_only_handlings_the_user_may_pick(api, login, add
     job = new_job(api)
     add_uploaded(job, ["20-0777_1.jpg"])
     text = next(c["text"] for c in api.post(f"/api/jobs/{job}/check").json()["rows"][0]["checks"] if c["level"] == "block")
-    assert text == "No object 20-0777 in CollectionSpace. Correct the object number, or choose “Media only (no object)”."
+    # creating handlings are offered too: the user prepares the document for someone who can create Objects
+    assert text.endswith("choose “Link to object (create if missing)” or “Create new object + link” or “Media only (no object)”.")
 
 
 def test_no_object_found_without_a_media_only_handling_offers_only_creating():
@@ -93,8 +94,8 @@ def test_no_object_found_without_a_media_only_handling_offers_only_creating():
     all_perms = {"objects": True, "relations": True}
     assert object_checks(t, "existing", "1-1", [], all_perms)[0]["text"].endswith(
         "choose “Link to object (create if missing)” or “Create new object + link”.")
-    assert object_checks(t, "existing", "1-1", [], {"relations": True})[0]["text"] == \
-        "No object 1-1 in CollectionSpace. Correct the object number."
+    assert object_checks(t, "existing", "1-1", [], {"relations": True})[0]["text"].endswith(
+        "choose “Link to object (create if missing)” or “Create new object + link”.")
 
 
 # ---- the job's Group: create on groups only while it doesn't exist -----------------------------------------
@@ -127,7 +128,7 @@ def test_a_partial_row_joining_the_group_needs_create_on_groups_only_before_it_e
     def texts(**kw):
         check_rows(t, [row], None, kw.pop("perms", perms), group_on=True, **kw)
         return [c["text"] for c in row["checks"] if c["level"] == "block"]
-    assert any("can't create groups" in x for x in texts())
+    assert texts() == []  # creating the job's Group is one message for the job, at Submit (test_groups.py)
     assert texts(group_exists=True) == []
     assert any("can't be added to the job's group" in x for x in texts(group_exists=True, perms={**perms, "relations": False}))
 

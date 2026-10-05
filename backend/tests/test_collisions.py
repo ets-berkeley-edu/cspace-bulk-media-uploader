@@ -84,7 +84,7 @@ def test_the_same_identification_number_in_an_earlier_job_is_a_warning(api, logi
                and "Both Media records would be created" in t for t in warns)
     assert api.post(f"/api/jobs/{second}/schedule").status_code == 200  # a warning doesn't stop Submit
     # the first job, which runs first, is told nothing
-    assert api.post(f"/api/jobs/{first}/check").json()["counts"] == {"block": 0, "warn": 0}
+    assert api.post(f"/api/jobs/{first}/check").json()["counts"] == {"block": 0, "warn": 0, "creator": 0, "newObjects": 1, "held": 0}
 
 
 def test_once_the_first_job_has_run_collectionspace_itself_says_the_object_exists(api, login, add_uploaded, worker):

@@ -539,6 +539,12 @@ class Worker:
         states = [((r.get("result") or {}).get("state") or "Not started") for r in work]
         if code in STOPPED_JOB:
             status = "Failed"
+        elif all(st == "Done" for st in states) and any(r.get("heldFor") for r in rows):
+            # Design (Roles, Three kinds of result): documents were left out because they need a new Object. The job
+            # stays where staff who can create Objects find it and can fix it; Completed jobs can't be reopened.
+            status, code = "NeedsAttention", "needs_object_creator"
+            n = sum(1 for r in rows if r.get("heldFor"))
+            code_detail = f"{n} document{'' if n == 1 else 's'} left out at Submit: a new Object is needed"
         elif all(st == "Done" for st in states):
             status = "Completed"
         else:
@@ -856,7 +862,7 @@ class Worker:
         if self._perms is None:
             return
         group_exists = (job.get("groupStep") or {}).get("s") == "done"
-        blocks = (permission_checks(self.tenant, row, self._perms, bool(job.get("groupOn")), group_exists)
+        blocks = (permission_checks(self.tenant, row, self._perms, bool(job.get("groupOn")), group_exists, run=True)
                   + authority_read_checks(row, self._perms))
         if not self._perms.get("media"):
             blocks.insert(0, {"level": "block", "text": "Your account can't create Media records (create on media)."})

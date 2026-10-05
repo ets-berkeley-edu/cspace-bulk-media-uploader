@@ -132,8 +132,27 @@ Open http://localhost:5173. With the simulated CollectionSpace, sign in as:
 **Interns' checks use a read-only account.** An intern's own account can read nothing, so the lookups an intern's
 draft needs are made with the simulator's `bmureader` account (it can't sign in to the BMU and isn't in the Demo
 tools' list). The intern is told whether an object was found and whether a file is protected, never why, and
-never a record's contents. Until the next pull request, an intern's documents still show "needs fixing" for the
-permissions the intern's own account lacks (updating Media, creating relations); staff don't see those.
+never a record's contents. Nothing is held against the intern's own account: an intern acts for the staff member
+who will submit the job.
+
+**Three kinds of result.** The BMU never presents a permission problem as a mistake in the job.
+
+| Kind | Example | How it is shown | Who resolves it |
+| --- | --- | --- | --- |
+| Problem with the job | Wrong object number, a duplicate identification number | **Needs fixing** on the document (red) | Whoever edits the draft |
+| Needs an Object creator | The document would create a new Object, and the signed-in user can't create Objects | Its own status on the document (purple), counted separately, and one line at the top of the job | A staff member who can create Objects, or a different handling |
+| Problem with your account | A staff member can't create groups, and the job has a group | One message beside the group; nothing on the documents; only Submit is stopped | The CollectionSpace administrator |
+
+- A user who can't create Objects can still choose "Create new object + link" (the list notes it), to prepare a
+  job for a colleague. They can't submit those documents. **Submit without the N documents that need a new
+  Object** submits the rest; the documents left out stay in the job, excluded and marked.
+- When that run ends with everything else done, the job is not Completed (a Completed job can't be reopened). It
+  waits under Finished jobs as "Waiting for someone who can create Objects". A colleague who can uses **Fix and
+  reschedule**, includes those documents again and submits.
+- The checks chip in Drafts counts them ("nothing to fix · 3 need an Object creator"). Someone who can create
+  Objects reads "3 new Objects" there instead.
+- Try it as `limited` (can't create objects or groups) with a file named for an object that doesn't exist, such as
+  `20-0990_1.jpg`, and the handling "Link to object (create if missing)".
 
 Submitted jobs wait for the run time (7:00 PM Pacific). To have them start at once while you try things, set
 `BMU_ALWAYS_RUN_TIME=true` in `.env` (or start with `BMU_ALWAYS_RUN_TIME=true docker compose up`); pause and hold

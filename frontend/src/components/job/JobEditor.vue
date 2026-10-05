@@ -104,6 +104,55 @@
       Something changed in CollectionSpace since this job was submitted: {{ counts.block }} document{{ counts.block === 1 ? ' now needs' : 's now need' }}
       fixing. Edit the job to fix {{ counts.block === 1 ? 'it' : 'them' }} before it runs; otherwise {{ counts.block === 1 ? 'it' : 'they' }} will most likely fail.
     </v-alert>
+    <!-- Design (Roles, Three kinds of result): one line for the job; the documents carry the status -->
+    <v-alert
+      v-if="job?.status === 'Draft' && counts.creator"
+      id="creator-note"
+      class="mb-3"
+      color="creator"
+      density="compact"
+      variant="tonal"
+    >
+      <template v-if="isStaff(me)">
+        {{ counts.creator === 1 ? '1 document needs' : `${counts.creator} documents need` }} a new Object, which your account can't create.
+        Submit without {{ counts.creator === 1 ? 'it' : 'them' }}, change {{ counts.creator === 1 ? 'its' : 'their' }} handling, have the
+        Object{{ counts.creator === 1 ? '' : 's' }} created in CollectionSpace, or leave the draft for a colleague who can create Objects.
+      </template>
+      <template v-else>
+        {{ counts.creator === 1 ? '1 document needs' : `${counts.creator} documents need` }} a new Object. The staff member who submits
+        this job must be able to create Objects.
+      </template>
+      <v-btn
+        id="show-creator-btn"
+        class="ml-2"
+        size="small"
+        variant="text"
+        @click="showFilter('creator')"
+      >
+        Show {{ counts.creator === 1 ? 'it' : 'them' }}
+      </v-btn>
+    </v-alert>
+    <v-alert
+      v-if="job?.status === 'Draft' && counts.held"
+      id="held-note"
+      class="mb-3"
+      color="creator"
+      density="compact"
+      variant="tonal"
+    >
+      {{ counts.held === 1 ? '1 document was' : `${counts.held} documents were` }} left out when this job was submitted, because
+      {{ counts.held === 1 ? 'it needs' : 'they need' }} a new Object. If you can create Objects, include
+      {{ counts.held === 1 ? 'it' : 'them' }} again and submit.
+      <v-btn
+        id="show-held-btn"
+        class="ml-2"
+        size="small"
+        variant="text"
+        @click="showFilter('excluded')"
+      >
+        Show {{ counts.held === 1 ? 'it' : 'them' }}
+      </v-btn>
+    </v-alert>
     <v-alert
       v-if="job?.note"
       id="editor-note"
@@ -196,8 +245,8 @@
           aria-label="Create a group of this job's objects"
           :checked="!!job?.groupOn"
           class="checkbox mr-2"
-          :disabled="!editable || groupMade || (!perms.groups && !job?.groupOn)"
-          :title="!perms.groups ? 'You don\'t have permission to create groups' : groupMade ? 'The group already exists in CollectionSpace' : undefined"
+          :disabled="!editable || groupMade"
+          :title="groupMade ? 'The group already exists in CollectionSpace' : undefined"
           type="checkbox"
           @change="event => setGroup({groupOn: (event.target as HTMLInputElement).checked})"
         >
@@ -246,8 +295,19 @@
         <template v-if="groupMade">
           The group was created in run {{ job?.groupStep?.run }} (<code>{{ job?.groupStep?.csid }}</code>), so it can't be turned off or renamed here.
         </template>
-        <template v-else-if="!perms.groups">Your account can't create groups.</template>
       </div>
+      <!-- Design (Roles, Three kinds of result): a problem with the user's account, not with the job: one message
+           here, nothing on the documents, and only Submit is stopped -->
+      <v-alert
+        v-if="groupProblem"
+        id="group-account-problem"
+        class="mt-2"
+        density="compact"
+        type="warning"
+        variant="tonal"
+      >
+        {{ groupProblem }}
+      </v-alert>
     </v-sheet>
 
     <div
@@ -511,11 +571,11 @@
     >
       <span id="document-counts" class="text-body-2">
         <strong>{{ counts.total }} document{{ counts.total === 1 ? '' : 's' }}<template v-if="counts.disabled"> ({{ counts.disabled }} excluded)</template></strong>
-        · {{ counts.block ? `${counts.block} ${counts.block === 1 ? 'needs' : 'need'} fixing` : 'nothing to fix' }}<template v-if="counts.warn"> · {{ counts.warn }} {{ counts.warn === 1 ? 'has' : 'have' }} warnings</template>
+        · {{ counts.block ? `${counts.block} ${counts.block === 1 ? 'needs' : 'need'} fixing` : 'nothing to fix' }}<template v-if="counts.creator"> · {{ creatorText(counts.creator) }}</template><template v-if="counts.warn"> · {{ counts.warn }} {{ counts.warn === 1 ? 'has' : 'have' }} warnings</template>
       </span>
       <v-spacer />
       <v-btn
-        v-if="counts.block || counts.warn"
+        v-if="counts.block || counts.warn || counts.creator"
         id="show-problems-btn"
         variant="outlined"
         @click="showProblems"
@@ -535,13 +595,25 @@
         </v-btn>
       </span>
       <!-- A preview of a queued, running or finished job has nothing to submit: that's done from its own tab -->
+      <!-- Design (Roles, Three kinds of result): the rest of the job goes ahead; those documents stay in it, excluded
+           and marked, for someone who can create Objects -->
+      <v-btn
+        v-if="!readonly && mode !== 'preview' && canSubmitWithout"
+        id="submit-without-btn"
+        color="primary"
+        :disabled="isBusy"
+        variant="outlined"
+        @click="schedule(true)"
+      >
+        Submit without the {{ counts.creator === 1 ? 'document that needs' : `${counts.creator} documents that need` }} a new Object
+      </v-btn>
       <span v-if="!readonly && mode !== 'preview'" :title="submitTitle">
         <v-btn
           id="submit-job-btn"
           color="primary"
           :disabled="!job || isBusy || !!scheduleBlocked || (job.status === 'Draft' && !editable)"
           :title="submitTitle"
-          @click="schedule"
+          @click="schedule()"
         >
           Submit job
         </v-btn>
@@ -566,9 +638,9 @@ import {canPreview, fileTooLargeText, formIsOld, formatTime, makeThumbnail, mapL
 import {readImageInfo} from '@/lib/imageinfo'
 import {portalOf} from '@/lib/portal'
 import {OUTCOME, failureOf, loadFailures} from '@/lib/results'
-import {HAND_OVER_CONFIRM, INTERN_SUBMIT_WHY, isStaff, permsFor} from '@/lib/roles'
+import {GROUP_PROBLEM, HAND_OVER_CONFIRM, INTERN_SUBMIT_WHY, isStaff, permsFor} from '@/lib/roles'
 import {groupTimestampTitle} from '@/lib/schedule'
-import {jobCounts, worstLevel} from '@/lib/status'
+import {creatorText, hasWork, jobCounts, worstLevel} from '@/lib/status'
 import {editorColumns, tableState, tableView} from '@/lib/table'
 import {alertScreenReader} from '@/lib/utils'
 import {ApiError, api} from '@/api'
@@ -624,7 +696,7 @@ const table = tableState()
 /** The file picker offers only the file types the BMU accepts. */
 const accept = computed(() => (props.me.tenant.fileTypes ?? []).map((t) => '.' + t).join(','))
 const handlingLabel = (r: Row) => props.me.tenant.handling.find((h) => h.id === r.handling)?.label ?? r.handling
-const LEVEL_RANK = {block: 0, warn: 1, ok: 2} as const
+const LEVEL_RANK = {block: 0, creator: 0.5, warn: 1, ok: 2} as const
 const statusRank = (r: Row) => (!r.include ? 3 : r.result?.state === 'Done' ? 4 : LEVEL_RANK[worstLevel(r)])
 const docKeys = {
   file: (r: Row) => r.file,
@@ -640,6 +712,7 @@ function docFilter(r: Row, f: string): boolean {
   switch (f) {
   case 'problems': return r.include && lv !== 'ok'
   case 'block': return r.include && lv === 'block'
+  case 'creator': return r.include && lv === 'creator'
   case 'warn': return r.include && lv === 'warn'
   case 'protected': return !!r.protected
   case 'excluded': return !r.include
@@ -651,7 +724,7 @@ const view = computed(() => tableView(rows.value, table, docKeys, docFilter))
 const docFilters = computed<[string, string][]>(() => {
   const n = (f: string) => rows.value.filter((r) => docFilter(r, f)).length
   return [['all', `All documents (${rows.value.length})`], ['problems', `With problems (${n('problems')})`], ['block', `Need fixing (${n('block')})`],
-          ['warn', `With warnings (${n('warn')})`], ['protected', `Protected (${n('protected')})`], ['excluded', `Excluded (${n('excluded')})`],
+          ['creator', `Need an Object creator (${n('creator')})`], ['warn', `With warnings (${n('warn')})`], ['protected', `Protected (${n('protected')})`], ['excluded', `Excluded (${n('excluded')})`],
           ['selected', `Selected (${selected.size})`]]
 })
 const pageSelected = computed(() => view.value.shown.length > 0 && view.value.shown.every((r) => selected.has(r.n)))
@@ -740,7 +813,31 @@ const scheduleBlocked = computed(() => {
   if (c.uploading) return 'Wait until every file is uploaded and verified'
   if (!c.work) return 'Nothing left to run: every document is done or excluded'
   if (checking.size) return 'Checking against CollectionSpace…'
+  if (groupProblem.value) return 'Your account can\'t create groups, which this job\'s group needs'
+  if (c.creator) {
+    return `${c.creator === 1 ? 'A document needs' : `${c.creator} documents need`} a new Object, which your account can't create`
+      + (c.creator < c.work ? `: submit without ${c.creator === 1 ? 'it' : 'them'}, or leave the draft for a colleague` : ': leave the draft for a colleague who can create Objects')
+  }
   return ''
+})
+
+/**
+ * Design (Roles, Three kinds of result): creating groups is the one permission, creating Objects aside, that staff
+ * can lack after sign-in. It is the account's problem, not the job's: said once, beside the group, and it stops
+ * only Submit, while the job's Group doesn't exist yet and a document to run would join it. Interns aren't told:
+ * they act for whoever submits.
+ */
+const groupProblem = computed(() => {
+  if (!isStaff(props.me) || !job.value?.groupOn || groupMade.value || props.me.perms.groups) return ''
+  const joins = rows.value.some((r) => hasWork(r) && (r.group ?? true) && props.me.tenant.handling.find((h) => h.id === r.handling)?.object !== 'none')
+  return joins ? GROUP_PROBLEM : ''
+})
+
+/** "Submit without the N documents that need a new Object": only that stands between this user and Submit. */
+const canSubmitWithout = computed(() => {
+  const c = counts.value
+  return isStaff(props.me) && job.value?.status === 'Draft' && editable.value && c.creator > 0 && c.creator < c.work && !c.block
+    && !c.uploading && !checking.size && !groupProblem.value && !(job.value.groupOn && !job.value.groupTitle?.trim())
 })
 
 async function load(id: string | null) {
@@ -1144,19 +1241,20 @@ async function bulk(targets: number[], changes: BulkChanges | Partial<Row>, rese
 }
 
 /** "Show documents with problems": filter to them and expand those on the page. */
-function showProblems() {
-  table.filter = 'problems'
+function showFilter(filter: string) {
+  table.filter = filter
   table.page = 1
   expanded.clear()
   view.value.shown.forEach((r) => expanded.add(r.n))
 }
+const showProblems = () => showFilter('problems')
 
-async function schedule() {
+async function schedule(withoutCreator = false) {
   if (!job.value) return
   isBusy.value = true
   try {
     await rename()
-    const j = await api.schedule(job.value.id)
+    const j = await api.schedule(job.value.id, withoutCreator)
     emit('scheduled', j)
   } catch (e) {
     await failed(e)

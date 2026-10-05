@@ -134,6 +134,13 @@ worker_stopped:
   explain: The worker running the job stopped responding, so the job was stopped and its saved sign-in deleted. Every finished step was recorded.
   fix: Reschedule the job. Documents and steps already done are skipped.
 
+needs_object_creator:
+  title: Waiting for someone who can create Objects
+  level: job
+  needs_fix: true
+  explain: Everything that was submitted is done. Some documents were left out because they need a new Object, and the person who submitted the job can't create Object records.
+  fix: If you can create Objects, choose Fix and reschedule, include those documents again and submit. Otherwise leave the job for a colleague who can.
+
 cancelled:
   title: Run cancelled
   level: job

@@ -82,7 +82,7 @@ import DocumentThumbnail from '@/components/util/DocumentThumbnail.vue'
 import SortableColumnHeader from '@/components/util/SortableColumnHeader.vue'
 import {RESULT_TONE, failureOf, importantRows, resultState, rowCodes} from '@/lib/results'
 import type {Tone} from '@/lib/status'
-import {chipColor, rowStatus, worstLevel} from '@/lib/status'
+import {CHECK_PREFIX, chipColor, rowStatus, worstLevel} from '@/lib/status'
 import {tableState, tableView} from '@/lib/table'
 
 /**
@@ -111,7 +111,7 @@ const props = defineProps({
 })
 
 const LIMIT = 10
-const LEVEL_RANK = {block: 0, warn: 1, ok: 2} as const
+const LEVEL_RANK = {block: 0, creator: 0.5, warn: 1, ok: 2} as const
 const RUN_RANK: Record<string, number> = {'In progress': 0, Failed: 1, Partial: 1, 'Not started': 2, Done: 3}
 const RUN_TONE: Record<string, Tone> = {'In progress': 'info', Done: 'success', Partial: 'warning', Failed: 'error', 'Not started': 'neutral'}
 
@@ -162,8 +162,8 @@ const issue = (r: Row): string => {
   if (runView.value) {
     return ''
   }
-  const c = r.checks.find(x => x.level === 'block') ?? r.checks.find(x => x.level === 'warn')
-  return c ? `${c.level === 'block' ? 'Must fix: ' : 'Warning: '}${c.text}` : ''
+  const c = r.checks.find(x => x.level === 'block') ?? r.checks.find(x => x.level === 'creator') ?? r.checks.find(x => x.level === 'warn')
+  return c ? `${CHECK_PREFIX[c.level]}${c.text}` : ''
 }
 
 const table = tableState()

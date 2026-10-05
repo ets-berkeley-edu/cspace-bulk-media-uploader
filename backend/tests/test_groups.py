@@ -116,11 +116,17 @@ def test_a_user_who_cannot_create_groups_is_told_before_scheduling(api, login, a
     assert me["perms"]["groups"] is False
     job = new_job(api)
     add_uploaded(job, ["15-1234_1.jpg"])
-    r = api.patch(f"/api/jobs/{job}", json={"groupOn": True, "groupTitle": "Survey batch 4"}).json()
-    row = r["rows"][0]
-    assert any("can't create groups" in c["text"] for c in row["checks"])
-    ok = api.patch(f"/api/jobs/{job}/rows/1", json={"group": False}).json()["row"]
-    assert not any("can't create groups" in c["text"] for c in ok["checks"])
+    api.patch(f"/api/jobs/{job}", json={"groupOn": True, "groupTitle": "Survey batch 4"})
+    # Design (Roles, Three kinds of result): the user's account, not the job: nothing on the documents, and one
+    # message when they submit
+    assert not any("groups" in c["text"] for c in api.get(f"/api/jobs/{job}").json()["rows"][0]["checks"])
+    assert api.post(f"/api/jobs/{job}/check").json()["counts"]["block"] == 0
+    refused = api.post(f"/api/jobs/{job}/schedule")
+    assert refused.status_code == 409 and refused.json()["detail"]["code"] == "account"
+    assert "can't create groups" in refused.json()["detail"]["message"] and "administrator" in refused.json()["detail"]["message"]
+    assert api.get(f"/api/jobs/{job}").json()["job"]["status"] == "Draft"
+    api.patch(f"/api/jobs/{job}/rows/1", json={"group": False})  # no document joins the group: nothing to create
+    assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
 
 
 def test_the_group_cannot_change_once_it_exists(api, login, add_uploaded, worker, fail_on):

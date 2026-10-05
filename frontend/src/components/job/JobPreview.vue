@@ -114,6 +114,17 @@
       >
         This draft has {{ counts.block }} document{{ counts.block === 1 ? '' : 's' }} that need{{ counts.block === 1 ? 's' : '' }} fixing before it can be submitted.
       </v-alert>
+      <v-alert
+        v-if="counts.creator && isDraft"
+        id="preview-needs-creator"
+        class="mb-2"
+        color="creator"
+        density="compact"
+        variant="tonal"
+      >
+        {{ counts.creator === 1 ? '1 document needs' : `${counts.creator} documents need` }} a new Object, so whoever submits
+        {{ counts.creator === 1 ? 'it' : 'them' }} must be able to create Objects.
+      </v-alert>
 
       <Pagination
         :filters="filters"
@@ -222,9 +233,9 @@
                   v-for="(problem, index) in shownChecks(row)"
                   :key="index"
                   class="check-line"
-                  :class="problem.level === 'block' ? 'text-error' : 'text-warning'"
+                  :class="problem.level === 'block' ? 'text-error' : problem.level === 'creator' ? 'text-creator' : 'text-warning'"
                 >
-                  <strong>{{ problem.level === 'block' ? 'Must fix:' : 'Warning:' }}</strong> {{ problem.text }}
+                  <strong>{{ CHECK_PREFIX[problem.level] }}</strong>{{ problem.text }}
                 </div>
               </template>
               <v-chip v-else color="success" size="small">OK</v-chip>
@@ -279,7 +290,7 @@ import Pagination from '@/components/util/Pagination.vue'
 import SortableColumnHeader from '@/components/util/SortableColumnHeader.vue'
 import {formatTime} from '@/lib/files'
 import type {Tone} from '@/lib/status'
-import {checksColor, checksText, chipColor, handlingMix, runName, runNumber, worstLevel} from '@/lib/status'
+import {CHECK_PREFIX, checksColor, checksText, chipColor, handlingMix, runName, runNumber, worstLevel} from '@/lib/status'
 import {tableState, tableView} from '@/lib/table'
 import {ApiError, api} from '@/api'
 
@@ -327,7 +338,7 @@ const emit = defineEmits<{
   submitted: [job: Job]
 }>()
 
-const LEVEL_RANK = {block: 0, warn: 1, ok: 2} as const
+const LEVEL_RANK = {block: 0, creator: 0.5, warn: 1, ok: 2} as const
 const RUN_RANK: Record<string, number> = {'In progress': 0, Failed: 1, Partial: 1, 'Not started': 2, Done: 3}
 const RUN_TONE: Record<string, Tone> = {'In progress': 'info', Done: 'success', Partial: 'warning', Failed: 'error', 'Not started': 'neutral'}
 
@@ -419,6 +430,7 @@ const matches = (r: Row, filter: string): boolean => {
   switch (filter) {
   case 'problems': return r.include && level !== 'ok'
   case 'block': return r.include && level === 'block'
+  case 'creator': return r.include && level === 'creator'
   case 'warn': return r.include && level === 'warn'
   case 'protected': return !!r.protected
   case 'excluded': return !r.include
@@ -442,6 +454,7 @@ const filters = computed<[string, string][]>(() => {
     ['all', `All documents (${rows.value.length})`],
     ['problems', `With problems (${count('problems')})`],
     ['block', `Need fixing (${count('block')})`],
+    ['creator', `Need an Object creator (${count('creator')})`],
     ['warn', `With warnings (${count('warn')})`],
     ['protected', `Protected (${count('protected')})`],
     ['excluded', `Excluded (${count('excluded')})`]
@@ -450,7 +463,12 @@ const filters = computed<[string, string][]>(() => {
 
 const counts = computed(() => {
   const work = rows.value.filter(r => r.include && r.result?.state !== 'Done')
-  return {block: work.filter(r => worstLevel(r) === 'block').length, warn: work.filter(r => worstLevel(r) === 'warn').length}
+  return {
+    block: work.filter(r => worstLevel(r) === 'block').length,
+    creator: work.filter(r => worstLevel(r) === 'creator').length,
+    held: rows.value.filter(r => r.heldFor === 'creator').length,
+    warn: work.filter(r => worstLevel(r) === 'warn').length
+  }
 })
 </script>
 

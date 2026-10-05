@@ -26,8 +26,8 @@ from .cspace import CSpaceClient, CSpaceError, Permissions
 from .failures import catalog
 from .reader import Reader, ReaderLimit, ReaderUnavailable, ensure_logged, minimal
 from .filetypes import content_type, unsupported
-from .rows import (PROBLEM_TEXT, apply_edit, can_replace_file, check_rows, clean_filename, collision_checks, created_records,
-                   object_plans,
+from .rows import (CREATOR, HELD_CHECK, PROBLEM_TEXT, apply_edit, can_replace_file, check_rows, clean_filename, collision_checks, created_records,
+                   object_plans, object_step_ran,
                    describe_deletion, edit_problem, is_locked, media_created, new_row, worst)
 from .storage import RowChanged, Storage, draft_expiry, expiry_of, now
 from .thumbnails import MAX_BROWSER_BYTES, TIFF_EXTENSIONS, NotAnImage, make_thumbnail, tiff_thumbnail_step
@@ -346,6 +346,7 @@ def _note_include(row: dict, before: bool, user: str) -> None:
     elif row.get("include"):
         row.pop("disabledBy", None)
         row.pop("disabledAt", None)
+        row.pop("heldFor", None)  # included again by someone who means to submit it
 
 
 def _complete_if_clean(s: "Services", sess: "Session", job_id: str) -> bool:
@@ -359,6 +360,8 @@ def _complete_if_clean(s: "Services", sess: "Session", job_id: str) -> bool:
         _delete_job(s, sess, job, [])
         return True
     if any(r.get("include") and (r.get("result") or {}).get("state") != "Done" for r in rows):
+        return False
+    if any(r.get("heldFor") for r in rows):  # documents waiting for someone who can create Objects
         return False
     if not s.storage.update_job(job_id, {"status": "Completed", "code": "", "codeDetail": "", "note": "", "fixFrom": None,
                                          "draftExpiresAt": None,
@@ -517,8 +520,30 @@ def _lookup_client(s: "Services", sess: "Session", what: str) -> CSpaceClient:
 
 
 def _lookup_perms(s: "Services", sess: "Session") -> dict[str, bool]:
-    """The permissions those lookups go by: what the reader account may read, with the intern's own for the rest."""
-    return {**sess.perms, **s.reader.perms()} if _reads_as_reader(s, sess) else sess.perms
+    """The permissions the checks go by. Staff: their own. An intern acts for the staff member who will submit the
+    job (design: Roles), so nothing is held against the intern's own account: what the checks read is the reader
+    account's, and for the rest the BMU assumes every permission except creating Objects, which not every staff
+    member has, so a document that needs a new Object says so (proxy: as information for whoever submits)."""
+    if sess.role != "intern":
+        return sess.perms
+    reads = s.reader.perms() if _reads_as_reader(s, sess) else {}
+    return {**sess.perms, **reads, "media": True, "mediaUpdate": True, "relations": True, "groups": True,
+            "objects": False, "proxy": True}
+
+
+GROUP_PROBLEM = ("Your account can't create groups in CollectionSpace, which this job's group needs. Contact your "
+                 "CollectionSpace administrator for the permission. Until then, leave the draft for a colleague to "
+                 "submit, turn off the job's group, or untick Group on each document.")
+
+
+def _account_problem(tenant: Tenant, job: dict, perms: dict[str, bool], work: list[dict]) -> str:
+    """Design (Roles, Three kinds of result): a problem with the user's account, not with the job. Creating Objects
+    aside, creating groups is the only permission staff can lack after sign-in. It stops Submit and nothing else,
+    and only while the job's Group hasn't been created yet and a document to run would join it."""
+    if not job.get("groupOn") or (job.get("groupStep") or {}).get("s") == "done" or perms.get("groups"):
+        return ""
+    joins = any(r.get("group", True) and tenant.handling_by_id(r["handling"]).object != "none" for r in work)
+    return GROUP_PROBLEM if joins else ""
 
 
 def _lookup_http(s: "Services", sess: "Session", e: CSpaceError) -> Exception:
@@ -591,6 +616,11 @@ class OpenDraft(BaseModel):
 
 class CheckRequest(BaseModel):
     rows: list[int] | None = None  # the rows to look up in CollectionSpace; None: any row whose lookup is stale
+
+
+class SubmitBody(BaseModel):
+    """Submit without the documents that need a new Object, which this user can't create (design: Roles)."""
+    withoutCreator: bool = False
 
 
 class ScheduleBody(BaseModel):
@@ -1238,7 +1268,7 @@ def _routes(app: FastAPI) -> None:
         return {"rows": r["rows"], "counts": r["counts"]}
 
     @app.post("/api/jobs/{job_id}/schedule")
-    def schedule(job_id: str, sess: Session = Depends(staff_session), s: Services = Depends(svc)):
+    def schedule(job_id: str, body: SubmitBody | None = None, sess: Session = Depends(staff_session), s: Services = Depends(svc)):
         job = _job_or_404(s, sess, job_id)
         s.queue_rows.pop(sess.tenant, None)  # the queue is about to change: read it again (see _queue_rows)
         if job["status"] not in RESCHEDULABLE:
@@ -1252,13 +1282,13 @@ def _routes(app: FastAPI) -> None:
                 raise HTTPException(409, {"code": "locked", "message": f"{who} is editing this draft, so it can't be submitted now."})
             opened_here = True
         try:
-            return _submit(s, sess, job)
+            return _submit(s, sess, job, without_creator=bool(body and body.withoutCreator))
         except HTTPException:
             if opened_here:  # not submitted: leave the draft as it was found, open in nobody's editor
                 s.storage.close_draft(job_id, sess.key)
             raise
 
-    def _submit(s: Services, sess: Session, job: dict) -> dict:
+    def _submit(s: Services, sess: Session, job: dict, without_creator: bool = False) -> dict:
         job_id = job["id"]
         if job.get("groupOn") and not (job.get("groupTitle") or "").strip():
             raise HTTPException(409, "Enter a group title, or turn off the job's group.")
@@ -1272,6 +1302,36 @@ def _routes(app: FastAPI) -> None:
         blocked = [r["n"] for r in work if worst(r) == "block"]
         if blocked:
             raise HTTPException(409, {"message": f"{len(blocked)} documents need fixing first.", "rows": blocked})
+        if problem := _account_problem(s.tenant, job, sess.perms, work):  # the user's account, not the job (design: Roles)
+            raise HTTPException(409, {"code": "account", "message": problem})
+        # Design (Roles, Three kinds of result): documents that need a new Object, which this user can't create.
+        # They are never submitted by this user. "Submit without them" leaves them in the job, excluded and marked,
+        # for someone who can create Objects.
+        waiting = [r for r in work if worst(r) == CREATOR]
+        held = 0
+        if waiting:
+            n = len(waiting)
+            which = "this document needs" if n == 1 else f"these {n} documents need"
+            if not without_creator:
+                raise HTTPException(409, {"code": "creator", "rows": [r["n"] for r in waiting], "message":
+                                          f"Your account can't create Object records, and {which} a new Object. Submit "
+                                          "without them, change their handling, or leave the draft for a colleague who "
+                                          "can create Objects."})
+            if n == len(work):
+                raise HTTPException(409, {"code": "creator", "rows": [r["n"] for r in waiting], "message":
+                                          "Nothing to submit: every document needs a new Object, which your account "
+                                          "can't create. Leave the draft for a colleague who can create Objects."})
+            for r in waiting:
+                before = copy.deepcopy(r)
+                r["include"] = False
+                _note_include(r, True, sess.user)
+                r["heldFor"] = CREATOR
+                r["checks"] = [dict(HELD_CHECK)]
+                _keep_original(s, job, before)
+                s.storage.put_row(job_id, r)
+            work = [r for r in work if r not in waiting]
+            held = n
+            result["counts"] = {**result["counts"], CREATOR: 0, "newObjects": 0}
         # Hand the job its own copy of the password, encrypted with the job key; the worker deletes it after the run.
         pw = s.crypto.decrypt("session", sess.password_token, {"user": sess.user, "session": sess.key})
         expires = now() + s.settings.credential_hours * 3600
@@ -1288,7 +1348,10 @@ def _routes(app: FastAPI) -> None:
         s.storage.close_draft(job_id, sess.key)  # it leaves Drafts
         s.queue_rows.pop(sess.tenant, None)  # the queue has a new job: read it again (see _queue_rows)
         s.storage.audit(sess.tenant, "Submitted", sess.user, job_id,
-                        f"Submitted “{job['name']}” with {len(work)} documents." + _prepared_by(job, sess.user))
+                        f"Submitted “{job['name']}” with {len(work)} documents."
+                        + (f" {held} document{'' if held == 1 else 's'} that need{'s' if held == 1 else ''} a new Object "
+                           f"{'was' if held == 1 else 'were'} left out, for someone who can create Objects." if held else "")
+                        + _prepared_by(job, sess.user))
         return _public(s.storage.get_job(job_id), sess, s)  # with its plan: when it runs (design: Job scheduling)
 
     # ---- the schedule and staff's queue actions (design: Job scheduling) ----------------------------
@@ -1480,12 +1543,30 @@ def _recheck(s: Services, sess: Session, job_id: str, targets: set[int] | None, 
             changed.append(r)
     if writable:
         _note_protected(s, job_id, rows)
-    counts = {"block": 0, "warn": 0}
+    # creator: documents this user can't submit because they need a new Object. newObjects: documents that will
+    # create one, whoever looks (so someone who can create Objects sees which drafts wait for them). held: documents
+    # left out of a submit for that reason.
+    counts = {"block": 0, "warn": 0, CREATOR: 0, "newObjects": 0, "held": 0}
     for r in rows:
+        if r.get("heldFor"):
+            counts["held"] += 1
+        if not r.get("include") or (r.get("result") or {}).get("state") == "Done":
+            continue
         w = worst(r)
-        if w in counts and r.get("include"):
+        if w in (CREATOR, "block", "warn"):
             counts[w] += 1
+        if w != "block" and _creates_object(s.tenant, r):
+            counts["newObjects"] += 1
     return {"rows": rows, "changed": changed, "counts": counts}
+
+
+def _creates_object(tenant: Tenant, r: dict) -> bool:
+    """Whether running this document would create its Object, as far as its last lookup knows."""
+    behavior = tenant.handling_by_id(r["handling"]).object
+    if object_step_ran(r):
+        return False
+    found = (r.get("lookups") or {}).get("object") or {}
+    return behavior == "create" or (behavior == "either" and found.get("value") == r.get("obj") and not found.get("csids"))
 
 
 QUEUE_ROWS_SECONDS = 5  # how long _queue_rows keeps a tenant's queued jobs' rows

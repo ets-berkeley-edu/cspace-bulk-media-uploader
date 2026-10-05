@@ -1,4 +1,4 @@
-import type {Job, Me, Perms} from '@/types'
+import type {CheckCounts, Job, Me, Perms} from '@/types'
 
 /**
  * The two BMU roles (design: Roles). Staff do everything. An intern creates drafts and edits the drafts that are
@@ -47,18 +47,22 @@ export const HAND_OVER_CONFIRM = 'Hand this draft over to staff? You won\'t be a
  * whole job again whatever this says. counts: the draft's latest checks; undefined while they are running.
  */
 export function listSubmitBlocked(job: Pick<Job, 'rowCount' | 'editingBy' | 'editingByYou' | 'groupOn' | 'groupTitle'>,
-  counts?: { block: number; warn: number } | null): string {
+  counts?: CheckCounts | null): string {
   if (job.editingBy && !job.editingByYou) return `${job.editingBy} is editing this draft`
   if (!job.rowCount) return 'This draft has no documents'
   if (!counts) return 'Checking against CollectionSpace…'
   if (counts.block) return `Fix or exclude the ${counts.block === 1 ? 'document' : `${counts.block} documents`} marked Needs fixing first: open the draft with Edit`
   if (job.groupOn && !job.groupTitle?.trim()) return 'Enter a group title, or turn off the job\'s group: open the draft with Edit'
+  if (counts.creator) {
+    return `${counts.creator === 1 ? 'A document needs' : `${counts.creator} documents need`} a new Object, which your account can't create: `
+      + `open the draft with Edit to submit without ${counts.creator === 1 ? 'it' : 'them'}, or leave it for a colleague who can create Objects`
+  }
   return ''
 }
 
 /** What the Submit confirmation says: how much is submitted, who prepared it, and whose sign-in it runs under. */
 export function submitConfirmText(job: Pick<Job, 'name' | 'rowCount' | 'createdBy' | 'createdByRole' | 'lastSavedBy'>,
-  counts?: { block: number; warn: number } | null): string {
+  counts?: CheckCounts | null): string {
   const n = job.rowCount ?? 0
   const warn = counts?.warn ?? 0
   const docs = `It has ${n === 1 ? '1 document' : `${n} documents`}${warn ? `, ${warn} with warnings` : ''}.`
@@ -67,3 +71,8 @@ export function submitConfirmText(job: Pick<Job, 'name' | 'rowCount' | 'createdB
   return `Submit “${job.name || 'Untitled job'}”? ${docs}${by}${saved}${by || saved ? '.' : ''} `
     + 'The whole job is checked again, and it runs with your sign-in, which is deleted when the run ends.'
 }
+
+/** Design (Roles, Three kinds of result): the user's account, not the job. The server's wording (app.GROUP_PROBLEM). */
+export const GROUP_PROBLEM = 'Your account can\'t create groups in CollectionSpace, which this job\'s group needs. Contact your '
+  + 'CollectionSpace administrator for the permission. Until then, leave the draft for a colleague to submit, turn off the job\'s '
+  + 'group, or untick Group on each document.'

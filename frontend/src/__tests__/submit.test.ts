@@ -17,10 +17,10 @@ const draft = {id: 'j1', name: 'Spring batch', status: 'Draft', createdBy: 'admi
 const plan = {kind: 'schedule', at: Date.now() / 1000 + 3 * 86400, ahead: 2, signInExpiresFirst: false} as const
 
 function stub(routes: (url: string, method: string) => unknown) {
-  const calls: { url: string; method: string }[] = []
+  const calls: { url: string; method: string; body?: string }[] = []
   vi.stubGlobal('fetch', vi.fn((url: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET'
-    calls.push({url, method})
+    calls.push({url, method, body: typeof init?.body === 'string' ? init.body : undefined})
     return Promise.resolve(new Response(JSON.stringify(routes(url, method) ?? {}), {status: 200, headers: {'content-type': 'application/json'}}))
   }))
   return calls
@@ -163,5 +163,72 @@ describe('the job\'s Group title (user decision: never derived from the job name
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('three kinds of result in the editor (design: Roles)', () => {
+  const linked = {...tenant, handling: [...tenant.handling, {id: 'linkorcreate', label: 'Link to object (create if missing)', object: 'either', id_rule: 'object'}]} as unknown as TenantInfo
+  const waiting: Row = {...row, n: 2, file: '20-1.jpg', handling: 'linkorcreate', obj: '20-1',
+    checks: [{level: 'creator', text: 'No object 20-1 in CollectionSpace, so this document needs a new Object, and your account can\'t create Object records.'}]}
+  const routes = (rows: Row[], job: Job = draft) => (url: string, method: string) => {
+    if (url.endsWith('/api/jobs/j1') && method === 'GET') return {job, rows, runs: [], created: {}}
+    if (url.endsWith('/check')) return {rows, counts: {block: 0, warn: 0, creator: 1}}
+    if (url.endsWith('/api/jobs/j1') && method === 'PATCH') return job
+    if (url.endsWith('/j1/schedule')) return {...job, status: 'Queued', plan}
+    if (url.includes('/vocabularies/')) return {terms: []}
+    if (url.endsWith('/api/failures')) return {failures: {}}
+    return {}
+  }
+
+  it('a document that needs an Object creator stops Submit, and the rest can be submitted without it', async () => {
+    const calls = stub(routes([row, waiting]))
+    const limited: Me = {user: 'limited', tenant: linked, perms: {...perms, objects: false}, role: 'staff'}
+    const w = mount(JobEditor, {props: {me: limited, jobId: 'j1'}, global: {stubs: {DocumentThumbnail: true}}})
+    await flushPromises()
+    expect(w.find('#creator-note').text()).toContain('1 document needs a new Object, which your account can\'t create.')
+    expect(w.find('#document-counts').text()).toContain('nothing to fix · 1 needs an Object creator')
+    expect(w.find('#submit-job-btn').attributes('disabled')).toBeDefined()
+    expect(w.find('#submit-job-btn').attributes('title')).toContain('submit without it')
+    const without = w.find('#submit-without-btn')
+    expect(without.text()).toBe('Submit without the document that needs a new Object')
+    await without.trigger('click')
+    await flushPromises()
+    const sent = calls.find((c) => c.url.endsWith('/j1/schedule'))!
+    expect(JSON.parse(sent.body ?? '{}')).toEqual({withoutCreator: true})
+    w.unmount()
+  })
+
+  it('with nothing else to submit, there is no "Submit without"', async () => {
+    stub(routes([waiting]))
+    const limited: Me = {user: 'limited', tenant: linked, perms: {...perms, objects: false}, role: 'staff'}
+    const w = mount(JobEditor, {props: {me: limited, jobId: 'j1'}, global: {stubs: {DocumentThumbnail: true}}})
+    await flushPromises()
+    expect(w.find('#submit-without-btn').exists()).toBe(false)
+    expect(w.find('#submit-job-btn').attributes('title')).toContain('leave the draft for a colleague who can create Objects')
+    w.unmount()
+  })
+
+  it('a missing permission to create groups is said once, beside the group, and stops only Submit', async () => {
+    const inGroup: Row = {...row, n: 2, file: '15-1.jpg', handling: 'linkorcreate', obj: '15-1'}
+    stub(routes([inGroup], {...draft, groupOn: true, groupTitle: 'Batch 4'} as Job))
+    const noGroups: Me = {user: 'limited', tenant: linked, perms: {...perms, groups: false}, role: 'staff'}
+    const w = mount(JobEditor, {props: {me: noGroups, jobId: 'j1'}, global: {stubs: {DocumentThumbnail: true}}})
+    await flushPromises()
+    expect(w.find('#group-account-problem').text()).toContain('Contact your CollectionSpace administrator')
+    expect(w.find('#group-on').attributes('disabled')).toBeUndefined() // the group can still be set up for a colleague
+    expect(w.find('#submit-job-btn').attributes('disabled')).toBeDefined()
+    expect(w.text()).not.toContain('Needs fixing')
+    w.unmount()
+  })
+
+  it('an intern is told a new Object is needed, as information for whoever submits', async () => {
+    const forIntern: Row = {...waiting, checks: [{level: 'creator', text: 'This document needs a new Object. The staff member who submits the job must be able to create Objects.'}]}
+    stub(routes([row, forIntern], {...draft, editingBy: 'kim', internOpen: true} as Job))
+    const intern: Me = {user: 'kim', tenant: linked, perms: {...perms, media: false, relations: false, objects: false, groups: false}, role: 'intern'}
+    const w = mount(JobEditor, {props: {me: intern, jobId: 'j1'}, global: {stubs: {DocumentThumbnail: true}}})
+    await flushPromises()
+    expect(w.find('#creator-note').text()).toContain('The staff member who submits this job must be able to create Objects.')
+    expect(w.find('#submit-without-btn').exists()).toBe(false)
+    w.unmount()
   })
 })

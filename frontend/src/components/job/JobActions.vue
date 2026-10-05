@@ -192,7 +192,7 @@
 import type {PropType} from 'vue'
 import {computed, ref, watch} from 'vue'
 import {mdiTrashCanOutline} from '@mdi/js'
-import type {Created, Job} from '@/types'
+import type {CheckCounts, Created, Job} from '@/types'
 import DeleteJobConfirm from '@/components/job/DeleteJobConfirm.vue'
 import {formatTime} from '@/lib/files'
 import {HAND_OVER_CONFIRM, draftBlocked, draftDeleteBlocked, listSubmitBlocked, submitConfirmText, takeOverBlocked} from '@/lib/roles'
@@ -216,7 +216,7 @@ const props = defineProps({
   counts: {
     default: undefined,
     required: false,
-    type: Object as PropType<{block: number, warn: number} | null>
+    type: Object as PropType<CheckCounts | null>
   },
   // Why this user can't change the jobs of this list at all (an intern, in the Job queue); '' when they can.
   editWhy: {
