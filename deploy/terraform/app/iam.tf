@@ -120,6 +120,13 @@ data "aws_iam_policy_document" "web" {
     resources = [aws_dynamodb_table.main["sessions"].arn]
   }
 
+  # The read-only CollectionSpace account for interns' checks: only the web app reads it, and only this one secret.
+  statement {
+    sid       = "ReaderSecret"
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = [aws_secretsmanager_secret.reader.arn]
+  }
+
   # Saved with Submit job, deleted on Edit and when a job is deleted. The web app never reads a job's sign-in, and
   # the job key's policy doesn't let it decrypt one.
   statement {

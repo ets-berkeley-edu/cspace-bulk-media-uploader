@@ -129,8 +129,11 @@ Open http://localhost:5173. With the simulated CollectionSpace, sign in as:
 | `newstaff` / `newstaff` | Staff | Can only read, so the BMU refuses the sign-in and says what is missing |
 | `reader` / `reader` | none | Has neither BMU role, so the BMU refuses the sign-in |
 
-Until the read-only service account for interns' checks is built (design: Roles), an intern's documents are
-checked with the intern's own account, which can read nothing, so they show "needs fixing" for that reason.
+**Interns' checks use a read-only account.** An intern's own account can read nothing, so the lookups an intern's
+draft needs are made with the simulator's `bmureader` account (it can't sign in to the BMU and isn't in the Demo
+tools' list). The intern is told whether an object was found and whether a file is protected, never why, and
+never a record's contents. Until the next pull request, an intern's documents still show "needs fixing" for the
+permissions the intern's own account lacks (updating Media, creating relations); staff don't see those.
 
 Submitted jobs wait for the run time (7:00 PM Pacific). To have them start at once while you try things, set
 `BMU_ALWAYS_RUN_TIME=true` in `.env` (or start with `BMU_ALWAYS_RUN_TIME=true docker compose up`); pause and hold
@@ -370,6 +373,24 @@ python scripts/check_cspace.py --create                          # also creates 
   (`BMU_SESSION_HOURS`); the lists' background refreshes don't count as activity.
 - Everything only staff may do (submitting, the schedule, the queue, finished jobs) reads the user's roles from
   CollectionSpace again each time, so removing the BMU_Staff role takes effect at once.
+- **The read-only service account** is the one CollectionSpace sign-in the BMU keeps (design: Roles). Interns have
+  no permissions in CollectionSpace, so they can't browse records or images there; the lookups their drafts need
+  are made with one account per museum whose role, BMU_Reader, can read and nothing else.
+  - Its user name and password are a secret in AWS Secrets Manager (`BMU_READER_SECRET_ID`). Only the web app's
+    task role may read it. Terraform creates the secret empty; `./bmu aws reader-secret` sets it, so the password is
+    never in the code, a settings file or Terraform's state. The web app keeps it in memory for 5 minutes
+    (`BMU_READER_CACHE_SECONDS`) and never writes it to a table, a file or a log.
+  - It is used only for an intern's checks, autocomplete, vocabularies and date previews. Staff always use their
+    own sign-in, and every record is created with the submitting staff member's credentials.
+  - An intern gets minimal answers: found or not, protected or not, and term names. Not why a file is protected,
+    not an object's access notes, not a record's CSID, contents or images.
+  - Every lookup is counted against the intern who caused it and logged, and each intern is limited to 20,000 an
+    hour (`BMU_READER_LOOKUPS_PER_HOUR`), so the BMU can't be used to trawl CollectionSpace.
+  - Change the password every 90 days, and whenever a staff member who could read the secret leaves
+    ([deploy/README.md](deploy/README.md)).
+  - Locally the account comes from `BMU_READER_USER` and `BMU_READER_PASSWORD` (the simulator's `bmureader`).
+    Against PAHMA QA, `./bmu up qa` takes them from `BMU_QA_READER_USER` and `BMU_QA_READER_PASSWORD` in your
+    shell; without them an intern's documents are checked with the intern's own sign-in.
 
 ## Audit log
 

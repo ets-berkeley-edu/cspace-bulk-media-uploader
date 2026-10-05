@@ -11,6 +11,7 @@ Users (the password is the user name; design: Roles):
   intern    a BMU intern: the BMU_Intern role and no permissions at all
   newstaff  has the BMU_Staff role but can only read, so the BMU refuses the sign-in
   reader    can read everything but has neither BMU role, so the BMU refuses the sign-in
+  bmureader the BMU's own read-only account, which checks an intern's drafts (BMU_Reader role); not a person
 Roles (accounts/0/accountroles): admin has ROLE_15_TENANT_ADMINISTRATOR and ROLE_15_BMU_STAFF; limited and newstaff
 ROLE_15_TENANT_READER and ROLE_15_BMU_STAFF; intern ROLE_15_BMU_INTERN; reader ROLE_15_TENANT_READER.
 Development hooks: /_fake/state, /_fake/reset, /_fake/slow, /_fake/fail (failures on demand), /_fake/delete-term,
@@ -20,6 +21,7 @@ meanwhile).
 from __future__ import annotations
 
 import base64
+from collections import deque
 import re
 import threading
 import uuid
@@ -36,6 +38,7 @@ USERS = {
     "reader": ("reader", "RL"),
     "intern": ("intern", ""),
     "newstaff": ("newstaff", "RL"),
+    "bmureader": ("bmureader", "RL"),
 }
 RESOURCES = ["media", "relations", "collectionobjects", "groups", "personauthorities", "orgauthorities", "vocabularies",
              "structureddates"]
@@ -58,6 +61,7 @@ ROLES = {
     "reader": ["ROLE_15_TENANT_READER"],
     "intern": ["ROLE_15_BMU_INTERN"],
     "newstaff": ["ROLE_15_TENANT_READER", "ROLE_15_BMU_STAFF"],
+    "bmureader": ["ROLE_15_BMU_READER"],
 }
 
 
@@ -150,6 +154,7 @@ class Store:
         self.deleted_languages: set[str] = set()
         self.language_renames: dict[str, str] = {}  # language code -> its new display name
         self.term_reads: list[str] = []  # short identifiers read one by one, to test the per-check cache
+        self.calls: deque[dict] = deque(maxlen=5000)  # {"user", "path"} of recent signed-in requests (tests: whose lookups)
         self.delay = 0.0  # seconds added to every create or upload, to watch the queue in a browser (/_fake/slow)
         self.upload_mbps = 0.0  # file uploads (PUT media/{csid}/blob) are received at this many MB/s (0 = no limit)
         self.rules: list[dict] = []  # failures on demand (/_fake/fail)
@@ -174,7 +179,10 @@ def _user(request: Request) -> str | None:
         u, _, p = base64.b64decode(h[6:]).decode().partition(":")
     except Exception:
         return None
-    return u if u in USERS and USERS[u][0] == p else None
+    if u not in USERS or USERS[u][0] != p:
+        return None
+    store.calls.append({"user": u, "path": request.url.path})
+    return u
 
 
 def _deny() -> Response:
@@ -737,7 +745,7 @@ def settings():
 def users():
     """Development only: the simulator's users, with what each is for and its password (the BMU's Demo tools sign
     in as one of them with a click). A real CollectionSpace has no such endpoint."""
-    return [{"user": u, "password": USERS[u][0], "about": USER_NOTES.get(u, "")} for u in USERS]
+    return [{"user": u, "password": USERS[u][0], "about": about} for u, about in USER_NOTES.items()]  # people, not the reader account
 
 
 @app.post("/_fake/reset")

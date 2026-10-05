@@ -58,6 +58,16 @@ class Settings(BaseSettings):
     # simulated CollectionSpace and delete every job in the tenant. Off (404) unless BMU_DEMO=true; never in production.
     demo: bool = False
 
+    # The read-only CollectionSpace account that checks an intern's drafts (design: Roles; bmu/reader.py). In AWS:
+    # the id of a Secrets Manager secret holding {"username": ..., "password": ...}. Locally: the two settings
+    # below (the simulator's "bmureader"). Without either, an intern's documents are checked with the intern's own
+    # account, which can read nothing.
+    reader_secret_id: str | None = None
+    reader_user: str | None = None
+    reader_password: str | None = None
+    reader_cache_seconds: float = 300.0  # how long the account's sign-in and permissions are kept in memory
+    reader_lookups_per_hour: int = 20000  # each intern's limit; a 1,000-document job needs about 3,000
+
     worker_poll_seconds: float = 2.0
     worker_lock_seconds: int = 120
     heartbeat_seconds: float = 30.0  # a running job's heartbeat is renewed this often

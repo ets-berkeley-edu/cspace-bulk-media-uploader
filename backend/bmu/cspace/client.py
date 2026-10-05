@@ -6,7 +6,7 @@ Calls were checked against the Lyrasis PAHMA QA tenant with scripts/check_cspace
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import IO, Iterable
+from typing import IO, Callable, Iterable
 from xml.etree.ElementTree import Element
 
 import httpx
@@ -156,6 +156,9 @@ class CSpaceClient:
         self.failures_in_a_row = 0
         self.max_failures_in_a_row: int | None = None
         self.last_failure = ""  # the last 5xx or unanswered request, e.g. "PUT media/…/blob returned 503", for the job's detail
+        # Called before every request, with its method and path: the reader account counts an intern's lookups
+        # with it, and may refuse one by raising (bmu/reader.py).
+        self.on_request: Callable[[str, str], None] | None = None
 
     def close(self) -> None:
         self._http.close()
@@ -164,6 +167,8 @@ class CSpaceClient:
     def _request(self, method: str, path: str, **kw) -> httpx.Response:
         if self.max_failures_in_a_row is not None and self.failures_in_a_row >= self.max_failures_in_a_row:
             raise CSpaceUnavailable(self.failures_in_a_row)
+        if self.on_request is not None:
+            self.on_request(method, path)
         try:
             headers = {**self._headers, **kw.pop("headers", {})}
             r = self._http.request(method, self.base + path, auth=self._auth, headers=headers, **kw)

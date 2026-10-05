@@ -140,6 +140,10 @@ def test_each_role_has_only_what_its_code_uses():
     assert worker["SessionsSweep"] == ({"dynamodb:Scan", "dynamodb:DeleteItem"}, [SESSIONS])
     assert worker["CredentialsReadAndDelete"] == ({"dynamodb:GetItem", "dynamodb:DeleteItem", "dynamodb:ConditionCheckItem"}, [CREDENTIALS])
     assert "s3:PutObject" in web["StagedFiles"][0] and "s3:PutObject" not in worker["StagedFiles"][0]  # only the web app adds files
+    # the read-only CollectionSpace account's secret: the web app reads that one secret, and nothing else may
+    assert web["ReaderSecret"] == ({"secretsmanager:GetSecretValue"}, ["${aws_secretsmanager_secret.reader.arn}"])
+    others = {**_statements("task_common"), **worker}
+    assert not any(a.startswith("secretsmanager:") for actions, _ in others.values() for a in actions)
     roles = _blocks("iam.tf", "resource", "aws_iam_role_policy")
     assert roles["web"]["policy"] == "${data.aws_iam_policy_document.web.json}" and roles["web"]["role"] == "${aws_iam_role.web.id}"
     assert roles["worker"]["policy"] == "${data.aws_iam_policy_document.worker.json}" and roles["worker"]["role"] == "${aws_iam_role.worker.id}"
@@ -180,3 +184,16 @@ def test_lifecycle_rules_keep_audit_versions_and_clear_staged_ones():
     assert audit["filter"][0]["prefix"] == "audit/" and audit["expiration"][0]["days"] == 365
     assert audit["noncurrent_version_expiration"][0]["noncurrent_days"] == 365
     assert staged["filter"][0]["prefix"] == "staging/" and staged["noncurrent_version_expiration"][0]["noncurrent_days"] == 1
+
+
+def test_the_reader_accounts_secret_is_created_empty_and_only_named_in_the_settings():
+    """Design (Roles, The read-only service account): Terraform makes the secret but never its value, so the
+    password is not in the code or in Terraform's state; the app is told only which secret to read."""
+    text = (APP / "secrets.tf").read_text()
+    assert _blocks("secrets.tf", "resource", "aws_secretsmanager_secret")["reader"]["name"] == "${local.name}/cspace-reader"
+    assert "aws_secretsmanager_secret_version" not in "".join(p.read_text() for p in APP.glob("*.tf"))
+    assert "secret_string" not in text
+    env = _local("ecs.tf", "app_environment")
+    assert env["BMU_READER_SECRET_ID"] == "${aws_secretsmanager_secret.reader.arn}"
+    assert "BMU_READER_USER" not in env and "BMU_READER_PASSWORD" not in env
+    assert "reader.py" not in (Path(appmod.__file__).parent / "worker.py").read_text()  # the worker never uses it

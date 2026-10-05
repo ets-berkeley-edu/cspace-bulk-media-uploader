@@ -22,6 +22,7 @@ prototype: the image is built from this repository and runs on ECS Fargate. Demo
 | `./bmu aws logs web` / `worker` | Follows a service's logs, starting with the last 30 minutes. |
 | `./bmu aws pause` / `resume` | Stops or starts both services to save money. The data stays. Terraform shows the change and asks first. |
 | `./bmu aws allow-my-ip` | Adds this computer's current address to the allowlist, and applies it. |
+| `./bmu aws reader-secret` | Sets or changes the sign-in of the read-only CollectionSpace account that checks interns' drafts. It asks for the user name and password; see below. |
 | `./bmu aws destroy` | Deletes everything in AWS for the environment, data included. It asks for the environment's name first. |
 
 **Picking the environment.** Add `--env NAME`, or set `BMU_AWS_ENV`. The default is `personal-dev`.
@@ -48,14 +49,51 @@ prototype: the image is built from this repository and runs on ECS Fargate. Demo
 4. **Image repository.** It creates the image repository, which takes about a minute.
 5. **Image.** It builds the image for ARM (Graviton) and pushes it. The Docker login token goes straight from
    the AWS CLI to Docker.
-6. **The BMU.** Terraform lists the 66 resources it will create and asks; type `yes`. The first time takes
+6. **The BMU.** Terraform lists the 67 resources it will create and asks; type `yes`. The first time takes
    about **15–25 minutes**, mostly CloudFront. It finishes when the web app and the worker are running, then
    prints the address (`https://<something>.cloudfront.net`).
 
 **Signing in.** Sign in with your PAHMA QA account. Jobs create real records on the QA tenant, and they stay.
 
+**The read-only account for interns' checks.** Do this once after the first deploy; see the next section.
+
 **Later deploys.** Run the same command. Terraform shows only what changed, which takes about 3–5 minutes. Each
 deploy pushes a new image tag (commit and time), so `./bmu aws status` shows which code is running.
+
+## The read-only account for interns' checks
+
+Interns have no permissions in CollectionSpace. The lookups their drafts need are made with one CollectionSpace
+account per museum that can read and nothing else (design: Roles). Its sign-in is the only one the BMU keeps, in
+AWS Secrets Manager.
+
+**In CollectionSpace (the museum's administrator)**
+1. Create the role **BMU_Reader** with read permission, and nothing else, on: Objects, Media, the Person and
+   Organization authorities, vocabularies and the date parser.
+2. Create one account for the BMU, for example `bmu-reader@<museum>`, with only that role. Give it a long random
+   password from a password manager. Nobody signs in with it by hand.
+
+**In AWS (you)**
+1. `./bmu aws deploy`, if this environment was deployed before the secret existed. Terraform creates the empty
+   secret `bmu-<env>/cspace-reader` and lets the web app, and nothing else, read it.
+2. `./bmu aws reader-secret`. It asks for the account's user name and its password twice. The password isn't
+   shown. It goes straight to Secrets Manager: it is not saved on this computer, not in the shell's history and
+   not in Terraform's state.
+3. Check it: sign in to the BMU as an intern and open a draft. `./bmu aws status` shows whether the secret is set
+   and when it last changed; it never reads the value.
+
+**Changing the password.** Every 90 days, and whenever a staff member who could read the secret leaves:
+1. Change the account's password in CollectionSpace.
+2. Run `./bmu aws reader-secret` again with the new one.
+
+The BMU picks the new password up without a deploy or restart: at once if CollectionSpace refuses the old one, and
+otherwise within 5 minutes. In between, an intern's checks answer "The BMU can't check this against CollectionSpace
+now" and nothing is lost.
+
+**Who can read the secret.** The web app's task role, and anyone with administrator access to the AWS account.
+CloudTrail records every read (`GetSecretValue`). The worker's role can't read it.
+
+**If it isn't set.** Interns can still sign in and prepare drafts. Each check answers that the read-only account
+isn't ready, and staff are not affected.
 
 ## What it creates
 
@@ -72,6 +110,7 @@ deploy pushes a new image tag (commit and time), so `./bmu aws status` shows whi
 | ECS Fargate | Cluster `bmu-<env>` with two services. Both run on ARM. The tasks are replaced one by one on deploy and rolled back automatically if they don't start. |
 | DynamoDB | `bmu-<env>-jobs`, `-sessions`, `-credentials` and `-audit`: the same keys, index and TTL as the local tables (a test checks this). Point-in-time recovery is on for jobs and audit, and off for the two tables that hold encrypted passwords. |
 | S3 | Staging bucket `bmu-<env>-staging-<account>-<region>`: SSE-KMS with its own key, versioning, all public access blocked, TLS only, KMS-encrypted uploads only, and CORS for the BMU's address only. The BMU deletes every version of a staged file; a rule removes any version left behind after a day. Audit files (`audit/`) keep their versions for a year. Access logs go to `bmu-<env>-s3-logs-…`, kept 90 days. |
+| Secrets Manager | `bmu-<env>/cspace-reader`: the read-only CollectionSpace account's sign-in. Terraform creates it empty; `./bmu aws reader-secret` sets the value. Only the web role may read it. With `protect_data = false` it is deleted at once on `destroy`; with `true`, AWS keeps it for 30 days. |
 | KMS | Three keys: session, job and staging. Rotation is on. See the key policies below. |
 | IAM | Separate roles for the web app and the worker, each with only what its code uses. The web app can save and delete a job's sign-in but not read it; the worker can read and delete it. Only the web app adds staged files; both can read and delete them (the web app makes the TIFF thumbnails). Both can add audit entries and audit files, and neither can read, change or delete them. The worker role has no access to the session key and can only decrypt with the job key. |
 | CloudWatch Logs | `/bmu/<env>/web` and `/bmu/<env>/worker`, kept 30 days. |
@@ -184,4 +223,8 @@ Neither of the first two needs an AWS sign-in.
   continues where it stopped.
 - **"Error acquiring the state lock".** An earlier run was interrupted. Check that no other deploy is running,
   then `terraform -chdir=deploy/terraform/app force-unlock <the lock ID in the message>`.
+- **An intern sees "The BMU can't check this against CollectionSpace now".** The read-only account can't be
+  used. "its secret can't be read" or "its secret has no user name or password yet": run `./bmu aws reader-secret`. "CollectionSpace refused
+  its sign-in": the password was changed in CollectionSpace or the account lost its role; set the secret again
+  or ask the CollectionSpace administrator.
 - **The app doesn't come up.** Run `./bmu aws logs web` or `./bmu aws logs worker`, and `./bmu aws status`.
