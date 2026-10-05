@@ -1,8 +1,8 @@
 # New CollectionSpace Bulk Media Uploader (prototype)
 
 A prototype of the new Bulk Media Uploader (BMU) for UC Berkeley's CollectionSpace tenants, replacing the
-legacy `uploadmedia` Django webapp in `cspace-webapps-common`. It follows the design document
-"New BMU (uploadmedia): High-Level Architecture" and its UI mockup.
+legacy `uploadmedia` Django webapp in `cspace-webapps-common`. It follows the design document,
+[New BMU (uploadmedia): High-Level Architecture](docs/design.md), and its UI mockup (`docs/mockup/`).
 
 It implements the design for **PAHMA**. Not built yet: the other tenants, the TIFF quality checks, the audit-log
 screen (the audit entries are written), the Restricted Media option and tuning for 1,000-document jobs. The AWS
