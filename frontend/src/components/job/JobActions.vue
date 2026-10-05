@@ -60,16 +60,6 @@
       </v-alert>
     </Teleport>
     <div v-if="!confirming || confirmTo" :id="`job-${job.id}-actions`" class="actions align-center d-flex flex-wrap justify-end">
-      <v-btn
-        v-if="!inPreview"
-        :id="`job-${job.id}-preview-btn`"
-        :disabled="!!confirming"
-        size="small"
-        variant="outlined"
-        @click="() => emit('open', job.id, 'preview')"
-      >
-        Preview
-      </v-btn>
       <template v-if="kind === 'drafts'">
         <span v-if="lockedByOther" :title="noTakeOver || `${job.editingBy} is editing this draft`">
           <v-btn
@@ -201,9 +191,10 @@ import {api} from '@/api'
 
 /**
  * A job's actions in Drafts and Job queue, in the list and in the job's preview (design: Drafts, scheduling and
- * the job queue). Drafts: Preview, Edit (Continue editing), or Take over… after a warning when someone else is
- * editing, and Delete. Job queue: Preview, Edit (after a warning: it leaves the queue) and Delete for a queued
- * job; Cancel run (after a warning) for a running one. The preview shows the same actions without Preview.
+ * the job queue). Drafts: Edit (Continue editing), or Take over… after a warning when someone else is editing, and
+ * Delete. Job queue: Edit (after a warning: it leaves the queue) and Delete for a queued job; Cancel run (after a
+ * warning) for a running one. The full preview shows the same actions; it is opened from the expanded row
+ * ("Open full preview" in JobDetails), not from a button here.
  */
 const props = defineProps({
   // Where a confirmation is shown: a list gives the full-width cell under the job's row. Without it, in place of the buttons.
@@ -223,10 +214,6 @@ const props = defineProps({
     default: '',
     required: false,
     type: String
-  },
-  inPreview: {
-    required: false,
-    type: Boolean
   },
   job: {
     required: true,

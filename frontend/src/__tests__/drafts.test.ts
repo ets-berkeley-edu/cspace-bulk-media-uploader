@@ -97,7 +97,8 @@ describe('a job\'s confirmations in a list', () => {
     expect(confirmRow.find('td').attributes('colspan')).toBe('8')
     expect(confirmRow.find('#job-a-delete-confirm').text()).toContain('Delete this draft?')
     expect(job.find('tr.job-row').text()).not.toContain('Delete this draft?')
-    for (const id of ['#job-a-preview-btn', '#job-a-edit-btn', '#job-a-delete-btn']) expect(job.find(id).attributes('disabled')).toBeDefined()
+    expect(job.find('#job-a-preview-btn').exists()).toBe(false) // the rows have no Preview button
+    for (const id of ['#job-a-edit-btn', '#job-a-delete-btn']) expect(job.find(id).attributes('disabled')).toBeDefined()
     await job.find('#job-a-delete-cancel-btn').trigger('click')
     await flushPromises()
     expect(confirmRow.attributes('style')).toContain('display: none')

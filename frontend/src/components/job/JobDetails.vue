@@ -1,5 +1,17 @@
 <template>
   <div :id="`job-${job.id}-details`" class="py-3">
+    <!-- The only way to the full preview from a list: the rows have no Preview button -->
+    <div class="mb-2 text-body-2">
+      <button
+        :id="`job-${job.id}-full-preview-btn`"
+        class="link-btn"
+        type="button"
+        @click="() => emit('preview')"
+      >
+        Open full preview
+      </button>
+      <span class="text-medium-emphasis"> — every document and every check, with paging, sorting and filters.</span>
+    </div>
     <dl class="job-facts mb-3 text-body-2">
       <div><dt>Handling</dt><dd>{{ rows ? handlingMix(rows, tenant) : '—' }}</dd></div>
       <div><dt>Group title</dt><dd>{{ job.groupOn ? job.groupTitle || '—' : 'None' }}</dd></div>
@@ -31,17 +43,6 @@
       :rows="rows"
       :tenant="tenant"
     />
-    <div class="mt-2 text-body-2">
-      <button
-        :id="`job-${job.id}-full-preview-btn`"
-        class="link-btn"
-        type="button"
-        @click="() => emit('preview')"
-      >
-        Open full preview
-      </button>
-      <span class="text-medium-emphasis"> — every document and every check, with paging, sorting and filters.</span>
-    </div>
   </div>
 </template>
 

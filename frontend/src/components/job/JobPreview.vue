@@ -263,7 +263,6 @@
         <JobActions
           :counts="counts"
           :edit-why="editWhy"
-          in-preview
           :job="job"
           :kind="from"
           :staff="staff"

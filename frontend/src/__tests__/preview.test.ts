@@ -96,19 +96,19 @@ describe('expanded job documents (design: Job lists; UI mockup jobDocsTable)', (
 describe('job actions (design: Drafts; The job queue; UI mockup actionsFor)', () => {
   const label = (b: { text: () => string; attributes: (n: string) => string | undefined }) => b.text() || b.attributes('aria-label')
   const texts = (w: ReturnType<typeof mount>) => w.findAll('button').map(label)
-  it('in a draft\'s preview: Edit, Submit…, the intern setting and Delete, or Take over when someone else is editing', () => {
-    expect(texts(mount(JobActions, {props: {job: job(), kind: 'drafts', inPreview: true, staff: true}}))).toEqual(['Edit', 'Submit…', 'Open to interns', 'Delete'])
-    expect(texts(mount(JobActions, {props: {job: job({editingBy: 'jlee', editingSince: 5}), kind: 'drafts', inPreview: true, staff: true}})))
+  it('for a draft, in the list and in its preview: Edit, Submit…, the intern setting and Delete, or Take over when someone else is editing; no Preview button', () => {
+    expect(texts(mount(JobActions, {props: {job: job(), kind: 'drafts', staff: true}}))).toEqual(['Edit', 'Submit…', 'Open to interns', 'Delete'])
+    expect(texts(mount(JobActions, {props: {job: job({editingBy: 'jlee', editingSince: 5}), kind: 'drafts', staff: true}})))
       .toEqual(['Take over…', 'Submit…', 'Open to interns', 'Delete'])
-    expect(texts(mount(JobActions, {props: {job: job(), kind: 'drafts', staff: true}}))).toEqual(['Preview', 'Edit', 'Submit…', 'Open to interns', 'Delete'])
+    expect(texts(mount(JobActions, {props: {job: job(), kind: 'drafts', staff: true}}))).toEqual(['Edit', 'Submit…', 'Open to interns', 'Delete'])
     // an intern: no Submit, no setting; Submit for review on a draft that is open to interns
-    expect(texts(mount(JobActions, {props: {job: job({internOpen: true}), kind: 'drafts'}}))).toEqual(['Preview', 'Edit', 'Submit for review…', 'Delete'])
-    expect(texts(mount(JobActions, {props: {job: job(), kind: 'drafts'}}))).toEqual(['Preview', 'Edit', 'Delete'])
+    expect(texts(mount(JobActions, {props: {job: job({internOpen: true}), kind: 'drafts'}}))).toEqual(['Edit', 'Submit for review…', 'Delete'])
+    expect(texts(mount(JobActions, {props: {job: job(), kind: 'drafts'}}))).toEqual(['Edit', 'Delete'])
   })
 
   it('in the queue: Edit and Delete for a queued job, Cancel run for a running one', () => {
-    expect(texts(mount(JobActions, {props: {job: job({status: 'Queued'}), kind: 'queue', inPreview: true, staff: true}}))).toEqual(['Edit', 'Move to Drafts…', 'Delete'])
-    const run = mount(JobActions, {props: {job: job({status: 'Running'}), kind: 'queue', inPreview: true, staff: true}})
+    expect(texts(mount(JobActions, {props: {job: job({status: 'Queued'}), kind: 'queue', staff: true}}))).toEqual(['Edit', 'Move to Drafts…', 'Delete'])
+    const run = mount(JobActions, {props: {job: job({status: 'Running'}), kind: 'queue', staff: true}})
     expect(texts(run)).toEqual(['Cancel run', 'Delete'])
     expect(run.findAll('button')[1].attributes('disabled')).toBeDefined()
   })
@@ -151,7 +151,7 @@ describe('job actions (design: Drafts; The job queue; UI mockup actionsFor)', ()
       expect(btn(closed, t).attributes('disabled')).toBeDefined()
       expect(btn(closed, t).attributes('title')).toBe(STAFF_DRAFT_WHY)
     }
-    expect(closed.findAll('button').find((x) => x.text() === 'Preview')!.attributes('disabled')).toBeUndefined()
+    expect(closed.findAll('button').some((x) => x.text() === 'Preview')).toBe(false) // the full preview opens from the expanded row
     // staff are never limited by the setting
     const staff = mount(JobActions, {props: {job: job({internOpen: false}), kind: 'drafts', staff: true}})
     expect(btn(staff, 'Edit').attributes('disabled')).toBeUndefined()

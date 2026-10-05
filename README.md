@@ -65,7 +65,7 @@ deployment is built (`deploy/README.md`); what it leaves for later is listed the
   is available only when
   no document needs fixing; a document that needs an Object creator doesn't stop it. The draft stays in Drafts,
   becomes staff only, and is marked "Needs review" with who sent it and when; such drafts are listed first. A staff
-  member reviews it with Preview or Edit and submits it as any draft. The mark comes off when staff submit the job,
+  member reviews it in the full preview or with Edit and submits it as any draft. The mark comes off when staff submit the job,
   or open it to interns again, which is how they send it back. The intern can't take it back. It never goes to the
   Job queue, which holds only jobs that will run, each with a staff member's sign-in. The audit log records "Sent
   for review".
