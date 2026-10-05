@@ -51,6 +51,8 @@ export const api = {
   toDrafts: (id: string) => request<Job>('POST', `/api/jobs/${id}/to-drafts`),
   /** Whether interns may edit a draft: staff either way; an intern only hands a draft over to staff (open: false). */
   internAccess: (id: string, open: boolean) => request<Job>('POST', `/api/jobs/${id}/intern-access`, {open}),
+  /** An intern sends a finished draft to staff: it stays in Drafts, staff only, marked "Needs review". */
+  sendForReview: (id: string) => request<Job>('POST', `/api/jobs/${id}/review`),
   cancelRun: (id: string) => request<Job>('POST', `/api/jobs/${id}/cancel`),
   saveDraft: (id: string) => request<Job>('POST', `/api/jobs/${id}/save`),
   addFiles: (id: string, files: { name: string; size: number; type: string; exifDate?: string; orientation?: string }[]) =>

@@ -143,7 +143,7 @@ describe('staff actions on a draft in the list (design: Roles)', () => {
   const draft = {id: 'e', name: 'Box 3', status: 'Draft', createdBy: 'kim', createdByRole: 'intern', internOpen: true, rowCount: 2,
     lastSavedBy: 'lee', lastSavedAt: now, expiresAt: now + 30 * 86400}
   let calls: { url: string; method: string; body: unknown }[] = []
-  const stub = (routes: (url: string, method: string) => { status?: number; body: unknown } | undefined, counts = {block: 0, warn: 1}) => {
+  const stub = (routes: (url: string, method: string) => { status?: number; body: unknown } | undefined, counts: {block: number; warn: number; creator?: number} = {block: 0, warn: 1}) => {
     calls = []
     vi.stubGlobal('fetch', vi.fn((url: string, init?: RequestInit) => {
       const method = init?.method ?? 'GET'
@@ -195,6 +195,36 @@ describe('staff actions on a draft in the list (design: Roles)', () => {
     w.unmount()
   })
 
+  it('Submit for review… is off for an intern, with the reason, while a document needs fixing', async () => {
+    stub(() => undefined, {block: 1, warn: 0, creator: 2})
+    const w = mount(DraftsList, {props: {tenant}})
+    await flushPromises()
+    const b = w.find('#job-e-hand-over-btn')
+    expect(b.attributes('disabled')).toBeDefined()
+    expect(b.attributes('title')).toBe('Fix or exclude the document marked Needs fixing first')
+    w.unmount()
+  })
+
+  it('a document that needs an Object creator does not stop Submit for review', async () => {
+    stub(() => undefined, {block: 0, warn: 0, creator: 2})
+    const w = mount(DraftsList, {props: {tenant}})
+    await flushPromises()
+    expect(w.find('#job-e-hand-over-btn').attributes('disabled')).toBeUndefined()
+    w.unmount()
+  })
+
+  it('marks a draft that was sent for review, and lists it first', async () => {
+    const waiting = {...draft, id: 'w', name: 'Waiting', internOpen: false, lastSavedAt: 1, review: {by: 'kim', at: 1791000000}}
+    stub((url) => (url.endsWith('/api/jobs') ? {body: {jobs: [{...draft, lastSavedAt: 50}, waiting]}} : undefined))
+    const w = mount(DraftsList, {props: {tenant, staff: true}})
+    await flushPromises()
+    expect(w.find('#job-w-review').text()).toContain('Needs review · sent by kim, ')
+    expect(w.find('#job-e-review').exists()).toBe(false)
+    const names = w.findAll('[id$="-name"]').map((n) => n.text())
+    expect(names.indexOf('Waiting')).toBeLessThan(names.indexOf('Box 3')) // although it was saved longer ago
+    w.unmount()
+  })
+
   it('the setting is changed with one click, and the list says what happened', async () => {
     stub((url) => (url.endsWith('/intern-access') ? {body: {...draft, internOpen: false}} : undefined))
     const w = mount(DraftsList, {props: {tenant, staff: true}})
@@ -208,19 +238,20 @@ describe('staff actions on a draft in the list (design: Roles)', () => {
     w.unmount()
   })
 
-  it('an intern hands a draft over to staff after confirming, and has no Submit or setting', async () => {
-    stub((url) => (url.endsWith('/intern-access') ? {body: {...draft, internOpen: false}} : undefined))
+  it('an intern submits a draft for review after confirming, and has no Submit or setting', async () => {
+    stub((url) => (url.endsWith('/review') ? {body: {...draft, internOpen: false, review: {by: 'kim', at: 1}}} : undefined))
     const w = mount(DraftsList, {props: {tenant}})
     await flushPromises()
     expect(w.find('#job-e-submit-btn').exists()).toBe(false)
     expect(w.find('#job-e-access-btn').exists()).toBe(false)
     await w.find('#job-e-hand-over-btn').trigger('click')
     expect(w.find('#job-e-handover-confirm').text()).toContain('You won\'t be able to edit it afterwards unless a staff member opens it to interns again.')
-    expect(calls.some((c) => c.url.endsWith('/intern-access'))).toBe(false)
+    expect(w.find('#job-e-hand-over-btn').text()).toBe('Submit for review…')
+    expect(calls.some((c) => c.url.endsWith('/review'))).toBe(false)
     await w.find('#job-e-handover-confirm-btn').trigger('click')
     await flushPromises()
-    expect(calls.find((c) => c.url === '/api/jobs/e/intern-access')!.body).toEqual({open: false})
-    expect(w.find('#drafts-message').text()).toBe('“Box 3” was handed over to staff.')
+    expect(calls.some((c) => c.url === '/api/jobs/e/review' && c.method === 'POST')).toBe(true)
+    expect(w.find('#drafts-message').text()).toBe('“Box 3” was sent to staff for review.')
     w.unmount()
   })
 })

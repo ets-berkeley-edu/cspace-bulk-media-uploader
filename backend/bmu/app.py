@@ -943,29 +943,57 @@ def _routes(app: FastAPI) -> None:
 
     @app.post("/api/jobs/{job_id}/intern-access")
     def intern_access(job_id: str, body: InternAccess, sess: Session = Depends(editor_session), s: Services = Depends(svc)):
-        """Design (Roles): whether interns may edit this draft. Staff change it either way. An intern can only hand
-        a draft that is open to interns over to staff ("Hand over to staff"); only staff can open it again. Making
-        a draft staff only ends an intern's editing of it. Every change is in the audit log."""
+        """Design (Roles): whether interns may edit this draft. Staff change it either way; an intern gives a draft
+        to staff with Submit for review (send_for_review). Making a draft staff only ends an intern's editing of it.
+        Opening a draft to interns again is also how staff send back one that was sent for review, so it takes the
+        "Needs review" mark off. Every change is in the audit log."""
         job = _job_or_404(s, sess, job_id)
         if job["status"] != "Draft":
             raise HTTPException(409, f"The job is {job['status']}; this is set on drafts.")
-        staff = sess.role == "staff"
-        if not staff:
-            _intern_may(job, sess)  # a draft that is open to interns
-            if body.open:
-                raise HTTPException(403, STAFF_REFUSED)
-            if job.get("editingSession") not in (None, sess.key):
-                raise HTTPException(409, f"{job.get('editingBy')} is editing this draft, so it can't be handed over now.")
+        if sess.role != "staff":
+            raise HTTPException(403, STAFF_REFUSED)
         if bool(job.get("internOpen")) == body.open:
             return _public(job, sess)
-        if not s.storage.update_job(job_id, {"internOpen": body.open}, expect_status="Draft"):
+        fields = {"internOpen": body.open, **({"review": None} if body.open else {})}
+        if not s.storage.update_job(job_id, fields, expect_status="Draft"):
             raise HTTPException(409, "The job changed meanwhile; reload and try again.")
         if not body.open:
             s.storage.end_intern_editing(job_id)
         name = job.get("name") or "Untitled job"
-        detail = (f"Opened “{name}” to interns." if body.open else
-                  f"Made “{name}” staff only." if staff else f"Handed “{name}” over to staff.")
-        s.storage.audit(sess.tenant, "Intern access changed", sess.user, job_id, detail)
+        s.storage.audit(sess.tenant, "Intern access changed", sess.user, job_id,
+                        f"Opened “{name}” to interns." if body.open else f"Made “{name}” staff only.")
+        return _public(s.storage.get_job(job_id), sess)
+
+    @app.post("/api/jobs/{job_id}/review")
+    def send_for_review(job_id: str, sess: Session = Depends(editor_session), s: Services = Depends(svc)):
+        """Design (Roles, Submit for review): an intern who has finished a draft sends it to staff. Only when no
+        document needs fixing; a document that needs an Object creator is for staff to resolve. The draft stays in
+        Drafts, becomes staff only and is marked "Needs review" with who sent it and when. The intern can't take it
+        back: only staff can open it to interns again. It never goes to the Job queue, which holds only jobs that
+        will run, each with a staff member's sign-in."""
+        job = _job_or_404(s, sess, job_id)
+        if sess.role != "intern":
+            raise HTTPException(409, "Staff submit a job themselves; Submit for review is for interns.")
+        _intern_may(job, sess)  # a draft that is open to interns
+        if job.get("editingSession") not in (None, sess.key):
+            raise HTTPException(409, f"{job.get('editingBy')} is editing this draft, so it can't be sent for review now.")
+        if job.get("groupOn") and not (job.get("groupTitle") or "").strip():
+            raise HTTPException(409, "Enter a group title, or turn off the job's group.")
+        result = _recheck(s, sess, job_id, targets=None)
+        work = [r for r in result["rows"] if r.get("include") and (r.get("result") or {}).get("state") != "Done"]
+        if not work:
+            raise HTTPException(409, "Nothing to review: the job has no documents to run.")
+        blocked = [r["n"] for r in work if worst(r) == "block"]
+        if blocked:
+            n = len(blocked)
+            raise HTTPException(409, {"rows": blocked, "message":
+                                      f"{n} document{' needs' if n == 1 else 's need'} fixing first. Fix or exclude "
+                                      f"{'it' if n == 1 else 'them'}, then submit the job for review."})
+        if not s.storage.update_job(job_id, {"internOpen": False, "review": {"by": sess.user, "at": now()}}, expect_status="Draft"):
+            raise HTTPException(409, "The job changed meanwhile; reload and try again.")
+        s.storage.end_intern_editing(job_id)
+        s.storage.audit(sess.tenant, "Sent for review", sess.user, job_id,
+                        f"Sent “{job.get('name') or 'Untitled job'}” to staff for review, with {len(work)} documents.")
         return _public(s.storage.get_job(job_id), sess)
 
     @app.delete("/api/jobs/{job_id}")
@@ -1314,6 +1342,7 @@ def _routes(app: FastAPI) -> None:
         if not s.storage.queue_with_credential(
                 job_id, sess.user, s.crypto.encrypt("job", pw, {"user": sess.user, "job": job_id}), expires,
                 {"status": "Queued", "queuedAt": t, "queuePos": t, "scheduledBy": sess.user, "note": "",
+                 "review": None,  # reviewed: a staff member submitted it (design: Roles, Submit for review)
                  "runNow": False, "runAt": None, "held": None,  # staff's settings from an earlier time in the queue
                  "credentialExpires": int(expires), "checksAtSchedule": result["counts"],
                  "progress": {"total": len(work), "done": 0, "failed": 0}},

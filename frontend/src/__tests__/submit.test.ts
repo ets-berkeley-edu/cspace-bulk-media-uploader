@@ -101,17 +101,41 @@ describe('whether interns may edit the draft, in the editor (design: Roles)', ()
     w.unmount()
   })
 
-  it('an intern hands the draft over to staff after confirming, and the editor is told', async () => {
+  it('Submit for review… is off in the editor while a document needs fixing, and staff see who sent a draft', async () => {
+    const bad: Row = {...row, checks: [{level: 'block', text: 'No object 20-1 in CollectionSpace.'}]}
+    stub((url, method) => {
+      if (url.endsWith('/api/jobs/j1') && method === 'GET') return {job: {...draft, editingBy: 'kim', internOpen: true}, rows: [bad], runs: [], created: {}}
+      if (url.endsWith('/check')) return {rows: [bad], counts: {block: 1, warn: 0}}
+      if (url.includes('/vocabularies/')) return {terms: []}
+      if (url.endsWith('/api/failures')) return {failures: {}}
+      return {}
+    })
+    const w = mount(JobEditor, {props: {me: {...me, user: 'kim', role: 'intern'}, jobId: 'j1'}, global: {stubs: {DocumentThumbnail: true}}})
+    await flushPromises()
+    expect(w.find('#hand-over-btn').text()).toBe('Submit for review…')
+    expect(w.find('#hand-over-btn').attributes('disabled')).toBeDefined()
+    expect(w.find('#hand-over-btn').attributes('title')).toBe('Fix or exclude the documents marked Needs fixing first')
+    w.unmount()
+
+    stub(routes({...draft, review: {by: 'kim', at: 1791000000}} as Job))
+    const staffView = mount(JobEditor, {props: {me, jobId: 'j1'}, global: {stubs: {DocumentThumbnail: true}}})
+    await flushPromises()
+    expect(staffView.find('#review-note').text()).toContain('kim sent this draft for review on ')
+    expect(staffView.find('#review-note').text()).toContain('To send it back, tick “Open to interns”.')
+    staffView.unmount()
+  })
+
+  it('an intern submits the draft for review after confirming, and the editor is told', async () => {
     const calls = stub(routes({...draft, name: 'Box 3', editingBy: 'kim', internOpen: true} as Job))
     const w = mount(JobEditor, {props: {me: {...me, user: 'kim', role: 'intern'}, jobId: 'j1'}, global: {stubs: {DocumentThumbnail: true}}})
     await flushPromises()
     expect(w.find('#intern-open').exists()).toBe(false)
     await w.find('#hand-over-btn').trigger('click')
-    expect(w.find('#hand-over-confirm').text()).toContain('Hand this draft over to staff?')
-    expect(calls.some((c) => c.url.endsWith('/intern-access'))).toBe(false)
+    expect(w.find('#hand-over-confirm').text()).toContain('Submit this draft for review?')
+    expect(calls.some((c) => c.url.endsWith('/review'))).toBe(false)
     await w.find('#hand-over-confirm-btn').trigger('click')
     await flushPromises()
-    expect(calls.some((c) => c.url === '/api/jobs/j1/intern-access' && c.method === 'POST')).toBe(true)
+    expect(calls.some((c) => c.url === '/api/jobs/j1/review' && c.method === 'POST')).toBe(true)
     expect(w.emitted('handedOver')![0]).toEqual(['Box 3'])
     w.unmount()
   })

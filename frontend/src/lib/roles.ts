@@ -40,7 +40,30 @@ export const permsFor = (me: Pick<Me, 'role' | 'perms'>): Perms => (isStaff(me) 
 /** "Open to interns" or "Staff only": whether interns may edit the draft. */
 export const accessLabel = (job: Pick<Job, 'internOpen'>): string => (job.internOpen ? 'Open to interns' : 'Staff only')
 
-export const HAND_OVER_CONFIRM = 'Hand this draft over to staff? You won\'t be able to edit it afterwards unless a staff member opens it to interns again.'
+/**
+ * Design (Roles, Submit for review): an intern who has finished a draft sends it to staff. It stays in Drafts, becomes
+ * staff only and is marked "Needs review"; a staff member reviews and submits it.
+ */
+export const REVIEW_CONFIRM = 'Submit this draft for review? It goes to staff, who review and submit it. You won\'t be able to edit it '
+  + 'afterwards unless a staff member opens it to interns again.'
+
+/**
+ * Why an intern can't send a draft for review yet, or '' when they can. Only a document that needs fixing stops it:
+ * one that needs an Object creator is for staff to resolve. counts: undefined while the checks are running.
+ */
+export function reviewBlocked(job: Pick<Job, 'rowCount' | 'editingBy' | 'editingByYou' | 'groupOn' | 'groupTitle'>,
+  counts?: CheckCounts | null): string {
+  if (job.editingBy && !job.editingByYou) return `${job.editingBy} is editing this draft`
+  if (!job.rowCount) return 'This draft has no documents'
+  if (!counts) return 'Checking against CollectionSpace…'
+  if (counts.block) return `Fix or exclude the ${counts.block === 1 ? 'document' : `${counts.block} documents`} marked Needs fixing first`
+  if (job.groupOn && !job.groupTitle?.trim()) return 'Enter a group title, or turn off the job\'s group'
+  return ''
+}
+
+/** "Needs review · sent by kim, Oct 5, 9:12 AM": the mark on a draft an intern sent for review. */
+export const reviewLabel = (job: Pick<Job, 'review'>, when: (at: number) => string): string =>
+  (job.review ? `Needs review · sent by ${job.review.by}, ${when(job.review.at)}` : '')
 
 /**
  * Why a draft can't be submitted from the Drafts list or its preview, or '' when it can: the server checks the

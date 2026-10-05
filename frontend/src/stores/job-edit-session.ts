@@ -127,11 +127,11 @@ export const useJobEditSessionStore = defineStore('jobEditSession', {
       this.notice = submitMessage(job, {alwaysRunTime: !!schedule?.alwaysRunTime})
       await router.push('/queue')
     },
-    /** An intern handed the draft in the editor over to staff: it is staff only now, so the editor starts a new job. */
+    /** An intern sent the draft in the editor to staff for review: it is staff only now, so the editor starts a new job. */
     async handedOver(name: string) {
       this.jobId = null // handing over already ended this page's editing
       await this.newJob()
-      this.notice = `“${name || 'Untitled job'}” was handed over to staff. It is in Drafts, marked Staff only.`
+      this.notice = `“${name || 'Untitled job'}” was sent to staff for review. It is in Drafts, marked Needs review.`
     }
   }
 })

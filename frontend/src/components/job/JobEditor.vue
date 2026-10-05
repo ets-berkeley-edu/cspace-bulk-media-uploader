@@ -154,7 +154,20 @@
       placeholder="e.g. 2026 spring accession batch"
       @change="rename"
     />
-    <!-- Whether interns may edit this draft (design: Roles): staff set it; an intern hands the draft over to staff -->
+    <!-- Design (Roles, Submit for review): an intern sent this draft to staff -->
+    <v-alert
+      v-if="job?.status === 'Draft' && job.review"
+      id="review-note"
+      class="mt-2"
+      density="compact"
+      type="info"
+      variant="tonal"
+    >
+      {{ job.review.by }} sent this draft for review on {{ formatTime(job.review.at) }}.
+      <template v-if="isStaffUser">Submit it when it is ready. To send it back, tick “Open to interns”.</template>
+      <template v-else>A staff member reviews and submits it.</template>
+    </v-alert>
+    <!-- Whether interns may edit this draft (design: Roles): staff set it; an intern sends a finished draft for review -->
     <div v-if="job?.status === 'Draft' && mode !== 'preview'" id="intern-access" class="mt-2 text-body-2">
       <label v-if="isStaffUser" class="align-center d-inline-flex" for="intern-open">
         <input
@@ -169,16 +182,19 @@
         <span id="intern-open-hint" class="ml-2 text-medium-emphasis">{{ internOpenHint }}</span>
       </label>
       <template v-else-if="job.internOpen">
-        <v-btn
-          v-if="!isHandingOver"
-          id="hand-over-btn"
-          :disabled="!editable || isBusy"
-          size="small"
-          variant="outlined"
-          @click="isHandingOver = true"
-        >
-          Hand over to staff…
-        </v-btn>
+        <!-- (the ids date from "Hand over to staff", which this replaced) -->
+        <span v-if="!isHandingOver" :title="reviewTitle">
+          <v-btn
+            id="hand-over-btn"
+            color="primary"
+            :disabled="!editable || isBusy || !!noReview"
+            size="small"
+            :title="reviewTitle"
+            @click="isHandingOver = true"
+          >
+            Submit for review…
+          </v-btn>
+        </span>
         <v-alert
           v-else
           id="hand-over-confirm"
@@ -187,7 +203,7 @@
           type="warning"
           variant="tonal"
         >
-          <div>{{ HAND_OVER_CONFIRM }}</div>
+          <div>{{ REVIEW_CONFIRM }}</div>
           <div class="mt-2">
             <v-btn
               id="hand-over-confirm-btn"
@@ -197,7 +213,7 @@
               size="small"
               @click="handOver"
             >
-              Hand over to staff
+              Submit for review
             </v-btn>
             <v-btn
               id="hand-over-cancel-btn"
@@ -607,7 +623,7 @@ import {canPreview, fileTooLargeText, formIsOld, formatTime, makeThumbnail, mapL
 import {readImageInfo} from '@/lib/imageinfo'
 import {portalOf} from '@/lib/portal'
 import {OUTCOME, failureOf, loadFailures} from '@/lib/results'
-import {GROUP_PROBLEM, HAND_OVER_CONFIRM, INTERN_SUBMIT_WHY, isStaff, permsFor} from '@/lib/roles'
+import {GROUP_PROBLEM, INTERN_SUBMIT_WHY, REVIEW_CONFIRM, isStaff, permsFor} from '@/lib/roles'
 import {groupTimestampTitle} from '@/lib/schedule'
 import {creatorText, hasWork, jobCounts, worstLevel} from '@/lib/status'
 import {editorColumns, tableState, tableView} from '@/lib/table'
@@ -762,11 +778,16 @@ async function handOver() {
   isBusy.value = true
   try {
     const name = job.value.name
-    await api.internAccess(job.value.id, false)
+    await rename()
+    await api.sendForReview(job.value.id)
     emit('handedOver', name)
   } catch (e) {
     isHandingOver.value = false
     await failed(e)
+    if (e instanceof ApiError && e.status === 409 && editable.value) {
+      rows.value = (await api.job(job.value.id)).rows // the server checked the job again: show what it found
+      showProblems()
+    }
   } finally {
     isBusy.value = false
   }
@@ -790,6 +811,18 @@ const scheduleBlocked = computed(() => {
   }
   return ''
 })
+
+/** Why an intern can't send this draft for review yet: only a document that needs fixing, or an unfinished upload. */
+const noReview = computed(() => {
+  const c = counts.value
+  if (job.value?.groupOn && !job.value.groupTitle?.trim()) return 'Enter a group title, or turn off the job\'s group'
+  if (c.block) return 'Fix or exclude the documents marked Needs fixing first'
+  if (c.uploading) return 'Wait until every file is uploaded and verified'
+  if (!c.work) return 'Nothing to review: add a document first'
+  if (checking.size) return 'Checking against CollectionSpace…'
+  return ''
+})
+const reviewTitle = computed(() => noReview.value || 'Send this draft to staff for review: it becomes staff only, and a staff member submits it')
 
 /**
  * Design (Roles, Three kinds of result): creating groups is the one permission, creating Objects aside, that staff

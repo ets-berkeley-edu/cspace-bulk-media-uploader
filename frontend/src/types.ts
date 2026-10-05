@@ -291,6 +291,8 @@ export interface Job {
   runBy?: string;
   startedAt?: number;
   fixFrom?: { status: 'NeedsAttention' | 'Failed'; code: string; codeDetail?: string; run: number } | null;
+  /** An intern sent this draft to staff for review (design: Roles, Submit for review). */
+  review?: { by: string; at: number } | null;
   // the job's group (design: Groups)
   groupOn?: boolean;
   groupTitle?: string;
