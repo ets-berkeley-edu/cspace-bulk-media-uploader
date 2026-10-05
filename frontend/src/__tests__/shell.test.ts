@@ -251,7 +251,11 @@ describe('the job being worked on, across the tabs', () => {
     expect(w.find('.editor-stub').text()).toBe('editing d1')
     await router.push('/drafts')
     await settle()
-    await rowOf('Other draft').findAll('button').find(b => b.text() === 'Preview')!.trigger('click')
+    // the rows have no Preview button: expand the job and use "Open full preview"
+    expect(rowOf('Other draft').findAll('button').some(b => b.text() === 'Preview')).toBe(false)
+    await rowOf('Other draft').find('[id$="-toggle-btn"]').trigger('click')
+    await settle()
+    await rowOf('Other draft').findAll('button').find(b => b.text() === 'Open full preview')!.trigger('click')
     await settle()
     expect(w.text()).toContain('← Back to Drafts')
     expect(router.currentRoute.value.path).toBe('/drafts')
