@@ -61,6 +61,16 @@ ROLES = {
 }
 
 
+# What each user is for, shown by the BMU's Demo tools ("Sign in as")
+USER_NOTES = {
+    "admin": "Staff with every permission",
+    "limited": "Staff who can't create Objects or groups",
+    "intern": "Intern: no CollectionSpace permissions",
+    "newstaff": "Staff role without the permissions: sign-in refused",
+    "reader": "Neither BMU role: sign-in refused",
+}
+
+
 def _roles_for(user: str) -> list[str]:
     return list(store.role_overrides.get(user, ROLES[user]))
 
@@ -721,6 +731,13 @@ def settings():
             "deleted_languages": sorted(store.deleted_languages), "language_renames": {**store.language_renames},
             "steps": sorted(STEPS), "people": PEOPLE, "orgs": ORGS, "languages": LANGUAGES,
             "term_names": {_short(n): n for n in PEOPLE + ORGS}}
+
+
+@app.get("/_fake/users")
+def users():
+    """Development only: the simulator's users, with what each is for and its password (the BMU's Demo tools sign
+    in as one of them with a click). A real CollectionSpace has no such endpoint."""
+    return [{"user": u, "password": USERS[u][0], "about": USER_NOTES.get(u, "")} for u in USERS]
 
 
 @app.post("/_fake/reset")

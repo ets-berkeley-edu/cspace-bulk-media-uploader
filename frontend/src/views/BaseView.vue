@@ -64,7 +64,12 @@
           Prototype · creates Media records, files, Objects and Relations in CollectionSpace using your own account.
         </p>
         <!-- Demo tools: only in demo builds (lib/demo.ts). In a production build its code isn't in the bundle. -->
-        <component :is="DemoPane" v-if="DemoPane" @jobs-deleted="session.jobsDeleted" />
+        <component
+          :is="DemoPane"
+          v-if="DemoPane"
+          @jobs-deleted="session.jobsDeleted"
+          @user-changed="startAgain"
+        />
         <v-alert
           v-if="session.notice"
           id="notice"
@@ -148,6 +153,9 @@ const tabs = computed(() => [
   {id: 'finished', title: 'Finished jobs', path: '/finished'}
 ])
 
+
+// Demo tools signed in as another user: load the app afresh, so nothing of the previous user's stays on the page.
+const startAgain = () => window.location.assign(router.resolve('/').href)
 
 const signOut = () => {
   logOut().catch(() => undefined).then(() => {

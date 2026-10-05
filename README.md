@@ -161,6 +161,10 @@ and your browser remembers that. From it you can:
 - delete, "merge away" (404) or rename a sample Person or Organization, and remove or rename a language;
 - reset the simulator, put browser uploads back to full speed, and delete every job in the tenant (except running
   ones) to start a demo afresh;
+- **Sign in as:** one button for each of the simulator's users (staff, staff who can't create Objects, an intern,
+  and the two accounts the BMU refuses). A click signs you in as that user, as if you had typed their sign-in, and
+  loads the app afresh; a draft you had open is closed first. A refused account shows the usual message and leaves
+  you signed in as you were. The box is left out against a real CollectionSpace, which has no such list of users;
 - **Reset everything:** put the prototype back to how it starts. Every job, draft, uploaded file and audit entry in
   the BMU is deleted, the job schedule returns to its default, and the simulator and upload speeds are reset; you stay
   signed in. It is refused while a job is running, and it only works with the simulated CollectionSpace: against a

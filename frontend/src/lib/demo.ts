@@ -28,6 +28,11 @@ export interface DemoStatus {
   alwaysRunTime: boolean;
   sim: SimSettings | null;
   simError: string;
+  /** Who is signed in, and their BMU role. */
+  user: string;
+  role: 'staff' | 'intern';
+  /** The simulator's users, for "Sign in as" (empty against a real CollectionSpace). */
+  users: { user: string; about: string }[];
 }
 
 export const demoApi = {
@@ -36,6 +41,8 @@ export const demoApi = {
   sim: (action: string, params: Record<string, unknown> = {}) => request<SimSettings>('POST', `/api/_demo/sim/${action}`, {params}),
   objects: () => request<{ objects: { objectNumber: string; note: string; deleted: boolean; sensitivity?: unknown }[] }>('GET', '/api/_demo/sim/objects'),
   deleteAllJobs: () => request<{ deleted: number; skipped: string[] }>('POST', '/api/_demo/delete-all-jobs'),
+  /** Sign in as one of the simulator's users; whoever was signed in is signed out. Refused accounts say why. */
+  signInAs: (user: string) => request<{ user: string; role: 'staff' | 'intern' }>('POST', '/api/_demo/sign-in-as', {user}),
   /** Every job, draft, file and audit entry deleted; the schedule, the simulator and the upload speeds back to the start. */
   resetEverything: () => request<{ items: number; objects: number }>('POST', '/api/_demo/reset-everything'),
 }

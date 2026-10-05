@@ -22,7 +22,8 @@ def test_off_by_default_every_demo_endpoint_is_404_and_uploads_go_to_s3(api, log
     assert services.settings.demo is False
     for method, path, body in [("GET", "/api/_demo/status", None), ("POST", "/api/_demo/browser-upload", {"mbps": 1}),
                                ("POST", "/api/_demo/sim/slow", {"params": {"seconds": 2}}), ("GET", "/api/_demo/sim/objects", None),
-                               ("POST", "/api/_demo/delete-all-jobs", {}), ("POST", "/api/_demo/s3upload", None)]:
+                               ("POST", "/api/_demo/delete-all-jobs", {}), ("POST", "/api/_demo/s3upload", None),
+                               ("POST", "/api/_demo/sign-in-as", {"user": "intern"})]:
         assert api.request(method, path, json=body).status_code == 404, path
     services.demo.browser_upload_mbps = 1.0  # even if set somehow, uploads aren't rerouted while demo mode is off
     job = new_job(api)
@@ -156,3 +157,45 @@ def test_reset_everything_is_refused_while_a_job_runs_and_against_a_real_server(
     r = api.post("/api/_demo/reset-everything")
     assert r.status_code == 502 and "not a real server" in r.json()["detail"]
     assert services.storage.get_job(running) is not None
+
+
+# ---- Sign in as: one of the simulator's users, with a click ---------------------------------------------------------
+def test_status_lists_the_simulators_users_without_their_passwords_and_says_who_you_are(api, login, demo):
+    login()
+    st = api.get("/api/_demo/status").json()
+    assert (st["user"], st["role"]) == ("admin", "staff")
+    assert [u["user"] for u in st["users"]] == ["admin", "limited", "reader", "intern", "newstaff"]
+    assert st["users"][3] == {"user": "intern", "about": "Intern: no CollectionSpace permissions"}
+    assert "password" not in str(st)
+
+
+def test_sign_in_as_switches_the_user_and_releases_the_old_sessions_draft(api, login, demo, services):
+    login()
+    draft = new_job(api)  # open in admin's editor
+    old = services.storage.sessions.scan()["Items"][0]["PK"]
+    r = api.post("/api/_demo/sign-in-as", json={"user": "intern"})
+    assert r.status_code == 200 and (r.json()["user"], r.json()["role"]) == ("intern", "intern")
+    assert api.get("/api/me").json()["user"] == "intern"  # the cookie is the new session's
+    assert services.storage.get_session(old) is None and len(services.storage.sessions.scan()["Items"]) == 1
+    assert "editingSession" not in services.storage.get_job(draft)
+    assert api.post("/api/schedule/pause", json={"reason": "x"}).status_code == 403  # an intern, as if typed in
+    assert api.post("/api/_demo/sign-in-as", json={"user": "limited"}).json()["role"] == "staff"
+
+
+def test_sign_in_as_a_refused_account_says_why_and_leaves_you_signed_in(api, login, demo, services):
+    login()
+    for user, code in [("reader", "no_role"), ("newstaff", "account")]:
+        r = api.post("/api/_demo/sign-in-as", json={"user": user})
+        assert r.status_code == 403 and r.json()["detail"]["code"] == code
+        assert "Contact your CollectionSpace administrator" in r.json()["detail"]["message"]
+    assert api.post("/api/_demo/sign-in-as", json={"user": "nobody"}).status_code == 404
+    assert api.get("/api/me").json()["user"] == "admin" and len(services.storage.sessions.scan()["Items"]) == 1
+
+
+def test_sign_in_as_is_refused_against_a_real_server(api, login, demo):
+    import httpx
+    login()
+    demo.sim = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(404)), base_url="http://real")
+    r = api.post("/api/_demo/sign-in-as", json={"user": "admin"})
+    assert r.status_code == 502 and "Demo tools only work with the" in r.json()["detail"]
+    assert api.get("/api/_demo/status").json()["users"] == []

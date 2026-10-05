@@ -552,6 +552,48 @@ class RunAt(BaseModel):
 
 
 
+def _sign_in(s: Services, response: Response, username: str, password: str) -> dict:
+    """Check the username and password against CollectionSpace (Basic Auth), read the account's permissions and
+    roles, and start a session with its cookie. Raises 401 for a wrong sign-in, and 403 with the reason for an
+    account the BMU doesn't let in (design: Roles)."""
+    client = s.client_factory(username, password)
+    try:
+        perms = client.account_permissions()
+        try:
+            role = _read_role(s, client)
+        except CSpaceError as e:
+            if e.code in ("auth", "unavailable", "server"):
+                raise
+            log.warning("reading the roles of %s at sign-in failed (%s); no BMU role", username, e)
+            role = ""
+    except CSpaceError as e:
+        if e.code in ("auth", "forbidden"):
+            raise HTTPException(401, "CollectionSpace didn't accept that username and password.")
+        raise _cspace_http(e)
+    finally:
+        client.close()
+    # Design (Roles): every BMU user has one of the two roles; staff must also be able to do what the BMU
+    # exists for. Both refusals say whom to ask.
+    if role not in ROLES:
+        names = _join([*s.tenant.staff_roles, *s.tenant.intern_roles])
+        raise HTTPException(403, {"code": "no_role", "message":
+                                  f"Your CollectionSpace account doesn't have the {names} role, which the BMU needs. "
+                                  f"{ADMIN_HELP}"})
+    if role == "staff" and (missing := _staff_missing(s, perms)):
+        raise _account_refused(s, missing)
+    token = secrets.token_urlsafe(32)
+    key = _hash(token)
+    expires = now() + s.settings.session_hours * 3600
+    s.storage.put_session(key, {
+        "user": username, "tenant": s.tenant.key, "perms": perms.summary, "role": role,
+        "expires": int(expires), "lastSeen": now(),
+        "password": s.crypto.encrypt("session", password, {"user": username, "session": key}),
+    })
+    response.set_cookie(s.settings.cookie_name, token, httponly=True, secure=s.settings.cookie_secure, samesite="strict",
+                        max_age=int(s.settings.session_hours * 3600), path="/")
+    return _me(s, username, perms.summary, role)
+
+
 def _routes(app: FastAPI) -> None:
     @app.get("/api/health")
     def health():
@@ -566,42 +608,7 @@ def _routes(app: FastAPI) -> None:
     # ---- sign-in (Basic Auth checked against CollectionSpace) ----------------------------
     @app.post("/api/login")
     def login(body: LoginBody, response: Response, s: Services = Depends(svc)):
-        client = s.client_factory(body.username, body.password)
-        try:
-            perms = client.account_permissions()
-            try:
-                role = _read_role(s, client)
-            except CSpaceError as e:
-                if e.code in ("auth", "unavailable", "server"):
-                    raise
-                log.warning("reading the roles of %s at sign-in failed (%s); no BMU role", body.username, e)
-                role = ""
-        except CSpaceError as e:
-            if e.code in ("auth", "forbidden"):
-                raise HTTPException(401, "CollectionSpace didn't accept that username and password.")
-            raise _cspace_http(e)
-        finally:
-            client.close()
-        # Design (Roles): every BMU user has one of the two roles; staff must also be able to do what the BMU
-        # exists for. Both refusals say whom to ask.
-        if role not in ROLES:
-            names = _join([*s.tenant.staff_roles, *s.tenant.intern_roles])
-            raise HTTPException(403, {"code": "no_role", "message":
-                                      f"Your CollectionSpace account doesn't have the {names} role, which the BMU needs. "
-                                      f"{ADMIN_HELP}"})
-        if role == "staff" and (missing := _staff_missing(s, perms)):
-            raise _account_refused(s, missing)
-        token = secrets.token_urlsafe(32)
-        key = _hash(token)
-        expires = now() + s.settings.session_hours * 3600
-        s.storage.put_session(key, {
-            "user": body.username, "tenant": s.tenant.key, "perms": perms.summary, "role": role,
-            "expires": int(expires), "lastSeen": now(),
-            "password": s.crypto.encrypt("session", body.password, {"user": body.username, "session": key}),
-        })
-        response.set_cookie(s.settings.cookie_name, token, httponly=True, secure=s.settings.cookie_secure, samesite="strict",
-                            max_age=int(s.settings.session_hours * 3600), path="/")
-        return _me(s, body.username, perms.summary, role)
+        return _sign_in(s, response, body.username, body.password)
 
     @app.post("/api/logout")
     def logout(response: Response, request: Request, s: Services = Depends(svc)):
