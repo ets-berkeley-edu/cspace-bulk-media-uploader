@@ -364,9 +364,9 @@ def test_scheduling_fetches_permissions_again(api, login, add_uploaded, fake, se
     api.patch(f"/api/jobs/{job}/rows/{n}", json={"handling": "create"})
     fake.perm_overrides["admin"] = {"collectionobjects": "RL"}  # admin loses create on objects
     r = api.post(f"/api/jobs/{job}/schedule")
-    assert r.status_code == 409
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "creator"
     row = api.get(f"/api/jobs/{job}").json()["rows"][0]
-    assert any("can't create Object records" in t for t in _checks(row, "block"))
+    assert any("can't create Object records" in t for t in _checks(row, "creator"))  # not a mistake in the job
     assert api.get("/api/me").json()["perms"]["objects"] is False
     assert services.storage.get_credential(job) is None
 
@@ -744,7 +744,7 @@ def test_queued_jobs_run_in_the_order_shown_and_can_be_reordered(api, login, add
     a, b, c = (_queued_job(api, add_uploaded, [f]) for f in ["15-1234_a.jpg", "1-2345_1.jpg", "12-5678_1.jpg"])
     order = [j["id"] for j in api.post(f"/api/jobs/{c}/move", json={"toIndex": 0}).json()["jobs"]]
     assert order == [c, a, b]
-    assert api.get(f"/api/jobs/{a}").json()["job"]["checksAtSchedule"] == {"block": 0, "warn": 1}
+    assert api.get(f"/api/jobs/{a}").json()["job"]["checksAtSchedule"] == {"block": 0, "warn": 1, "creator": 0, "newObjects": 0}
     worker.tick()
     assert services.storage.get_job(c)["status"] == "Completed"
     assert services.storage.get_job(a)["status"] == "Queued" and services.storage.get_job(b)["status"] == "Queued"
@@ -911,7 +911,7 @@ def test_link_or_create_needs_create_permission_only_when_the_object_is_missing(
     add_uploaded(job, ["12-5678_1.jpg", "20-0779_1.jpg"])
     for n in (1, 2):
         api.patch(f"/api/jobs/{job}/rows/{n}", json={"handling": "linkorcreate"})
-    by = {r["file"]: [c["text"] for c in r["checks"] if c["level"] == "block"] for r in api.post(f"/api/jobs/{job}/check").json()["rows"]}
+    by = {r["file"]: [c["text"] for c in r["checks"] if c["level"] in ("block", "creator")] for r in api.post(f"/api/jobs/{job}/check").json()["rows"]}
     assert by["12-5678_1.jpg"] == []
     assert len(by["20-0779_1.jpg"]) == 1 and "can't create Object records" in by["20-0779_1.jpg"][0]
 

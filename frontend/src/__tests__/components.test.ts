@@ -97,10 +97,24 @@ describe('DocumentRow checks', () => {
   })
 
   it('disables handling options the user has no permission for', () => {
-    const w = mountRow({perms: {...perms, objects: false}})
+    const w = mountRow({perms: {...perms, relations: false}})
     const create = w.findAll('option').find((o) => o.attributes('value') === 'create')!
     expect(create.attributes('disabled')).toBeDefined()
     expect(create.text()).toContain('(no permission)')
+  })
+
+  it('still offers "Create new object" to a user who can\'t create Objects, with a note (design: Roles)', () => {
+    const w = mountRow({perms: {...perms, objects: false}})
+    const create = w.findAll('option').find((o) => o.attributes('value') === 'create')!
+    expect(create.attributes('disabled')).toBeUndefined()
+    expect(create.text()).toContain('(needs an Object creator)')
+  })
+
+  it('shows "Needs an Object creator" as its own status, not as Needs fixing', () => {
+    const w = mountRow({row: row({checks: [{level: 'creator', text: 'This document needs a new Object, and your account can\'t create Object records.'}]})})
+    expect(w.text()).toContain('Needs an Object creator')
+    expect(w.text()).not.toContain('Needs fixing')
+    expect(w.text()).not.toContain('Must fix')
   })
 
   it('shows upload progress, then Verifying, before the checks', () => {

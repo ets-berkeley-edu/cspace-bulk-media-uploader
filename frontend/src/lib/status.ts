@@ -1,4 +1,4 @@
-import type {Handling, Perms, Row, TenantInfo} from '../types'
+import type {CheckCounts, Handling, Perms, Row, TenantInfo} from '../types'
 
 const ORDINALS = ['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth', 'tenth']
 
@@ -14,7 +14,10 @@ export function runName(job: {run?: number, status?: string}): string {
 }
 
 /** A status's tone: a Vuetify theme colour, or neutral for the plain grey chip. */
-export type Tone = 'success' | 'warning' | 'error' | 'info' | 'neutral'
+export type Tone = 'success' | 'warning' | 'error' | 'info' | 'neutral' | 'creator'
+
+/** Design (Roles, Three kinds of result): not a mistake in the job, so not "Needs fixing" and not its colour. */
+export const NEEDS_CREATOR = 'Needs an Object creator'
 
 export interface Badge {
   text: string;
@@ -33,11 +36,13 @@ export function rowStatus(r: Row, tenant: TenantInfo, checking = false): Badge {
   if (r.result?.state === 'Done') return {text: 'Done in last run', tone: 'success'}
   if (r.result?.state === 'Partial') {
     if (worstLevel(r) === 'block') return {text: 'Needs fixing', tone: 'error'}
+    if (worstLevel(r) === 'creator') return {text: NEEDS_CREATOR, tone: 'creator'}
     return {text: checking ? 'Checking…' : 'Partial — rerun finishes it', tone: checking ? 'neutral' : 'warning'}
   }
   const needsObject = tenant.handling.find((x) => x.id === r.handling)?.object !== 'none'
   if (needsObject && !r.parseOk && !r.obj) return {text: 'Fix filename', tone: 'error'}
   if (worstLevel(r) === 'block') return {text: 'Needs fixing', tone: 'error'}
+  if (worstLevel(r) === 'creator') return {text: NEEDS_CREATOR, tone: 'creator'}
   if (checking) return {text: 'Checking…', tone: 'neutral'}
   const h = tenant.handling.find((x) => x.id === r.handling)
   if (!h || h.object === 'none') return {text: 'Not linked', tone: 'info'}
@@ -48,8 +53,9 @@ export function rowStatus(r: Row, tenant: TenantInfo, checking = false): Badge {
   return {text: 'Found — will link', tone: 'success'}
 }
 
-export function worstLevel(r: Row): 'block' | 'warn' | 'ok' {
+export function worstLevel(r: Row): 'block' | 'creator' | 'warn' | 'ok' {
   if (r.checks.some((c) => c.level === 'block')) return 'block'
+  if (r.checks.some((c) => c.level === 'creator')) return 'creator'
   if (r.checks.some((c) => c.level === 'warn')) return 'warn'
   return 'ok'
 }
@@ -66,6 +72,7 @@ export function jobCounts(rows: Row[]) {
     disabled: rows.filter((r) => !r.include).length,
     work: work.length,
     block: work.filter((r) => worstLevel(r) === 'block').length,
+    creator: work.filter((r) => worstLevel(r) === 'creator').length,
     warn: work.filter((r) => worstLevel(r) === 'warn').length,
     uploaded: work.filter((r) => r.upload.s === 'done').length,
     uploading: work.filter((r) => ['pending', 'uploading', 'verifying'].includes(r.upload.s)).length,
@@ -75,13 +82,20 @@ export function jobCounts(rows: Row[]) {
 
 /**
  * Why the signed-in user can't use a handling option, or "" when they can (design: Permissions in the UI).
- * Missing Media permissions aren't a reason here: staff can't sign in without them (design: Roles).
+ * Missing Media permissions aren't a reason here: staff can't sign in without them (design: Roles). A handling
+ * that creates the object is offered to a user who can't create Objects, with a note (handlingNote): they prepare
+ * the document for a colleague who can.
  */
 export function handlingBlocked(h: Handling, perms: Perms): string {
   if (h.object !== 'none' && perms.readObjects === false) return 'Your account can\'t read Object records, so it can\'t find objects.'
   if (h.object !== 'none' && !perms.relations) return 'Your account can\'t create relations, so it can\'t link to objects.'
-  if (h.object === 'create' && !perms.objects) return 'Your account can\'t create Object records.'
   return ''
+}
+
+/** What an option in the handling list says after its label for this user. */
+export function handlingNote(h: Handling, perms: Perms): string {
+  if (handlingBlocked(h, perms)) return ' (no permission)'
+  return h.object === 'create' && !perms.objects ? ' (needs an Object creator)' : ''
 }
 
 /** The colour of a status chip, from its tone. */
@@ -90,14 +104,33 @@ export function chipColor(tone: Tone | undefined): string | undefined {
 }
 
 /** The type of a v-alert, from a check's level. */
-const ALERT_TYPE: Record<string, 'error' | 'warning' | 'info'> = {block: 'error', warn: 'warning', info: 'info'}
+const ALERT_TYPE: Record<string, 'error' | 'warning' | 'info'> = {block: 'error', warn: 'warning', info: 'info', creator: 'info'}
 export function alertType(level: string): 'error' | 'warning' | 'info' {
   return ALERT_TYPE[level] ?? 'info'
 }
 
-/** A job's checks in a few words: "2 need fixing · 1 warning", or "nothing to fix". */
-export function checksText(c: {block: number, warn: number}): string {
+/** The colour of a check's alert when it isn't its type's own: "Needs an Object creator" has its own. */
+export function alertColor(level: string): string | undefined {
+  return level === 'creator' ? 'creator' : undefined
+}
+
+/** What a check's message starts with. */
+export const CHECK_PREFIX: Record<string, string> = {block: 'Must fix: ', creator: `${NEEDS_CREATOR}: `, warn: 'Warning: ', info: ''}
+
+/** "3 need an Object creator", "1 needs an Object creator". */
+export const creatorText = (n: number): string => `${n} need${n === 1 ? 's' : ''} an Object creator`
+
+/**
+ * A job's checks in a few words: "2 need fixing · 3 need an Object creator · 1 warning", or "nothing to fix".
+ * Someone who can create Objects reads "3 new Objects" instead, so they see which drafts wait for them.
+ */
+export function checksText(c: CheckCounts): string {
   const parts = [c.block ? `${c.block} need${c.block === 1 ? 's' : ''} fixing` : 'nothing to fix']
+  if (c.creator) {
+    parts.push(creatorText(c.creator))
+  } else if (c.newObjects) {
+    parts.push(`${c.newObjects} new Object${c.newObjects === 1 ? '' : 's'}`)
+  }
   if (c.warn) {
     parts.push(`${c.warn} warning${c.warn === 1 ? '' : 's'}`)
   }
@@ -105,8 +138,8 @@ export function checksText(c: {block: number, warn: number}): string {
 }
 
 /** The Vuetify colour of a job's checks chip. */
-export function checksColor(c: {block: number, warn: number}): string {
-  return c.block ? 'error' : c.warn ? 'warning' : 'success'
+export function checksColor(c: CheckCounts): string {
+  return c.block ? 'error' : c.creator ? 'creator' : c.warn ? 'warning' : 'success'
 }
 
 /** How a job's documents are handled, counted: "3 link to existing object, 1 media only". */

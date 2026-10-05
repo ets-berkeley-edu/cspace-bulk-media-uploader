@@ -1,7 +1,7 @@
 import {describe, expect, it} from 'vitest'
 import {displayName, isRefName} from '../lib/refname'
 import {formatBytes, mapLimit} from '../lib/files'
-import {jobCounts, rowStatus, runName, runNumber} from '../lib/status'
+import {checksColor, checksText, jobCounts, rowStatus, runName, runNumber} from '../lib/status'
 import {isPreset} from '../lib/presets'
 import type {Row, TenantInfo} from '../types'
 
@@ -76,6 +76,23 @@ describe('status by object behavior', () => {
     expect(rowStatus(row('create', []), tenant).text).toBe('Will create object')
     expect(rowStatus(row('link', ['o1']), tenant).text).toBe('Found — will link')
     expect(rowStatus(row('create', null), tenant).text).toBe('Not checked yet')
+  })
+
+  it('has three kinds of result (design: Roles): needs fixing, needs an Object creator, and neither', () => {
+    const creator = {...row('linkorcreate', []), checks: [{level: 'creator' as const, text: 'needs a new Object'}]}
+    expect(rowStatus(creator, tenant)).toEqual({text: 'Needs an Object creator', tone: 'creator'})
+    const both = {...creator, checks: [...creator.checks, {level: 'block' as const, text: 'bad date'}]}
+    expect(rowStatus(both, tenant).text).toBe('Needs fixing')
+    expect(jobCounts([creator, both, row('link', ['o1'])])).toMatchObject({work: 3, block: 1, creator: 1})
+  })
+
+  it('counts them separately in the checks chip', () => {
+    expect(checksText({block: 0, warn: 0, creator: 3})).toBe('nothing to fix · 3 need an Object creator')
+    expect(checksText({block: 2, warn: 1, creator: 1})).toBe('2 need fixing · 1 needs an Object creator · 1 warning')
+    expect(checksColor({block: 0, warn: 1, creator: 1})).toBe('creator')
+    // someone who can create Objects sees which drafts wait for them
+    expect(checksText({block: 0, warn: 0, creator: 0, newObjects: 2})).toBe('nothing to fix · 2 new Objects')
+    expect(checksColor({block: 0, warn: 0, creator: 0, newObjects: 2})).toBe('success')
   })
 })
 

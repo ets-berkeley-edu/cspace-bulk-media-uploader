@@ -1,6 +1,6 @@
 import axios from 'axios'
 import {ApiError} from '@/lib/axios-utils'
-import type {Check, Created, Failure, Job, QueuePlan, Row, RowChange, Run, Schedule, Term} from '@/types'
+import type {Check, CheckCounts, Created, Failure, Job, QueuePlan, Row, RowChange, Run, Schedule, Term} from '@/types'
 
 /**
  * JSON request to the BMU API, through axios: X-BMU, and what a failed request rejects with, are set up once in
@@ -72,7 +72,7 @@ export const api = {
       others: Row[]; jobStatus?: string }>('POST', `/api/jobs/${id}/rows/delete`, {rows}),
   /** Check rows against CollectionSpace: the given rows, or (no rows) any whose lookups are stale. */
   check: (id: string, rows?: number[]) =>
-    request<{ rows: Row[]; counts: { block: number; warn: number } }>('POST', `/api/jobs/${id}/check`, rows ? {rows} : {}),
+    request<{ rows: Row[]; counts: CheckCounts }>('POST', `/api/jobs/${id}/check`, rows ? {rows} : {}),
   /** Submit job: check the whole job again and add it to the queue; the job comes back with its plan. */
   schedule: (id: string) => request<Job>('POST', `/api/jobs/${id}/schedule`),
   /** Job scheduling (design: Job scheduling): the tenant's run times, pause, and per-job run controls (staff). */

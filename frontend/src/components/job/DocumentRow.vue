@@ -72,7 +72,7 @@
             :title="handlingOptionOff(h)"
             :value="h.id"
           >
-            {{ h.label }}{{ h.id !== row.handling && !relink && handlingBlocked(h, perms) ? ' (no permission)' : '' }}
+            {{ h.label }}{{ !relink ? handlingNote(h, perms) : '' }}
           </option>
         </select>
       </td>
@@ -500,10 +500,11 @@
               :key="index"
               class="check mt-1"
               density="compact"
-              :type="alertType(check.level)"
+              :color="alertColor(check.level)"
+              :type="alertColor(check.level) ? undefined : alertType(check.level)"
               variant="tonal"
             >
-              <strong>{{ PREFIX[check.level] }}</strong>{{ check.text }}
+              <strong>{{ CHECK_PREFIX[check.level] }}</strong>{{ check.text }}
             </v-alert>
             <div v-if="!readonly && createdSomething(row) && !done" class="field-note mt-2">
               {{ row.result?.interrupted
@@ -535,7 +536,7 @@ import {portalOf} from '@/lib/portal'
 import {PRESETTABLE, isPreset} from '@/lib/presets'
 import {RELINK_OBJECT, STEP_MARK, canReplaceFile, createdSomething, fixFields, mediaCreated, objectStepRan, stepList, stepNote} from '@/lib/results'
 import type {Tone} from '@/lib/status'
-import {alertType, chipColor, handlingBlocked, rowStatus, worstLevel} from '@/lib/status'
+import {CHECK_PREFIX, alertColor, alertType, chipColor, handlingBlocked, handlingNote, rowStatus, worstLevel} from '@/lib/status'
 import {editorColumns} from '@/lib/table'
 import {putFocusNextTick} from '@/lib/utils'
 
@@ -720,7 +721,6 @@ const status = computed((): {text: string, tone: Tone, spin?: boolean} => {
   return stalled.value && props.row.include ? {text: 'Upload not finished', tone: 'error'} : rowStatus(props.row, props.tenant, props.checking)
 })
 const hasWarnings = computed(() => props.row.include && worstLevel(props.row) === 'warn')
-const PREFIX: Record<string, string> = {block: 'Must fix: ', warn: 'Warning: ', info: ''}
 
 // Filename: checked as you type; applied (re-parsed and re-checked on the server) only once it passes.
 const original = computed(() => props.row.fileOriginal || props.row.file)

@@ -603,11 +603,26 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
     return incomplete
 
 
+CREATOR = "creator"  # a check's level: the document needs a new Object, which this user can't create
+
+
+def needs_creator(perms: dict[str, bool], lead: str = "This document needs a new Object") -> dict:
+    """Design (Roles, Three kinds of result): not a mistake in the job, and not for the CollectionSpace
+    administrator: someone who can create Objects submits the document, or the handling changes. For an intern
+    (perms["proxy"]) it is information for whoever submits the job."""
+    if perms.get("proxy"):
+        return {"level": CREATOR, "text": f"{lead}. The staff member who submits the job must be able to create Objects."}
+    return {"level": CREATOR, "text": f"{lead}, and your account can't create Object records. Leave the draft for a "
+                                      "colleague who can create Objects; or choose another handling, or have the Object "
+                                      "created in CollectionSpace and check again."}
+
+
 def permission_checks(tenant: Tenant, r: dict, perms: dict[str, bool], group_on: bool = False,
-                      group_exists: bool = False) -> list[dict]:
+                      group_exists: bool = False, run: bool = False) -> list[dict]:
     """What the row's handling needs the account to be allowed to do, whatever its lookups find (design: Dynamic
     permission checks). Used by the editor's checks and by the worker's check before a document's records are
-    created, so both say the same thing."""
+    created (run), so both say the same thing. Creating groups is checked on a document only at the run: while
+    editing it is one message for the job, at Submit (design: Roles, Three kinds of result)."""
     h = tenant.handling_by_id(r["handling"])
     out: list[dict] = []
     if not perms.get("mediaUpdate", True):
@@ -619,11 +634,11 @@ def permission_checks(tenant: Tenant, r: dict, perms: dict[str, bool], group_on:
     if h.object != "none" and not perms.get("relations"):
         out.append({"level": "block", "text": "Your account can't create relations, so it can't link to objects. Choose a media-only handling."})
     if h.object == "create" and not perms.get("objects"):
-        out.append({"level": "block", "text": "Your account can't create Object records. Choose another handling."})
+        out.append(needs_creator(perms))
     # "either" needs create on objects only when its object doesn't exist yet: checked after the lookup (object_checks)
     # Design (Groups): create on groups only while the job's Group doesn't exist yet; relating the Object to an
     # existing Group needs create on relations, checked above for every handling that links to an object.
-    if group_on and r.get("group", True) and h.object != "none" and not group_exists and not perms.get("groups"):
+    if run and group_on and r.get("group", True) and h.object != "none" and not group_exists and not perms.get("groups"):
         out.append({"level": "block", "text": "Your account can't create groups. Turn off the job's group, or untick this document's Group."})
     return out
 
@@ -748,16 +763,15 @@ def object_checks(tenant: Tenant, behavior: str, num: str, found: list[str], per
         return [{"level": "block", "text": f"Object number {num} matches {len(found)} objects in CollectionSpace. Correct the "
                                            f"object number so it identifies one object{stop}."}]
     if behavior == "existing" and not found:
-        # Only choices the user may pick: creating the object needs create on objects (and relations, to link it)
-        creatable = _labels(tenant, ("either", "create")) if perms.get("objects") and perms.get("relations") else ""
+        # A handling that creates the object is offered to everyone: a user who can't create Objects prepares
+        # the document for someone who can (design: Roles, Three kinds of result)
+        creatable = _labels(tenant, ("either", "create"))
         choices = " or ".join(c for c in (creatable, _labels(tenant, ("none",))) if c)
         tail = stop if rerun else (f", or choose {choices}" if choices else "")
         return [{"level": "block", "text": f"No object {num} in CollectionSpace. Correct the object number{tail}."}]
     # (while editing, "create" without the permission is blocked before the lookup, whatever it finds)
     if (behavior == "either" or (rerun and behavior == "create")) and not found and not perms.get("objects"):
-        tail = stop if rerun else ", or choose another handling"
-        return [{"level": "block", "text": f"No object {num} in CollectionSpace, and your account can't create Object "
-                                           f"records. Correct the object number{tail}."}]
+        return [needs_creator(perms, f"No object {num} in CollectionSpace, so this document needs a new Object")]
     return []
 
 
@@ -844,8 +858,7 @@ def _rerun_checks(tenant: Tenant, r: dict, perms: dict[str, bool], lookup, clien
     if skip:
         return out
     in_group = group_on and r.get("group", True) and not _group_done(r)
-    if in_group and not group_exists and not perms.get("groups"):  # the job's Group hasn't been created yet
-        out.append({"level": "block", "text": "Your account can't create groups. Turn off the job's group, or untick this document's Group."})
+    # (creating the job's Group is checked once for the job, at Submit: app._account_problem)
     if open_steps(r, REL_STEPS) and not perms.get("relations"):
         out.append({"level": "block", "text": "Your account can't create relations, so this Media record can't be linked to its "
                                               "object. Stop linking it, or have someone with that permission submit the job."})
@@ -960,4 +973,4 @@ def collision_checks(tenant: Tenant, rows: list[dict], ahead: list[tuple[dict, l
 
 def worst(row: dict) -> str:
     levels = {c["level"] for c in row.get("checks", [])}
-    return "block" if "block" in levels else ("warn" if "warn" in levels else "ok")
+    return "block" if "block" in levels else (CREATOR if CREATOR in levels else ("warn" if "warn" in levels else "ok"))

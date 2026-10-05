@@ -107,6 +107,7 @@ export default createVuetify({
           anchor: '#37769a',
           'anchor-hover': '#0056b3',
           body: '#212529',
+          creator: '#6b3fa0', // "Needs an Object creator": its own colour, not an error's (design: Roles)
           error: '#cf1715',
           gold: '#826F03',
           grey: '#757575',
@@ -132,6 +133,7 @@ export default createVuetify({
           anchor: '#7cc0e8',
           background: '#0d202c',
           body: '#e6e6e6',
+          creator: '#c9a8f5',
           error: '#ff6b6b',
           info: '#61b8ff',
           primary: '#86c8f3',

@@ -76,7 +76,9 @@ describe('BulkPanel', () => {
     const rows = [row(), partial(2)]
     const w = mount(BulkPanel, {props: {rows, selected: new Set([1, 2]), tenant, perms, readonly: false, busy: false}})
     const [handling, publish] = w.findAll('select')
-    expect(handling.find('option[value="create"]').attributes('disabled')).toBeDefined() // no permission
+    // can't create Objects: still offered, with a note, to prepare documents for a colleague (design: Roles)
+    expect(handling.find('option[value="create"]').attributes('disabled')).toBeUndefined()
+    expect(handling.find('option[value="create"]').text()).toContain('(needs an Object creator)')
     await publish.setValue('yes')
     const applySel = w.findAll('button').find((b) => b.text() === 'Apply to selected')!
     expect(applySel.attributes('disabled')).toBeDefined()

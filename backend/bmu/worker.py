@@ -856,7 +856,7 @@ class Worker:
         if self._perms is None:
             return
         group_exists = (job.get("groupStep") or {}).get("s") == "done"
-        blocks = (permission_checks(self.tenant, row, self._perms, bool(job.get("groupOn")), group_exists)
+        blocks = (permission_checks(self.tenant, row, self._perms, bool(job.get("groupOn")), group_exists, run=True)
                   + authority_read_checks(row, self._perms))
         if not self._perms.get("media"):
             blocks.insert(0, {"level": "block", "text": "Your account can't create Media records (create on media)."})

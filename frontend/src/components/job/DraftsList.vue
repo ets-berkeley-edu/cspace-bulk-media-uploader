@@ -217,7 +217,7 @@
 import type {PropType} from 'vue'
 import {computed, onBeforeUnmount, onMounted, reactive, ref} from 'vue'
 import {mdiAlert, mdiChevronRight, mdiLock, mdiWrench} from '@mdi/js'
-import type {Job, Row, TenantInfo} from '@/types'
+import type {CheckCounts, Job, Row, TenantInfo} from '@/types'
 import JobActions from '@/components/job/JobActions.vue'
 import JobDetails from '@/components/job/JobDetails.vue'
 import SortableColumnHeader from '@/components/util/SortableColumnHeader.vue'
@@ -258,7 +258,7 @@ const drafts = ref<Job[]>([])
 // Each draft's documents, from its latest check
 const docs = reactive(new Map<string, Row[]>())
 const expanded = reactive(new Set<string>())
-const checks = reactive(new Map<string, {block: number, warn: number} | 'checking'>())
+const checks = reactive(new Map<string, CheckCounts | 'checking'>())
 // What a job's action just did ("… is now staff only."), until the next one
 const message = ref('')
 const error = ref('')
@@ -294,7 +294,7 @@ const done = async (flash: string) => {
   await refresh(!flash)
   error.value = refused || error.value // reading the drafts again cleared it
 }
-const countsOf = (id: string): {block: number, warn: number} | null => {
+const countsOf = (id: string): CheckCounts | null => {
   const c = checks.get(id)
   return c && c !== 'checking' ? c : null
 }

@@ -21,6 +21,7 @@
     --bg-warning: #faeeda;
     --text-warning: #854f0b;
     --bg-danger: #fbe7e5;
+    --bg-creator: #efe6fa; --text-creator: #55308a;   /* "Needs an Object creator": its own colour, not an error's */
     --text-danger: #8a1f14;
     --bg-preset: #f1ecf9;
     --text-preset: #4b2a7d;
@@ -33,7 +34,7 @@
       --border: #3a3a37; --border-strong: #55554f; --surface-0: #1b1b19; --surface-1: #252523; --surface-2: #2d2d2a;
       --text-primary: #ecebe6; --text-secondary: #b9b8b1; --text-muted: #8d8c85;
       --bg-accent: #16324d; --text-accent: #a9cdf2; --bg-success: #22361a; --text-success: #b7d99a;
-      --bg-warning: #3d2e13; --text-warning: #f0c983; --bg-danger: #43201c; --text-danger: #f3b0a8;
+      --bg-warning: #3d2e13; --text-warning: #f0c983; --bg-danger: #43201c; --text-danger: #f3b0a8; --bg-creator: #33264a; --text-creator: #d5bdf7;
       --bg-preset: #2e2540; --text-preset: #cdb8f0;
     }
   }
@@ -41,7 +42,7 @@
     --border: #3a3a37; --border-strong: #55554f; --surface-0: #1b1b19; --surface-1: #252523; --surface-2: #2d2d2a;
     --text-primary: #ecebe6; --text-secondary: #b9b8b1; --text-muted: #8d8c85;
     --bg-accent: #16324d; --text-accent: #a9cdf2; --bg-success: #22361a; --text-success: #b7d99a;
-    --bg-warning: #3d2e13; --text-warning: #f0c983; --bg-danger: #43201c; --text-danger: #f3b0a8;
+    --bg-warning: #3d2e13; --text-warning: #f0c983; --bg-danger: #43201c; --text-danger: #f3b0a8; --bg-creator: #33264a; --text-creator: #d5bdf7;
     --bg-preset: #2e2540; --text-preset: #cdb8f0;
   }
   html { scroll-padding-top: env(safe-area-inset-top, 0px); }
@@ -131,6 +132,7 @@
   .badge-warning { background: var(--bg-warning); color: var(--text-warning); }
   .badge-accent { background: var(--bg-accent); color: var(--text-accent); }
   .badge-danger { background: var(--bg-danger); color: var(--text-danger); }
+  .badge-creator, .msg-creator { background: var(--bg-creator); color: var(--text-creator); }
   .sens { margin-left: 6px; }
   .detail-cell { background: var(--surface-1); padding: 10px 6px 14px 30px !important; }
   .detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px 14px; font-size: 12px; }
@@ -385,7 +387,7 @@
     <label class="sched-role" title="Mockup only: pretend an object in the queued sample job “scans from the imaging lab” was marked sensitive in CollectionSpace after the job was submitted. Preview that job in the Job queue: the document is now protected, its publish setting stays as submitted, and it carries a warning."><input type="checkbox" id="protLater"> Demo: object protected after submission</label>
     <button id="load1000Btn" title="Fill the job being edited with 1,000 generated sample documents, to try paging, sorting and filtering">Load 1,000 sample documents</button>
     <button id="resetDemoBtn" title="Put the mockup back to its starting state: sample jobs and files, PAHMA, full permissions, panel open">Reset demo</button>
-    <div class="hint">Mockup only: the Permissions switch simulates the permissions the BMU reads from CollectionSpace at login (hover an option to see them): creating Media records, relations (needed to link to objects and to add to a group), objects and groups, and seeing protected previews. Options a user lacks are shown disabled, and documents that need them are marked “Must fix”. A staff account that can't create and update Media records, create relations, or read what the checks need can't sign in to the BMU at all, so those aren't options here. For an intern (untick BMU_Staff role) the Permissions switch has no effect: an intern's account has no permissions. The editor starts on a new, empty job: click the drop zone to add the tenant's sample files, or use “Load 1,000 sample documents”. Switching tenants reloads that tenant's sample configuration and starts a new, empty job. In the real BMU the tenant comes from the login, and its handling options, lists and fields come from tenant configuration and CollectionSpace. The “BMU_Staff role” box simulates the user's BMU role; untick it to see the BMU as an intern does. The “Demo: terms deleted in CollectionSpace” box pretends that some values were deleted from CollectionSpace since they were chosen (hover it to see which), so the documents using them must be fixed; at the Botanical Garden it removes the term the contributor preset points to. Documents already queued keep those values; when they run, each one fails its check before anything is created, and the rest of the job goes on. The “Demo: term renamed in CollectionSpace” box renames the Person Thomas Jefferson to “Thomas Jefferson (1743–1826)”: choose him as a creator, then tick the box to see the editor switch to the new name, a queued job's preview mention it, and a run use it. The “Demo: object protected after submission” box pretends that an object in the queued sample job “scans from the imaging lab” became protected after that job was submitted: preview the job in the Job queue to see the warning.</div>
+    <div class="hint">Mockup only: the Permissions switch simulates the permissions the BMU reads from CollectionSpace at login (hover an option to see them): creating Media records, relations (needed to link to objects and to add to a group), objects and groups, and seeing protected previews. A missing permission is never shown as a mistake in the job: a document that needs a new Object reads “Needs an Object creator”, and a missing permission to create groups is one message beside the group. A staff account that can't create and update Media records, create relations, or read what the checks need can't sign in to the BMU at all, so those aren't options here. For an intern (untick BMU_Staff role) the Permissions switch has no effect: an intern's account has no permissions. The editor starts on a new, empty job: click the drop zone to add the tenant's sample files, or use “Load 1,000 sample documents”. Switching tenants reloads that tenant's sample configuration and starts a new, empty job. In the real BMU the tenant comes from the login, and its handling options, lists and fields come from tenant configuration and CollectionSpace. The “BMU_Staff role” box simulates the user's BMU role; untick it to see the BMU as an intern does. The “Demo: terms deleted in CollectionSpace” box pretends that some values were deleted from CollectionSpace since they were chosen (hover it to see which), so the documents using them must be fixed; at the Botanical Garden it removes the term the contributor preset points to. Documents already queued keep those values; when they run, each one fails its check before anything is created, and the rest of the job goes on. The “Demo: term renamed in CollectionSpace” box renames the Person Thomas Jefferson to “Thomas Jefferson (1743–1826)”: choose him as a creator, then tick the box to see the editor switch to the new name, a queued job's preview mention it, and a run use it. The “Demo: object protected after submission” box pretends that an object in the queued sample job “scans from the imaging lab” became protected after that job was submitted: preview the job in the Job queue to see the warning.</div>
     </div>
   </div>
 
@@ -400,6 +402,7 @@
   <div class="card view-card" id="editorView">
     <div id="noEditPane" class="msg msg-info" hidden>Your CollectionSpace account can't create and update Media records, so it can't create or edit jobs. You can still view them in Drafts, Job queue and Finished jobs.</div>
     <div id="editBanner"></div>
+    <div id="creatorNote"></div>
     <div id="initPane"></div>
     <div class="job-head">
       <label for="jobName"><strong>Job name</strong></label>
@@ -429,6 +432,7 @@
         <button type="button" id="groupUseTime" disabled title="Fill the title with bmu- and the current date and time, Pacific time (like the legacy BMU's =job title)">Use a timestamp</button>
       </div>
       <div class="field-note" id="groupMadeNote" hidden></div>
+      <div id="groupAccountNote"></div>
     </div>
 
     <div class="editor-split">
@@ -496,6 +500,7 @@
       <li><strong>Large jobs:</strong> jobs can hold up to 1,000 documents, so the editor, job previews and job results show them in pages (25, 50 or 100 per page) with first / previous / next / last controls above and below the table. Click a column heading to sort (ascending, descending, then back to the original order); every table on every tab sorts this way, including the Drafts, Job queue and Finished jobs lists and the documents shown in an expanded job. Sorting the job queue only changes the view: the queue still runs in its own order, and dragging is off until the sort is cleared; a “Show” filter narrows to documents that need fixing, have warnings, are protected files, excluded or selected (in results: failed, partial, not started, excluded, done). The header checkbox selects the documents on the current page, with a link to select every matching document; bulk changes apply to everything selected, on any page. Try it with “Load 1,000 sample documents” in the bar at the top, or the “2026 digitization project, batch 1” job in Finished jobs. Expanded rows in the job lists show the 10 most important documents; the full preview or results shows them all.</li>
       <li><strong>Sign-in:</strong> the mockup opens on the sign-in screen, like the BMU. The BMU checks the username and password against CollectionSpace (Basic Auth) and reads the account's permissions and roles; here any username and password work, the password “wrong” shows a rejected sign-in, and the tenant, permissions and BMU role (staff or intern) are picked on the sign-in screen. Your username (top right) opens a menu, as in the BMU: Dark mode or Light mode (the choice is remembered in this browser; until you make one, your system's setting decides) and Sign out. Signing out stops editing the open draft; it stays in Drafts, saved, since every change is saved as it's made. Submitted jobs keep running after you sign out: each keeps its own sign-in until it finishes. The Mockup settings pane collapses to one line with the triangle at its left.</li>
       <li><strong>Roles:</strong> every BMU user has one of two CollectionSpace roles, which carry no permissions and only tell the BMU what the user may do. <strong>BMU_Staff</strong> do everything: edit any draft, submit jobs, change the schedule and the queue (reorder, Run now, run time, hold, pause), cancel any run, and fix or delete finished jobs. A <strong>BMU_Intern</strong> creates drafts and edits the drafts marked “Open to interns” (a draft an intern created; a staff member's is “Staff only”); an intern can't submit, can't take over a draft a staff member is editing, can't delete a draft that has already run, and sees the Job queue and Finished jobs without changing them. The header shows “Intern”. A user with neither role, or a staff account missing the permissions the BMU exists to use, is refused at sign-in with a message to contact their CollectionSpace administrator (not simulated here). Try it with the “BMU_Staff role” box in Mockup settings or on the sign-in screen: unticked, you are an intern. In Drafts, staff switch a draft between “Open to interns” and “Staff only” with one click (in the BMU the Create / edit job page has the same switch as a checkbox, not shown here), and an intern uses <strong>Hand over to staff…</strong> to give a draft that is ready to staff: it becomes staff only. Staff can also <strong>Submit…</strong> a draft from the list or its preview without opening it, when nothing needs fixing; the confirmation says how many documents it has, who created and last saved it, and that it runs with the submitter's sign-in. In the Job queue, <strong>Move to Drafts…</strong> takes a queued job out of the queue like Edit, but without opening it.</li>
+      <li><strong>Three kinds of result:</strong> the BMU never presents a permission problem as a mistake in the job. A check on a document ends one of three ways. <em>Needs fixing</em> (red) is a problem with the job, such as a wrong object number, for whoever edits the draft. <em>Needs an Object creator</em> (purple) means the document would create a new Object and the signed-in user can't create Objects: it is counted separately (“nothing to fix · 3 need an Object creator”), the job says so in one line at the top, and the handling list still offers “Create new object + link”, with a note, so anyone can prepare a job for a colleague. A job is submitted whole, by someone who can create its Objects: that user can't submit such a job at all. They leave the draft for a colleague (the Drafts list shows the colleague “3 new Objects” on it), change those documents' handling, have the Objects created in CollectionSpace, or delete those documents from the job and add them to a new draft. A <em>problem with your account</em> (creating groups is the only one left after sign-in) is said once, beside the group, with a line to contact the CollectionSpace administrator; nothing is marked on the documents and only Submit is stopped. An intern is never told about their own permissions: they act for whoever submits, and see only that a document needs a new Object. Try it with the Permissions switch set to “Imaging staff” (can't create objects) or “Registrar assistant” (can't create groups), and a file named for an object that doesn't exist, such as 20-0990_1.jpg, with “Link to object (create if missing)”.</li>
       <li><strong>Interns' checks:</strong> an intern's CollectionSpace account has no permissions, so the BMU makes the lookups an intern's draft needs (is the object there, is it protected, does a Media record with this number exist, authority terms, languages, dates) with one read-only CollectionSpace account per museum (role BMU_Reader). Its password is kept in AWS Secrets Manager, where only the web app can read it; staff always use their own sign-in, and every record is created with the submitting staff member's. An intern gets minimal answers: whether the object was found and whether the file is protected, but not why (“marked sensitive in CollectionSpace”), not the object's access notes (“a note about access in CollectionSpace”), and never a record's contents or images. Lookups are logged for each intern and limited per hour. Untick “BMU_Staff role” and add the sample files 3-4567 or 15-1240 to see the difference.</li>
       <li><strong>Job lists:</strong> Drafts, Job queue and Finished jobs show one line per job. The triangle at the start of a row expands it in place to show the job's details (handling mix, group, who and when, expiry or run history) and one line per document with its status and most important problem or result, with a link to the full preview or results. “Expand all / Collapse all” sits above each list; hover over dates and badges for who did what. In Drafts and the Job queue, a job's confirmation (Delete, Edit, Cancel run, Take over) opens in a full-width row under the job, where its text has room.</li>
       <li><strong>Worked example:</strong> in Finished jobs, open “example: fixed by excluding a document” with View results. Its run history shows run 1 needing attention because one document's Media record was rejected, that document then excluded by jdoe, and run 2 completing with the document shown as excluded. To try it yourself: use Fix and reschedule on “collections survey batch 4”, check Exclude for the documents that need fixing, press Submit job, then in the Job queue use Run now on it and Finish run (mockup) on the running jobs until it has run.</li>
@@ -827,7 +832,21 @@ var PERMS = PERM_PROFILES.full;
 var NO_EDIT_WHY = "Only staff can do this.", STAFF_DRAFT_WHY = "This draft is for staff only.";
 var STAFF_EDITING_WHY = "A staff member is editing this draft. Only staff can take it over.", RAN_DELETE_WHY = "This job has already run, so only staff can delete it.";
 var INTERN_SUBMIT_WHY = "Only staff can submit a job. A staff member submits it when the draft is ready.";
-var PERM_INTERN = { label: "Intern", media: true, relations: true, objects: true, groups: true, sensitive: false, authorities: "read" };
+var PERM_INTERN = { label: "Intern", media: true, relations: true, objects: false, groups: true, sensitive: false, authorities: "read" };   /* objects: not every staff member can create Objects, so a document that needs a new one says so */
+/* Design (Roles, Three kinds of result): a document that needs a new Object, which this user can't create, is not a
+   mistake in the job. It has its own status and colour, and is counted separately. */
+var NEEDS_CREATOR = "Needs an Object creator";
+function needsCreator(lead) {
+  lead = lead || "This document needs a new Object";
+  return { level: "creator", text: IS_STAFF ? lead + ", and your account can\u2019t create Object records. Leave the draft for a colleague who can create Objects; or choose another handling, or have the Object created in CollectionSpace and check again."
+    : lead + ". The staff member who submits the job must be able to create Objects." };
+}
+var GROUP_PROBLEM = "Your account can\u2019t create groups in CollectionSpace, which this job\u2019s group needs. Contact your CollectionSpace administrator for the permission. Until then, leave the draft for a colleague to submit, turn off the job\u2019s group, or untick Group on each document.";
+/* A problem with the user's account, not the job: said once beside the group, and it stops only Submit */
+function groupProblem(rs, on, made) {
+  if (!IS_STAFF || !on || made || PERMS.groups) return "";
+  return rs.some(function (r) { return !r.disabled && !(r.result && r.result.state === "Done") && r.group && handlingById(r.handling).object !== "none"; }) ? GROUP_PROBLEM : "";
+}
 function canEdit(j) { return IS_STAFF || !j || ((j.status === "Draft" || !j.status) && j.internOpen === true); }
 function noEditWhy(j) { return canEdit(j) ? "" : (j && j.status === "Draft" ? STAFF_DRAFT_WHY : NO_EDIT_WHY); }
 function applyRole() {
@@ -844,13 +863,14 @@ function applyEditPerm() {
     b.disabled = !ok; b.title = ok ? b.dataset.title : NO_EDIT_WHY;
   });
 }
-function canGroup() { return PERMS.groups && PERMS.relations; }
+function canGroup() { return !!PERMS.relations; }   /* creating groups is checked once for the job, at Submit (groupProblem) */
 function handlingBlocked(h) {
   if (h.object !== "none" && PERMS.readObjects === false) return "no permission to read objects";   /* a missing readObjects counts as allowed */
   if (h.object !== "none" && !PERMS.relations) return "no permission to create relations";
-  if (h.object === "create" && !PERMS.objects) return "no permission to create objects";
   return "";
 }
+/* What a handling option says after its label: "Create new object" stays available to a user who can't create Objects */
+function handlingNote(h) { return handlingBlocked(h) ? " (no permission)" : (h.object === "create" && !PERMS.objects && IS_STAFF ? " (needs an Object creator)" : ""); }
 
 /* ---------- Dates: EXIF conversion and simulated structured-date parsing ---------- */
 function exifToDate(raw) {
@@ -1013,7 +1033,7 @@ function groupMade() { return currentJob && currentJob.groupStep && currentJob.g
 function setGroupUi(on, title) {
   var g = document.getElementById("groupOn"), t = document.getElementById("groupTitle"), made = groupMade(), note = document.getElementById("groupMadeNote");
   if (made) { on = true; title = title || currentJob.groupTitle || ""; }   // a group that exists can't be turned off or renamed
-  g.checked = !!on; t.disabled = !on || !canGroup() || !!made; g.disabled = (!canGroup() && !on) || !!made;
+  g.checked = !!on; t.disabled = !on || !!made; g.disabled = !!made;
   g.title = made ? "The group already exists in CollectionSpace" : "";
   t.value = on ? (title || "") : "";
   t.placeholder = on ? "Required" : "Turn on “Create a group” first";
@@ -1243,6 +1263,7 @@ function statusForEditable(r, i) {
   var h = handlingById(r.handling);
   if (filenameProblem(r)) return { text: "Fix filename", cls: "badge-danger" };
   if (worstLevel(r, i) === "block") return { text: "Needs fixing", cls: "badge-danger" };
+  if (worstLevel(r, i) === "creator") return { text: NEEDS_CREATOR, cls: "badge-creator" };
   if (h.object === "none") {
     if (h.id === "borndigital") return { text: "Born-digital", cls: "badge-accent" };
     if (h.id === "slide") return { text: "Slide, not linked", cls: "badge-accent" };
@@ -1321,7 +1342,7 @@ function validationsEditable(r, i) {
   else if (h.object !== "none" && !PERMS.relations)
     out.push({ level: "block", text: "You don't have permission to create relations, so this document can't be linked to an object. Choose a media-only handling, or have someone with that permission submit the job." });
   else if (h.object === "create" && !PERMS.objects)
-    out.push({ level: "block", text: "You don't have permission to create objects (create on collectionobjects). Choose another handling." });
+    out.push(needsCreator());
   /* Language is required: what the row shows is what CollectionSpace gets */
   if (T.fields.indexOf("language") >= 0 && !(r.f.language || []).some(function (v) { return v; }))
     out.push({ level: "block", text: "Choose at least one language." });
@@ -1333,8 +1354,6 @@ function validationsEditable(r, i) {
   });
   termProblems(r).forEach(function (t) { out.push({ level: "block", text: t }); });
   renameNotes(r).forEach(function (t) { out.push({ level: "info", rename: true, text: t }); });
-  if (groupOn() && r.group && !canGroup() && h.object !== "none")
-    out.push({ level: "block", text: "You don't have permission to create groups (create on groups). Turn off the job's group, or untick Group." });
   if (h.object !== "none" && !filenameProblem(r) && PERMS.readObjects !== false) {
     var n = (T.known.multi && T.known.multi[r.obj]) || 0;
     if (n > 1)
@@ -1343,10 +1362,10 @@ function validationsEditable(r, i) {
       out.push({ level: "block", text: "Object " + r.obj + " already exists in CollectionSpace, and “" + h.label + "” only creates a new object. To link to it, choose " +
         linkingLabels().join(" or ") + "; otherwise correct the object number." });
     else if (h.object === "either" && !objectExists(r.obj) && !PERMS.objects)
-      out.push({ level: "block", text: "No object " + r.obj + " in CollectionSpace, and you don't have permission to create objects (create on collectionobjects). Correct the object number, or choose another handling." });
+      out.push(needsCreator("No object " + r.obj + " in CollectionSpace, so this document needs a new Object"));
     else if (h.object === "existing" && !objectExists(r.obj))
       out.push({ level: "block", text: "No object " + r.obj + " in CollectionSpace. Correct the object number, or choose " +
-        (PERMS.objects ? T.handling.filter(function (x) { return x.object === "either" || x.object === "create"; }).map(function (x) { return "“" + x.label + "” or "; }).join("") : "") +
+        T.handling.filter(function (x) { return x.object === "either" || x.object === "create"; }).map(function (x) { return "“" + x.label + "” or "; }).join("") +
         (T.handling.some(function (x) { return x.object === "none" && x.idRule !== "dp"; }) ? "a media-only handling." : "remove this document.") });
   }
   if (idv && mediaIdExists(idv) && PERMS.readMedia !== false)
@@ -1486,6 +1505,7 @@ function preRunCheck(r) {
 function worstLevel(r, i) {
   var v = validations(r, i);
   if (v.some(function (m) { return m.level === "block"; })) return "block";
+  if (v.some(function (m) { return m.level === "creator"; })) return "creator";
   if (v.some(function (m) { return m.level === "warn"; })) return "warn";
   return "ok";
 }
@@ -1537,7 +1557,7 @@ function pagerBar(name, view, noun, filters, pos) {
   return html + "</div>";
 }
 function rerenderPager(name) { if (name === "editor") render(); else render_lists(); }
-var LEVEL_RANK = { block: 0, warn: 1, ok: 2 };
+var LEVEL_RANK = { block: 0, creator: 0.5, warn: 1, ok: 2 };
 var RESULT_RANK = { "Failed": 0, "Partial": 1, "Not started": 2, "Excluded": 3, "Done": 4 };
 
 /* Mockup only: generate sample documents that follow the tenant's filename rule (for 1,000-row jobs) */
@@ -1801,7 +1821,7 @@ function handlingCell(r, i) {
   if (objFixed(r)) return '<span style="font-size:12px;color:var(--text-secondary)" title="The last run already found or created this document\'s object, so the handling can\'t change; the rerun links the new Media record to that object.">' + esc(handlingById(r.handling).label) + " 🔒</span>";
   return '<select class="row-handling" data-i="' + i + '" aria-label="Handling">' + T.handling.map(function (h) {
     var why = handlingBlocked(h), blocked = why && h.id !== r.handling;
-    return '<option value="' + h.id + '"' + (h.id === r.handling ? " selected" : "") + (blocked ? " disabled" : "") + (why ? ' title="' + why + '"' : "") + ">" + esc(h.label) + (why ? " (no permission)" : "") + "</option>";
+    return '<option value="' + h.id + '"' + (h.id === r.handling ? " selected" : "") + (blocked ? " disabled" : "") + (why ? ' title="' + why + '"' : "") + ">" + esc(h.label) + (why ? " (no permission)" : handlingNote(h)) + "</option>";
   }).join("") + "</select>";
 }
 
@@ -1960,7 +1980,7 @@ function detailHtmlEditable(r, i) {
   html += sensHtml(r, i);
   html += deleteHtml(r, i);
   var v = validations(r, i);
-  var cls = { block: "msg-danger", warn: "msg-warn", info: "msg-info" }, pre = { block: "Must fix: ", warn: "Warning: ", info: "" };
+  var cls = { block: "msg-danger", creator: "msg-creator", warn: "msg-warn", info: "msg-info" }, pre = { block: "Must fix: ", creator: NEEDS_CREATOR + ": ", warn: "Warning: ", info: "" };
   if (v.length) html += '<div class="validation">' + v.map(function (m) {
     return '<div class="msg ' + (m.sens ? "msg-danger" : cls[m.level]) + '">' + (pre[m.level] ? "<strong>" + pre[m.level] + "</strong>" : "") + esc(m.text) + "</div>";
   }).join("") + "</div>";
@@ -1973,9 +1993,9 @@ function render() {
   var tbody = document.getElementById("grid-body");
   tbody.innerHTML = "";
   var lv = rows.map(function (r, i) { return worstLevel(r, i); });
-  var cnt = { block: 0, warn: 0, problems: 0, sensitive: 0, disabled: 0, selected: 0 };
+  var cnt = { block: 0, warn: 0, creator: 0, problems: 0, sensitive: 0, disabled: 0, selected: 0 };
   rows.forEach(function (r, i) {
-    if (r.disabled) cnt.disabled++; else { if (lv[i] === "block") cnt.block++; if (lv[i] === "warn") cnt.warn++; if (lv[i] !== "ok") cnt.problems++; }
+    if (r.disabled) cnt.disabled++; else { if (lv[i] === "block") cnt.block++; if (lv[i] === "warn") cnt.warn++; if (lv[i] === "creator") cnt.creator++; if (lv[i] === "block" || lv[i] === "warn") cnt.problems++; }
     if (sensitiveReason(r)) cnt.sensitive++;
     if (r.selected) cnt.selected++;
   });
@@ -1991,14 +2011,15 @@ function render() {
     var r = rows[i];
     if (f === "block") return !r.disabled && lv[i] === "block";
     if (f === "warn") return !r.disabled && lv[i] === "warn";
-    if (f === "problems") return !r.disabled && lv[i] !== "ok";
+    if (f === "problems") return !r.disabled && (lv[i] === "block" || lv[i] === "warn");   /* a document that needs an Object creator has no problem with it */
+    if (f === "creator") return !r.disabled && lv[i] === "creator";
     if (f === "sensitive") return !!sensitiveReason(r);
     if (f === "disabled") return !!r.disabled;
     if (f === "selected") return !!r.selected;
     return true;
   });
   lastEditorView = view;
-  var filters = [["all", "All documents (" + rows.length + ")"], ["problems", "With problems (" + cnt.problems + ")"], ["block", "Need fixing (" + cnt.block + ")"],
+  var filters = [["all", "All documents (" + rows.length + ")"], ["problems", "With problems (" + cnt.problems + ")"], ["block", "Need fixing (" + cnt.block + ")"], ["creator", "Need an Object creator (" + cnt.creator + ")"],
     ["warn", "With warnings (" + cnt.warn + ")"], ["sensitive", "Protected (" + cnt.sensitive + ")"], ["disabled", "Excluded (" + cnt.disabled + ")"], ["selected", "Selected (" + cnt.selected + ")"]];
   document.getElementById("gridPagerTop").innerHTML = pagerBar("editor", view, "documents", filters, "top");
   document.getElementById("gridPagerBottom").innerHTML = view.pages > 1 ? pagerBar("editor", view, "documents", null, "bottom") : "";
@@ -2103,11 +2124,17 @@ function snap(rs) { return JSON.stringify(cleanRows(rs)); }
 function withRows(rs, fn) { var saved = rows; rows = rs; try { return fn(); } finally { rows = saved; } }
 function countLevels(rs) {
   return withRows(rs, function () {
-    var b = 0, w = 0;
-    rows.forEach(function (r, i) { var l = worstLevel(r, i); if (l === "block") b++; else if (l === "warn") w++; });
-    return { block: b, warn: w };
+    var b = 0, w = 0, cr = 0, nu = 0;
+    rows.forEach(function (r, i) {
+      var l = worstLevel(r, i); if (l === "block") b++; else if (l === "creator") cr++; else if (l === "warn") w++;
+      /* documents that will create an Object, whoever looks: someone who can create Objects sees which drafts wait for them */
+      var h = handlingById(r.handling);
+      if (l !== "block" && !r.disabled && !(r.result && r.result.state === "Done") && (h.object === "create" || (h.object === "either" && r.obj && !objectExists(r.obj)))) nu++;
+    });
+    return { block: b, warn: w, creator: cr, newObjects: nu };
   });
 }
+function creatorText(n) { return n + (n === 1 ? " needs" : " need") + " an Object creator"; }
 function newJobState() { return { id: null, name: "", createdBy: "you", saved: null, savedName: "" }; }
 function queueFor() { return QUEUES[tenantKey]; }
 function draftsFor() { return DRAFTS[tenantKey]; }
@@ -2176,11 +2203,19 @@ function renderScheduleBar() {
   var parts = [rows.length + " documents"];
   if (off) parts[0] += " (" + off + " excluded)";
   parts.push(c.block ? c.block + (c.block === 1 ? " needs fixing" : " need fixing") : "nothing to fix");
+  if (c.creator) parts.push(creatorText(c.creator));
   if (c.warn) parts.push(c.warn + (c.warn === 1 ? " has warnings" : " have warnings"));
+  var gp = groupProblem(rows, groupOn(), groupMade()), one = c.creator === 1;
+  var creatorWhy = c.creator ? (one ? "A document needs" : c.creator + " documents need") + " a new Object, which your account can\u2019t create: leave the draft for a colleague who can create Objects" : "";
+  document.getElementById("groupAccountNote").innerHTML = gp ? '<div class="msg msg-warn" id="groupAccountProblem" style="margin-top:6px">' + esc(gp) + "</div>" : "";
+  document.getElementById("creatorNote").innerHTML =
+    (c.creator ? '<div class="msg msg-creator" id="creatorLine" style="margin-bottom:8px">' + (IS_STAFF
+      ? (one ? "1 document needs" : c.creator + " documents need") + " a new Object, which your account can\u2019t create, so you can\u2019t submit this job. Leave the draft for a colleague who can create Objects, change " + (one ? "its" : "their") + " handling, have the Object" + (one ? "" : "s") + " created in CollectionSpace, or delete " + (one ? "it" : "them") + " from this job and add " + (one ? "it" : "them") + " to a new draft. (Exclude makes the BMU ignore a document for good once the job completes.)"
+      : (one ? "1 document needs" : c.creator + " documents need") + " a new Object. The staff member who submits this job must be able to create Objects.") + "</div>" : "");
   document.getElementById("scheduleBar").innerHTML = '<span class="counts"><strong>' + esc(parts[0]) + "</strong> · " + esc(parts.slice(1).join(" · ")) + "</span>" +
     (c.block || c.warn ? '<button id="showProblemsBtn">Show documents with problems</button>' : "") +
     '<button id="saveDraftBtn" title="Save this job to Drafts, even if it is incomplete or has problems. Every change is already saved; this confirms it and restarts the draft\u2019s ' + (rows.some(function (r) { return !!sensitiveReason(r); }) ? "7-day expiry (it has protected files)" : "30-day expiry") + '">Save draft</button>' +
-    '<button id="submitBtn"' + (c.block || !work || !IS_STAFF ? " disabled" : "") + ' title="' + (!IS_STAFF ? INTERN_SUBMIT_WHY : c.block ? "Fix or exclude the documents marked Needs fixing first, or save a draft" : (!work ? "Nothing left to run: every document is done or excluded" : "Check the whole job again, then add it to the job queue; it runs at the next run time")) + '">Submit job</button>' +
+    '<button id="submitBtn"' + (c.block || !work || !IS_STAFF || gp || c.creator ? " disabled" : "") + ' title="' + esc(!IS_STAFF ? INTERN_SUBMIT_WHY : c.block ? "Fix or exclude the documents marked Needs fixing first, or save a draft" : (!work ? "Nothing left to run: every document is done or excluded" : gp ? "Your account can\u2019t create groups, which this job\u2019s group needs" : creatorWhy ? creatorWhy : "Check the whole job again, then add it to the job queue; it runs at the next run time")) + '">Submit job</button>' +
     (scheduleMsg ? '<div class="result">' + scheduleMsg + "</div>" : "");
 }
 function hasUnsaved() { return isDirty() && !!(currentJob.id || rows.length || document.getElementById("jobName").value.trim()); }
@@ -2254,6 +2289,12 @@ function submitJob() {
   var c = countLevels(rows);
   if (c.block) {
     scheduleMsg = '<span class="badge badge-danger">Not submitted</span> The whole-job check found ' + c.block + " document(s) that need fixing. Save a draft to finish later.";
+    renderScheduleBar(); return;
+  }
+  var gpNow = groupProblem(rows, groupOn(), groupMade());
+  if (gpNow) { scheduleMsg = '<span class="badge badge-warning">Not submitted</span> ' + esc(gpNow); renderScheduleBar(); return; }
+  if (c.creator) {   /* a job is submitted whole, by someone who can create its Objects */
+    scheduleMsg = '<span class="badge badge-creator">Not submitted</span> ' + (c.creator === 1 ? "A document needs" : c.creator + " documents need") + " a new Object, which your account can\u2019t create. Leave the draft for a colleague who can create Objects.";
     renderScheduleBar(); return;
   }
   if (groupOn() && !document.getElementById("groupTitle").value.trim()) {
@@ -2704,9 +2745,11 @@ function statusBadge(j) {
 function checksCell(j) {
   var c = countLevels(j.rows), txt = [];
   txt.push(c.block ? c.block + (c.block === 1 ? " needs fixing" : " need fixing") : "nothing to fix");
+  if (c.creator) txt.push(creatorText(c.creator));
+  else if (c.newObjects) txt.push(c.newObjects + (c.newObjects === 1 ? " new Object" : " new Objects"));
   if (c.warn) txt.push(c.warn + (c.warn === 1 ? " warning" : " warnings"));
   var changed = j.atSubmit && (c.block !== j.atSubmit.block || c.warn !== j.atSubmit.warn);
-  return '<span class="badge ' + (c.block ? "badge-danger" : (c.warn ? "badge-warning" : "badge-success")) + '">' + esc(txt.join(" · ")) + "</span>" +
+  return '<span class="badge ' + (c.block ? "badge-danger" : (c.creator ? "badge-creator" : (c.warn ? "badge-warning" : "badge-success"))) + '">' + esc(txt.join(" · ")) + "</span>" +
     (changed ? '<div class="changed">Changed since submitted</div>' : "");
 }
 /* Which run of a job, in words: "first run", "second run", … and "run 11" beyond the tenth. */
@@ -2767,7 +2810,9 @@ function roleActions(j, locked, run) {
       var c = countLevels(j.rows);
       var why = locked ? j.editingBy + " is editing this draft" : !j.rows.length ? "This draft has no documents"
         : c.block ? "Fix or exclude the " + (c.block === 1 ? "document" : c.block + " documents") + " marked Needs fixing first: open the draft with Edit"
-        : (j.groupOn && !(j.groupTitle || "").trim()) ? "Enter a group title, or turn off the job\u2019s group: open the draft with Edit" : "";
+        : (j.groupOn && !(j.groupTitle || "").trim()) ? "Enter a group title, or turn off the job\u2019s group: open the draft with Edit"
+        : groupProblem(j.rows, j.groupOn, j.groupStep && j.groupStep.s === "done") ? "Your account can\u2019t create groups, which this job\u2019s group needs: contact your CollectionSpace administrator, or leave the draft for a colleague"
+        : c.creator ? (c.creator === 1 ? "A document needs" : c.creator + " documents need") + " a new Object, which your account can\u2019t create: leave the draft for a colleague who can create Objects" : "";
       return '<button class="q-act" data-kind="submit" data-id="' + j.id + '"' + (why ? off(why) : ' title="Check the whole job again, then add it to the job queue, without opening it"') + ">Submit\u2026</button>" +
         '<button class="q-access" data-id="' + j.id + '" title="' + (j.internOpen ? "Interns can edit this draft now. Make it staff only." : "Only staff can edit this draft now. Let interns edit it too.") + '">' +
         (j.internOpen ? "Make staff only" : "Open to interns") + "</button>";
@@ -2862,8 +2907,8 @@ function jobDocsTable(j, kind) {
       } else {
         var s2 = statusFor(r, i), v = validations(r, i);
         badge = '<span class="badge ' + s2.cls + '">' + esc(s2.text) + "</span>";
-        var top = v.filter(function (m) { return m.level === "block"; })[0] || v.filter(function (m) { return m.level === "warn"; })[0] || v.filter(function (m) { return m.sens; })[0];
-        if (top) issue = (top.level === "block" ? "Must fix: " : top.level === "warn" ? "Warning: " : "") + top.text;
+        var top = v.filter(function (m) { return m.level === "block"; })[0] || v.filter(function (m) { return m.level === "creator"; })[0] || v.filter(function (m) { return m.level === "warn"; })[0] || v.filter(function (m) { return m.sens; })[0];
+        if (top) issue = (top.level === "block" ? "Must fix: " : top.level === "creator" ? NEEDS_CREATOR + ": " : top.level === "warn" ? "Warning: " : "") + top.text;
       }
       html += "<tr" + (r.disabled ? ' class="row-disabled"' : "") + "><td>" + thumbHtml(r, "sm") + "</td><td>" + esc(displayName(r, i)) + (sensitiveReason(r) ? '<span class="badge badge-danger sens">Protected</span>' : "") + "</td><td>" + esc(h.label) +
         "</td><td>" + esc(idValue(r, i)) + "</td><td>" + badge + '</td><td class="' + (issue ? "" : "sub") + '">' + esc(issue || "—") + "</td></tr>";
@@ -2990,6 +3035,7 @@ function renderPreview(v) {
     "</div>";
   if (c.block && !run && !draft) html += '<div class="banner" style="background:var(--bg-danger);color:var(--text-danger)">Something changed in CollectionSpace since this job was submitted: ' + c.block + " document(s) now need fixing. Edit the job to fix them before it runs.</div>";
   if (c.block && draft) html += '<div class="banner">This draft has ' + c.block + " document(s) that need fixing before it can be submitted.</div>";
+  if (c.creator && draft) html += '<div class="msg msg-creator" style="margin-bottom:8px">' + (c.creator === 1 ? "1 document needs" : c.creator + " documents need") + " a new Object, so whoever submits " + (c.creator === 1 ? "it" : "them") + " must be able to create Objects.</div>";
   withRows(j.rows, function () {
     var lv = rows.map(function (r, i) { return worstLevel(r, i); });
     var view = viewIndices("preview", rows.length, {
@@ -3004,17 +3050,18 @@ function renderPreview(v) {
       var r = rows[i];
       if (f === "block") return !r.disabled && lv[i] === "block";
       if (f === "warn") return !r.disabled && lv[i] === "warn";
-      if (f === "problems") return !r.disabled && lv[i] !== "ok";
+      if (f === "problems") return !r.disabled && (lv[i] === "block" || lv[i] === "warn");
+      if (f === "creator") return !r.disabled && lv[i] === "creator";
       if (f === "sensitive") return !!sensitiveReason(r);
       if (f === "disabled") return !!r.disabled;
       return true;
     });
-    var pc = { problems: 0, block: 0, warn: 0, sensitive: 0, disabled: 0 };
+    var pc = { problems: 0, block: 0, warn: 0, creator: 0, sensitive: 0, disabled: 0 };
     rows.forEach(function (r, i) {
-      if (r.disabled) pc.disabled++; else { if (lv[i] === "block") pc.block++; if (lv[i] === "warn") pc.warn++; if (lv[i] !== "ok") pc.problems++; }
+      if (r.disabled) pc.disabled++; else { if (lv[i] === "block") pc.block++; if (lv[i] === "warn") pc.warn++; if (lv[i] === "creator") pc.creator++; if (lv[i] === "block" || lv[i] === "warn") pc.problems++; }
       if (sensitiveReason(r)) pc.sensitive++;
     });
-    var filters = [["all", "All documents (" + rows.length + ")"], ["problems", "With problems (" + pc.problems + ")"], ["block", "Need fixing (" + pc.block + ")"],
+    var filters = [["all", "All documents (" + rows.length + ")"], ["problems", "With problems (" + pc.problems + ")"], ["block", "Need fixing (" + pc.block + ")"], ["creator", "Need an Object creator (" + pc.creator + ")"],
       ["warn", "With warnings (" + pc.warn + ")"], ["sensitive", "Protected (" + pc.sensitive + ")"], ["disabled", "Excluded (" + pc.disabled + ")"]];
     html += pagerBar("preview", view, "documents", filters, "top") +
       '<div class="table-wrap"><table><thead><tr><th class="thumb-cell"><span class="sr-only">Preview</span></th>' + sortTh("preview", "file", "Document") + sortTh("preview", "handling", "Handling", "width:150px") +
@@ -3027,7 +3074,7 @@ function renderPreview(v) {
       var cls = { block: "msg-danger", warn: "msg-warn", info: "msg-danger" };
       html += "<tr" + (r.disabled ? ' class="row-disabled"' : "") + '><td class="thumb-cell">' + thumbHtml(r) + "</td><td>" + esc(displayName(r, i)) + (r.disabled ? ' <span class="badge badge-accent">Excluded</span>' : "") + (sensitiveReason(r) ? '<span class="badge badge-danger sens">Protected</span>' : "") + "</td><td>" + esc(h.label) + "</td><td>" + esc(idValue(r, i)) + "</td><td>" + esc(h.object === "none" ? "—" : r.obj) + "</td><td>" + esc(r.date || "—") + "</td>" +
         (run ? "<td>" + esc(r.runState || "Not started") + "</td>" : "") +
-        "<td>" + (v2.length ? '<div class="preview-msgs">' + v2.map(function (m) { return '<div class="msg ' + (m.rename ? "msg-info" : cls[m.level]) + '">' + (m.level === "block" ? "<strong>Must fix:</strong> " : (m.level === "warn" ? "<strong>Warning:</strong> " : "")) + esc(m.text) + "</div>"; }).join("") + "</div>" : '<span class="badge badge-success">OK</span>') + "</td></tr>";
+        "<td>" + (v2.length ? '<div class="preview-msgs">' + v2.map(function (m) { return '<div class="msg ' + (m.rename ? "msg-info" : cls[m.level]) + '">' + (m.level === "block" ? "<strong>Must fix:</strong> " : m.level === "creator" ? "<strong>" + NEEDS_CREATOR + ":</strong> " : (m.level === "warn" ? "<strong>Warning:</strong> " : "")) + esc(m.text) + "</div>"; }).join("") + "</div>" : '<span class="badge badge-success">OK</span>') + "</td></tr>";
     });
     html += "</tbody></table></div>" + (view.pages > 1 ? pagerBar("preview", view, "documents", null, "bottom") : "");
   });
@@ -3100,7 +3147,7 @@ function showTab(t) {
 
 document.addEventListener("click", function (e) {
   var t = e.target, id = t.dataset && t.dataset.id;
-  if (t.id === "showProblemsBtn") { var pp = pager("editor"); pp.filter = "problems"; pp.page = 1; rows.forEach(function (r, i) { r.expanded = !r.disabled && worstLevel(r, i) !== "ok"; }); render(); }
+  if (t.id === "showProblemsBtn") { var pp = pager("editor"); pp.filter = "problems"; pp.page = 1; rows.forEach(function (r, i) { var l = worstLevel(r, i); r.expanded = !r.disabled && (l === "block" || l === "warn"); }); render(); }
   if (t.id === "submitBtn") submitJob();
   if (t.id === "bulkDisableBtn" || t.id === "bulkEnableBtn") {
     var on = t.id === "bulkDisableBtn";
@@ -3706,7 +3753,7 @@ function buildBulkBar() {
   html += '<div class="bulk-row divided">';
   if (T.handling.length > 1) {
     html += '<select id="bulkHandling" aria-label="Handling for selected"><option value="">Handling — no change</option>' +
-      T.handling.map(function (h) { var no = !!handlingBlocked(h); return '<option value="' + h.id + '"' + (no ? " disabled" : "") + ">" + esc(h.label) + (no ? " (no permission)" : "") + "</option>"; }).join("") + "</select>";
+      T.handling.map(function (h) { var no = !!handlingBlocked(h); return '<option value="' + h.id + '"' + (no ? " disabled" : "") + ">" + esc(h.label) + handlingNote(h) + "</option>"; }).join("") + "</select>";
   } else {
     html += '<span style="color:var(--text-secondary)">Handling: ' + esc(T.handling[0].label) + " (only option)</span>";
   }
