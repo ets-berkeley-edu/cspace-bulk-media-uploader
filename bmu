@@ -6,7 +6,7 @@
 #   ./bmu down sim|qa|all
 #   ./bmu status        which environments are running, and their addresses
 #   ./bmu logs sim|qa [service]     follow the logs (services: web, worker, frontend, fakecspace, s3, dynamodb)
-#   ./bmu open sim|qa|aws|mockup|mockup-hosted|home
+#   ./bmu open sim|qa|aws|mockup|home
 #   ./bmu urls          every address, including the UI mockup and AWS
 #   ./bmu aws ...       deploy to AWS and look after it: ./bmu aws help (deploy/README.md)
 #
@@ -23,7 +23,6 @@ QA_CSPACE_URL="${BMU_QA_CSPACE_URL:-https://pahma.qa.collectionspace.org}"
 AWS_ENV="${BMU_AWS_ENV:-personal-dev}"
 AWS_DEV_URL="${BMU_AWS_DEV_URL:-$(cat "deploy/environments/$AWS_ENV.url" 2>/dev/null || true)}"
 MOCKUP_FILE="docs/mockup/bmu-mockup.html"
-MOCKUP_HOSTED_URL="https://claude.ai/artifact/6zGCrZhzu2uZzu8s16rLWc"   # private until shared from its Share menu
 
 # Sets the variables docker-compose.yml reads, for one local environment.
 env_settings() {
@@ -98,13 +97,11 @@ case "$cmd" in
       sim|qa) open_url "http://localhost:$(ui_port "$1")" ;;
       aws) if [ -n "$AWS_DEV_URL" ]; then open_url "$AWS_DEV_URL"; else echo "The AWS environment '$AWS_ENV' isn't deployed from this computer yet (./bmu aws deploy)." >&2; exit 1; fi ;;
       mockup) open_url "$PWD/$MOCKUP_FILE" ;;
-      mockup-hosted) open_url "$MOCKUP_HOSTED_URL" ;;
       home) open_url "$PWD/docs/start.html" ;;
-      *) echo "Usage: ./bmu open sim|qa|aws|mockup|mockup-hosted|home" >&2; exit 2 ;;
+      *) echo "Usage: ./bmu open sim|qa|aws|mockup|home" >&2; exit 2 ;;
     esac ;;
   urls)
-    echo "UI mockup (this repo):  $PWD/$MOCKUP_FILE"
-    echo "UI mockup (hosted):     $MOCKUP_HOSTED_URL"
+    echo "UI mockup:              $PWD/$MOCKUP_FILE"
     echo "Local · simulator:      http://localhost:5173   (./bmu up sim)"
     echo "Local · PAHMA QA:       http://localhost:5273   (./bmu up qa)"
     printf "%-24s%s\n" "AWS ($AWS_ENV):" "${AWS_DEV_URL:-not deployed yet (./bmu aws deploy)}"

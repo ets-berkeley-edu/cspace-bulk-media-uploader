@@ -140,7 +140,10 @@ not-for-profit purposes; commercial use needs a license from UC Berkeley's Offic
 ## Documents kept in step with the code
 
 - **UI mockup** — `docs/mockup/bmu-mockup.html` (plain HTML; the same layout and functions as the prototype, not
-  the same look). A change to what a screen shows or does is made in both.
+  the same look). A change to what a screen shows or does is made in both. This file is the only copy (there is no
+  hosted copy to republish); UI review changes are made to it on a branch, like any other change.
+- **Testing checklist** — `docs/testing-checklist.md`: the checks to do by hand. A pull request that needs checks
+  by hand adds a section to it.
 - **README.md** — what the prototype does, and the Frontend section.
 - **Design document** — `docs/design.md` ("New BMU (uploadmedia): High-Level Architecture"). It is the only copy:
   the Claude document it came from holds just a pointer to this file. Change it in the same pull request as the

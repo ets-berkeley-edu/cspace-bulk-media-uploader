@@ -278,7 +278,7 @@ the browser tab's title (orange when the CollectionSpace is a real server).
 | `./bmu up qa` | Local, against the PAHMA QA tenant, with your own QA account. **Jobs create real records, which stay.** Demo tools off | http://localhost:5273 |
 | `./bmu aws deploy` | Deploys to AWS (default: Richard's personal account, against the PAHMA QA tenant; real records). See [deploy/README.md](deploy/README.md) | `https://….cloudfront.net` |
 | `./bmu open aws` | The AWS deployment, at the address `./bmu aws deploy` saved (or `BMU_AWS_DEV_URL`) | — |
-| `./bmu open mockup` | The UI mockup, from this repo (`docs/mockup/bmu-mockup.html`); `./bmu open mockup-hosted` opens the hosted copy | — |
+| `./bmu open mockup` | The UI mockup (`docs/mockup/bmu-mockup.html`) | — |
 | `./bmu open home` | A start page linking all of them (`docs/start.html`) | — |
 
 Also `./bmu status`, `./bmu logs sim|qa [service]`, `./bmu down sim|qa|all` and `./bmu urls`. Both local environments
@@ -288,8 +288,8 @@ variables in `docker-compose.yml` (`BMU_UI_PORT`, `BMU_API_PORT`, `BMU_S3_PORT`,
 `BMU_ENV_LABEL`, `BMU_COOKIE_NAME`) with the simulator's values as defaults.
 
 The UI mockup in `docs/mockup/` is kept in step with the prototype: the same layout and functionality, not the same
-look (it is plain HTML and doesn't use Vuetify). A change to what a screen shows or does is made in both, and the
-hosted copy is republished from the file in this repo.
+look (it is plain HTML and doesn't use Vuetify). A change to what a screen shows or does is made in both. This file is the only
+copy: the hosted copy that used to be republished from it is no longer kept up to date (October 5, 2026).
 
 ## Development without Docker
 

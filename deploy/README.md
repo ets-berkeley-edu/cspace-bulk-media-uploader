@@ -29,6 +29,38 @@ prototype: the image is built from this repository and runs on ECS Fargate. Demo
 
 **Skipping the question.** `BMU_AWS_YES=1` applies without Terraform's `yes` prompt.
 
+**What a deploy builds.** `./bmu aws deploy` builds the repository folder as it is on disk, uncommitted changes
+included. The image tag then ends in `-dirty`, so `./bmu aws status` shows that the running code isn't a commit.
+
+**Day to day.** Run `./bmu aws pause` at the end of a test session and `./bmu aws resume` at the start of the next
+(see Cost). Pause or deploy between job runs (see "No graceful worker stop" below). Use `./bmu aws destroy` only
+when the environment is no longer needed: it takes about 15–20 minutes, and a deploy afterwards gives a new
+address.
+
+**Checking it without the script.** To see whether the services are paused or running, ask AWS directly:
+
+```bash
+aws ecs describe-services --profile bmu-personal --region us-west-2 --cluster bmu-dev \
+  --services web worker --query 'services[].[serviceName,desiredCount,runningCount]' --output table
+```
+
+The two numbers on each row are the tasks wanted and the tasks running: 0 and 0 when paused, 1 and 1 when
+running. After a pause or resume the running count can take a minute to catch up. The console shows the same
+under ECS, Clusters, `bmu-dev`. To check the app itself, `curl -s https://<address>/api/health` answers
+`{"ok":true}` when the app is up and your address is allowed.
+
+**Names to know (personal-dev).**
+
+| Item | Value |
+| --- | --- |
+| Settings file | `deploy/environments/personal-dev.conf` |
+| AWS CLI profile | `bmu-personal` |
+| Region | `us-west-2` |
+| ECS cluster | `bmu-dev`: resource names start with `bmu-` and `BMU_ENV_NAME` (`dev`), not with the file's name |
+| ECS services | `web` and `worker` |
+| Log groups | `/bmu/dev/web` and `/bmu/dev/worker` |
+| CollectionSpace | the PAHMA QA tenant. Jobs create real records there, and they stay. |
+
 ## First deploy
 
 **What you need on the Mac**
@@ -209,7 +241,10 @@ Neither of the first two needs an AWS sign-in.
 
 ## If something goes wrong
 
-- **"Not signed in to AWS".** Run `aws sso login --profile <profile>`.
+- **"Not signed in to AWS", "No valid credential sources found" or "refresh cached SSO token failed".** The
+  sign-in (8 hours) has expired. Run `aws sso login --profile <profile>` and repeat the command; the failed
+  command changed nothing.
+- **"Docker isn't running".** Start Docker Desktop and run `./bmu aws deploy` again.
 - **The first creation fails.** Terraform stops at the resource that failed, says why, and keeps what it
   already created.
   - Running `./bmu aws deploy` again continues from there.
@@ -222,7 +257,8 @@ Neither of the first two needs an AWS sign-in.
   the VPC can't be deleted until they're gone. Run `./bmu aws destroy` again a few minutes later; Terraform
   continues where it stopped.
 - **"Error acquiring the state lock".** An earlier run was interrupted. Check that no other deploy is running,
-  then `terraform -chdir=deploy/terraform/app force-unlock <the lock ID in the message>`.
+  then run `./bmu aws init` (it points Terraform at this environment's state) and
+  `AWS_PROFILE=<profile> terraform -chdir=deploy/terraform/app force-unlock <the lock ID in the message>`.
 - **An intern sees "The BMU can't check this against CollectionSpace now".** The read-only account can't be
   used. "its secret can't be read" or "its secret has no user name or password yet": run `./bmu aws reader-secret`. "CollectionSpace refused
   its sign-in": the password was changed in CollectionSpace or the account lost its role; set the secret again
