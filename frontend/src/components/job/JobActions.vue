@@ -27,7 +27,7 @@
           submitted again, even if nothing changes.
         </div>
         <div v-else-if="confirming === 'submit'">{{ submitText }}</div>
-        <div v-else-if="confirming === 'handover'">{{ HAND_OVER_CONFIRM }}</div>
+        <div v-else-if="confirming === 'handover'">{{ REVIEW_CONFIRM }}</div>
         <div v-else-if="confirming === 'todrafts'">
           Moving takes this job out of the queue and deletes its saved sign-in. It stays in Drafts until someone submits it
           again, and then goes to the end of the queue.
@@ -120,17 +120,17 @@
             {{ accessAction }}
           </v-btn>
         </template>
-        <!-- An intern: give a draft that is open to interns to staff -->
+        <!-- An intern: send a finished draft to staff for review (the ids date from "Hand over to staff") -->
         <span v-else-if="job.internOpen" :title="handOverTitle">
           <v-btn
             :id="`job-${job.id}-hand-over-btn`"
-            :disabled="lockedByOther || !!confirming"
+            :disabled="!!noReview || !!confirming"
             size="small"
             :title="handOverTitle"
             variant="outlined"
             @click="confirming = 'handover'"
           >
-            Hand over to staff…
+            Submit for review…
           </v-btn>
         </span>
       </template>
@@ -195,7 +195,7 @@ import {mdiTrashCanOutline} from '@mdi/js'
 import type {CheckCounts, Created, Job} from '@/types'
 import DeleteJobConfirm from '@/components/job/DeleteJobConfirm.vue'
 import {formatTime} from '@/lib/files'
-import {HAND_OVER_CONFIRM, draftBlocked, draftDeleteBlocked, listSubmitBlocked, submitConfirmText, takeOverBlocked} from '@/lib/roles'
+import {REVIEW_CONFIRM, draftBlocked, draftDeleteBlocked, listSubmitBlocked, reviewBlocked, submitConfirmText, takeOverBlocked} from '@/lib/roles'
 import {NO_CANCEL_WHY, canCancelRun} from '@/lib/schedule'
 import {api} from '@/api'
 
@@ -260,7 +260,7 @@ const emit = defineEmits<{
 
 type Confirming = 'delete' | 'takeover' | 'edit' | 'cancel' | 'submit' | 'handover' | 'todrafts'
 const CONFIRM_LABEL: Record<Confirming, string> = {delete: 'Delete', takeover: 'Take over and edit', edit: 'Edit anyway', cancel: 'Cancel run',
-                                                   submit: 'Submit job', handover: 'Hand over to staff', todrafts: 'Move to Drafts'}
+                                                   submit: 'Submit job', handover: 'Submit for review', todrafts: 'Move to Drafts'}
 
 const confirming = ref<Confirming | null>(null)
 // What the job's runs created, for the delete confirmation: undefined while it loads, null if it never ran.
@@ -288,7 +288,8 @@ const submitTitle = computed(() => noSubmit.value || 'Check the whole job again,
 const submitText = computed(() => submitConfirmText(props.job, props.counts))
 const accessAction = computed(() => (props.job.internOpen ? 'Make staff only' : 'Open to interns'))
 const accessTitle = computed(() => (props.job.internOpen ? 'Interns can edit this draft now. Make it staff only.' : 'Only staff can edit this draft now. Let interns edit it too.'))
-const handOverTitle = computed(() => (lockedByOther.value ? `${props.job.editingBy} is editing this draft` : 'Give this draft to staff: it becomes staff only'))
+const noReview = computed(() => reviewBlocked(props.job, props.counts))
+const handOverTitle = computed(() => noReview.value || 'Send this draft to staff for review: it becomes staff only, and a staff member submits it')
 
 const askDelete = () => {
   confirming.value = 'delete'
@@ -351,7 +352,7 @@ const confirmed = async () => {
   } else if (confirming.value === 'submit') {
     await submit()
   } else if (confirming.value === 'handover') {
-    await act(() => api.internAccess(props.job.id, false), `${jobName.value} was handed over to staff.`)
+    await act(() => api.sendForReview(props.job.id), `${jobName.value} was sent to staff for review.`)
   } else if (confirming.value === 'todrafts') {
     await act(() => api.toDrafts(props.job.id), `Moved ${jobName.value} to Drafts.`)
   }

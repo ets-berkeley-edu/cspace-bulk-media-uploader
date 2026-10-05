@@ -51,7 +51,7 @@
       variant="tonal"
     >
       Editing draft <strong>{{ job.name || 'Untitled job' }}</strong>. Others in {{ me.tenant.name }} see it under Drafts as being edited by you.
-      Changes are saved as you make them. Submit job moves it to the job queue.
+      Changes are saved as you make them. {{ isStaffUser ? 'Submit job moves it to the job queue.' : 'Submit for review sends it to staff, who review and submit it.' }}
       <button
         id="close-draft-btn"
         class="link-btn"
@@ -154,9 +154,23 @@
       placeholder="e.g. 2026 spring accession batch"
       @change="rename"
     />
-    <!-- Whether interns may edit this draft (design: Roles): staff set it; an intern hands the draft over to staff -->
-    <div v-if="job?.status === 'Draft' && mode !== 'preview'" id="intern-access" class="mt-2 text-body-2">
-      <label v-if="isStaffUser" class="align-center d-inline-flex" for="intern-open">
+    <!-- Design (Roles, Submit for review): an intern sent this draft to staff -->
+    <v-alert
+      v-if="job?.status === 'Draft' && job.review"
+      id="review-note"
+      class="mt-2"
+      density="compact"
+      type="info"
+      variant="tonal"
+    >
+      {{ job.review.by }} sent this draft for review on {{ formatTime(job.review.at) }}.
+      <template v-if="isStaffUser">Submit it when it is ready. To send it back, tick “Open to interns”.</template>
+      <template v-else>A staff member reviews and submits it.</template>
+    </v-alert>
+    <!-- Whether interns may edit this draft (design: Roles): staff set it. An intern has nothing here: Submit for
+         review is the button at the bottom of the job -->
+    <div v-if="job?.status === 'Draft' && mode !== 'preview' && isStaffUser" id="intern-access" class="mt-2 text-body-2">
+      <label class="align-center d-inline-flex" for="intern-open">
         <input
           id="intern-open"
           :checked="!!job.internOpen"
@@ -168,49 +182,6 @@
         Open to interns
         <span id="intern-open-hint" class="ml-2 text-medium-emphasis">{{ internOpenHint }}</span>
       </label>
-      <template v-else-if="job.internOpen">
-        <v-btn
-          v-if="!isHandingOver"
-          id="hand-over-btn"
-          :disabled="!editable || isBusy"
-          size="small"
-          variant="outlined"
-          @click="isHandingOver = true"
-        >
-          Hand over to staff…
-        </v-btn>
-        <v-alert
-          v-else
-          id="hand-over-confirm"
-          density="compact"
-          role="alert"
-          type="warning"
-          variant="tonal"
-        >
-          <div>{{ HAND_OVER_CONFIRM }}</div>
-          <div class="mt-2">
-            <v-btn
-              id="hand-over-confirm-btn"
-              class="mr-2"
-              color="warning"
-              :disabled="isBusy"
-              size="small"
-              @click="handOver"
-            >
-              Hand over to staff
-            </v-btn>
-            <v-btn
-              id="hand-over-cancel-btn"
-              :disabled="isBusy"
-              size="small"
-              variant="outlined"
-              @click="isHandingOver = false"
-            >
-              Cancel
-            </v-btn>
-          </div>
-        </v-alert>
-      </template>
     </div>
 
     <v-sheet
@@ -575,8 +546,21 @@
           Save draft
         </v-btn>
       </span>
+      <!-- Design (Roles, Submit for review): an intern can't submit a job, so the button in its place sends the
+           draft to staff for review. (Its ids date from "Hand over to staff", which this replaced.) -->
+      <span v-if="!isStaffUser && !readonly && mode !== 'preview'" :title="reviewTitle">
+        <v-btn
+          id="hand-over-btn"
+          color="primary"
+          :disabled="!job || !editable || isBusy || isHandingOver || !!noReview"
+          :title="reviewTitle"
+          @click="isHandingOver = true"
+        >
+          Submit for review…
+        </v-btn>
+      </span>
       <!-- A preview of a queued, running or finished job has nothing to submit: that's done from its own tab -->
-      <span v-if="!readonly && mode !== 'preview'" :title="submitTitle">
+      <span v-if="isStaffUser && !readonly && mode !== 'preview'" :title="submitTitle">
         <v-btn
           id="submit-job-btn"
           color="primary"
@@ -587,6 +571,38 @@
           Submit job
         </v-btn>
       </span>
+      <v-alert
+        v-if="isHandingOver && !isStaffUser"
+        id="hand-over-confirm"
+        class="mt-3 w-100"
+        density="compact"
+        role="alert"
+        type="warning"
+        variant="tonal"
+      >
+        <div>{{ REVIEW_CONFIRM }}</div>
+        <div class="mt-2">
+          <v-btn
+            id="hand-over-confirm-btn"
+            class="mr-2"
+            color="warning"
+            :disabled="isBusy"
+            size="small"
+            @click="handOver"
+          >
+            Submit for review
+          </v-btn>
+          <v-btn
+            id="hand-over-cancel-btn"
+            :disabled="isBusy"
+            size="small"
+            variant="outlined"
+            @click="isHandingOver = false"
+          >
+            Cancel
+          </v-btn>
+        </div>
+      </v-alert>
       <div v-if="savedNote" id="saved-note" class="saved-note text-caption text-medium-emphasis">{{ savedNote }}</div>
     </v-sheet>
   </div>
@@ -607,7 +623,7 @@ import {canPreview, fileTooLargeText, formIsOld, formatTime, makeThumbnail, mapL
 import {readImageInfo} from '@/lib/imageinfo'
 import {portalOf} from '@/lib/portal'
 import {OUTCOME, failureOf, loadFailures} from '@/lib/results'
-import {GROUP_PROBLEM, HAND_OVER_CONFIRM, INTERN_SUBMIT_WHY, isStaff, permsFor} from '@/lib/roles'
+import {GROUP_PROBLEM, INTERN_SUBMIT_WHY, REVIEW_CONFIRM, STAFF_DRAFT_WHY, isStaff, permsFor} from '@/lib/roles'
 import {groupTimestampTitle} from '@/lib/schedule'
 import {creatorText, hasWork, jobCounts, worstLevel} from '@/lib/status'
 import {editorColumns, tableState, tableView} from '@/lib/table'
@@ -762,11 +778,17 @@ async function handOver() {
   isBusy.value = true
   try {
     const name = job.value.name
-    await api.internAccess(job.value.id, false)
+    await rename()
+    await api.sendForReview(job.value.id)
+    isHandingOver.value = false
     emit('handedOver', name)
   } catch (e) {
     isHandingOver.value = false
     await failed(e)
+    if (e instanceof ApiError && e.status === 409 && editable.value) {
+      rows.value = (await api.job(job.value.id)).rows // the server checked the job again: show what it found
+      showProblems()
+    }
   } finally {
     isBusy.value = false
   }
@@ -790,6 +812,19 @@ const scheduleBlocked = computed(() => {
   }
   return ''
 })
+
+/** Why an intern can't send this draft for review yet: only a document that needs fixing, or an unfinished upload. */
+const noReview = computed(() => {
+  const c = counts.value
+  if (job.value && !job.value.internOpen) return STAFF_DRAFT_WHY
+  if (job.value?.groupOn && !job.value.groupTitle?.trim()) return 'Enter a group title, or turn off the job\'s group'
+  if (c.block) return 'Fix or exclude the documents marked Needs fixing first'
+  if (c.uploading) return 'Wait until every file is uploaded and verified'
+  if (!c.work) return 'Nothing to review: add a document first'
+  if (checking.size) return 'Checking against CollectionSpace…'
+  return ''
+})
+const reviewTitle = computed(() => noReview.value || 'Send this draft to staff for review: it becomes staff only, and a staff member submits it')
 
 /**
  * Design (Roles, Three kinds of result): creating groups is the one permission, creating Objects aside, that staff

@@ -101,8 +101,8 @@ describe('job actions (design: Drafts; The job queue; UI mockup actionsFor)', ()
     expect(texts(mount(JobActions, {props: {job: job({editingBy: 'jlee', editingSince: 5}), kind: 'drafts', inPreview: true, staff: true}})))
       .toEqual(['Take over…', 'Submit…', 'Open to interns', 'Delete'])
     expect(texts(mount(JobActions, {props: {job: job(), kind: 'drafts', staff: true}}))).toEqual(['Preview', 'Edit', 'Submit…', 'Open to interns', 'Delete'])
-    // an intern: no Submit, no setting; Hand over to staff on a draft that is open to interns
-    expect(texts(mount(JobActions, {props: {job: job({internOpen: true}), kind: 'drafts'}}))).toEqual(['Preview', 'Edit', 'Hand over to staff…', 'Delete'])
+    // an intern: no Submit, no setting; Submit for review on a draft that is open to interns
+    expect(texts(mount(JobActions, {props: {job: job({internOpen: true}), kind: 'drafts'}}))).toEqual(['Preview', 'Edit', 'Submit for review…', 'Delete'])
     expect(texts(mount(JobActions, {props: {job: job(), kind: 'drafts'}}))).toEqual(['Preview', 'Edit', 'Delete'])
   })
 

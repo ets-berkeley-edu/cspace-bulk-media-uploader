@@ -52,7 +52,7 @@ describe('Submit job (design: Job scheduling)', () => {
 })
 
 describe('an intern in the editor (design: Roles)', () => {
-  it('cannot submit, with the reason; nothing is switched off for lack of permissions', async () => {
+  it('has "Submit for review…" where staff have "Submit job"; nothing is switched off for lack of permissions', async () => {
     const calls = stub((url, method) => {
       if (url.endsWith('/api/jobs/j1') && method === 'GET') return {job: {...draft, editingBy: 'kim', internOpen: true}, rows: [row], runs: [], created: {}}
       if (url.endsWith('/check')) return {rows: [row], counts: {block: 0, warn: 0}}
@@ -63,11 +63,17 @@ describe('an intern in the editor (design: Roles)', () => {
     const none: Perms = {media: false, mediaUpdate: false, relations: false, objects: false, readObjects: false, authorities: false, groups: false}
     const w = mount(JobEditor, {props: {me: {...me, user: 'kim', role: 'intern', perms: none}, jobId: 'j1'}, global: {stubs: {DocumentThumbnail: true}}})
     await flushPromises()
-    const submit = w.findAll('button').find((b) => b.text() === 'Submit job')!
-    expect(submit.attributes('disabled')).toBeDefined()
-    expect(submit.attributes('title')).toBe('Only staff can submit a job. A staff member submits it when the draft is ready.')
-    await submit.trigger('click')
-    expect(calls.some((c) => c.url.endsWith('/j1/schedule'))).toBe(false)
+    // one button at the bottom of the job: no "Submit job" that is always off, and nothing under the job name
+    expect(w.findAll('button').some((b) => b.text() === 'Submit job')).toBe(false)
+    expect(w.find('#submit-job-btn').exists()).toBe(false)
+    expect(w.find('#intern-access').exists()).toBe(false)
+    const review = w.find('#schedule-bar #hand-over-btn')
+    expect(review.text()).toBe('Submit for review…')
+    expect(review.attributes('disabled')).toBeUndefined()
+    expect(w.text()).toContain('Submit for review sends it to staff, who review and submit it.')
+    await review.trigger('click')
+    expect(w.find('#schedule-bar #hand-over-confirm').text()).toContain('Submit this draft for review?')
+    expect(calls.some((c) => c.url.endsWith('/j1/schedule') || c.url.endsWith('/j1/review'))).toBe(false)
     // the group box is offered although the intern's own account can't create groups: they act for the submitter
     expect(w.find('#group-on').attributes('disabled')).toBeUndefined()
     expect(w.text()).not.toContain('Your account can\'t create groups.')
@@ -101,17 +107,41 @@ describe('whether interns may edit the draft, in the editor (design: Roles)', ()
     w.unmount()
   })
 
-  it('an intern hands the draft over to staff after confirming, and the editor is told', async () => {
+  it('Submit for review… is off in the editor while a document needs fixing, and staff see who sent a draft', async () => {
+    const bad: Row = {...row, checks: [{level: 'block', text: 'No object 20-1 in CollectionSpace.'}]}
+    stub((url, method) => {
+      if (url.endsWith('/api/jobs/j1') && method === 'GET') return {job: {...draft, editingBy: 'kim', internOpen: true}, rows: [bad], runs: [], created: {}}
+      if (url.endsWith('/check')) return {rows: [bad], counts: {block: 1, warn: 0}}
+      if (url.includes('/vocabularies/')) return {terms: []}
+      if (url.endsWith('/api/failures')) return {failures: {}}
+      return {}
+    })
+    const w = mount(JobEditor, {props: {me: {...me, user: 'kim', role: 'intern'}, jobId: 'j1'}, global: {stubs: {DocumentThumbnail: true}}})
+    await flushPromises()
+    expect(w.find('#hand-over-btn').text()).toBe('Submit for review…')
+    expect(w.find('#hand-over-btn').attributes('disabled')).toBeDefined()
+    expect(w.find('#hand-over-btn').attributes('title')).toBe('Fix or exclude the documents marked Needs fixing first')
+    w.unmount()
+
+    stub(routes({...draft, review: {by: 'kim', at: 1791000000}} as Job))
+    const staffView = mount(JobEditor, {props: {me, jobId: 'j1'}, global: {stubs: {DocumentThumbnail: true}}})
+    await flushPromises()
+    expect(staffView.find('#review-note').text()).toContain('kim sent this draft for review on ')
+    expect(staffView.find('#review-note').text()).toContain('To send it back, tick “Open to interns”.')
+    staffView.unmount()
+  })
+
+  it('an intern submits the draft for review after confirming, and the editor is told', async () => {
     const calls = stub(routes({...draft, name: 'Box 3', editingBy: 'kim', internOpen: true} as Job))
     const w = mount(JobEditor, {props: {me: {...me, user: 'kim', role: 'intern'}, jobId: 'j1'}, global: {stubs: {DocumentThumbnail: true}}})
     await flushPromises()
     expect(w.find('#intern-open').exists()).toBe(false)
     await w.find('#hand-over-btn').trigger('click')
-    expect(w.find('#hand-over-confirm').text()).toContain('Hand this draft over to staff?')
-    expect(calls.some((c) => c.url.endsWith('/intern-access'))).toBe(false)
+    expect(w.find('#hand-over-confirm').text()).toContain('Submit this draft for review?')
+    expect(calls.some((c) => c.url.endsWith('/review'))).toBe(false)
     await w.find('#hand-over-confirm-btn').trigger('click')
     await flushPromises()
-    expect(calls.some((c) => c.url === '/api/jobs/j1/intern-access' && c.method === 'POST')).toBe(true)
+    expect(calls.some((c) => c.url === '/api/jobs/j1/review' && c.method === 'POST')).toBe(true)
     expect(w.emitted('handedOver')![0]).toEqual(['Box 3'])
     w.unmount()
   })

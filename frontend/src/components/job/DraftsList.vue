@@ -126,6 +126,15 @@
           </td>
           <td>
             <div :id="`job-${job.id}-name`" class="font-weight-medium">{{ nameOf(job) }}</div>
+            <v-chip
+              v-if="job.review"
+              :id="`job-${job.id}-review`"
+              class="my-1"
+              color="info"
+              size="small"
+            >
+              {{ reviewLabel(job, formatTime) }}
+            </v-chip>
             <div :id="`job-${job.id}-access`" class="text-caption text-medium-emphasis">{{ accessLabel(job) }}</div>
             <div class="text-caption text-medium-emphasis">created by {{ job.createdBy }}</div>
             <div v-if="job.fixFrom" :id="`job-${job.id}-fixing`" class="text-caption text-medium-emphasis">
@@ -222,7 +231,7 @@ import JobActions from '@/components/job/JobActions.vue'
 import JobDetails from '@/components/job/JobDetails.vue'
 import SortableColumnHeader from '@/components/util/SortableColumnHeader.vue'
 import {formatTime} from '@/lib/files'
-import {accessLabel} from '@/lib/roles'
+import {accessLabel, reviewLabel} from '@/lib/roles'
 import {checksColor, checksText} from '@/lib/status'
 import {tableState, tableView} from '@/lib/table'
 import {api} from '@/api'
@@ -299,7 +308,9 @@ const countsOf = (id: string): CheckCounts | null => {
   return c && c !== 'checking' ? c : null
 }
 
-const sorted = computed(() => tableView(drafts.value, table, {
+// Design (Roles, Submit for review): drafts an intern sent for review come first, until the user sorts the list
+const ordered = computed(() => (table.sort ? drafts.value : [...drafts.value].sort((a, b) => Number(!!b.review) - Number(!!a.review))))
+const sorted = computed(() => tableView(ordered.value, table, {
   name: nameOf,
   docs: j => j.rowCount,
   checks: j => {

@@ -212,25 +212,78 @@ def test_staff_only_does_not_end_a_staff_members_editing(api, login, services):
     assert services.storage.get_job(job)["editingBy"] == "admin"
 
 
-def test_an_intern_hands_a_draft_over_to_staff_and_cannot_take_it_back(api, login, services, fake):
+# ---- Submit for review (design: Roles) ------------------------------------------------------------------------------
+def _reader(services):
+    services.settings.reader_user, services.settings.reader_password = "bmureader", "bmureader"
+
+
+def test_an_intern_submits_a_draft_for_review_and_cannot_take_it_back(api, login, services, add_uploaded):
+    _reader(services)
     intern = _second_user(services, "intern")
     job = intern.post("/api/jobs", json={"name": "Ready"}).json()["id"]
-    r = intern.post(f"/api/jobs/{job}/intern-access", json={"open": False})  # from the editor, with the draft open
-    assert r.status_code == 200 and r.json()["internOpen"] is False and not r.json().get("editingBy")
-    assert _audit(services, "Intern access changed") == ["Handed “Ready” over to staff."]
-    for r in [intern.post(f"/api/jobs/{job}/intern-access", json={"open": True}), intern.post(f"/api/jobs/{job}/open"),
-              intern.delete(f"/api/jobs/{job}")]:
+    add_uploaded(job, ["15-1234_1.jpg", "20-0992_1.jpg"], api=intern)
+    intern.patch(f"/api/jobs/{job}/rows/2", json={"handling": "linkorcreate"})  # needs an Object creator: staff resolve that
+    r = intern.post(f"/api/jobs/{job}/review")  # from the editor, with the draft open
+    assert r.status_code == 200, r.text
+    j = r.json()
+    assert j["internOpen"] is False and not j.get("editingBy") and j["status"] == "Draft"  # it stays in Drafts
+    assert j["review"]["by"] == "intern" and j["review"]["at"] > 0
+    assert _audit(services, "Sent for review") == ["Sent “Ready” to staff for review, with 2 documents."]
+    for r in [intern.post(f"/api/jobs/{job}/review"), intern.post(f"/api/jobs/{job}/open"), intern.delete(f"/api/jobs/{job}"),
+              intern.post(f"/api/jobs/{job}/intern-access", json={"open": True})]:
         assert r.status_code == 403, r.text
-    login()  # staff give it back
-    assert api.post(f"/api/jobs/{job}/intern-access", json={"open": True}).status_code == 200
+    assert intern.get(f"/api/jobs/{job}").status_code == 200  # still visible to the intern
+
+    login()  # staff edit it: the mark stays
+    assert api.post(f"/api/jobs/{job}/open").status_code == 200
+    api.patch(f"/api/jobs/{job}/rows/1", json={"description": "checked"})
+    api.post(f"/api/jobs/{job}/close")
+    assert services.storage.get_job(job)["review"]["by"] == "intern"
+    # staff send it back by opening it to interns again: the mark comes off
+    assert api.post(f"/api/jobs/{job}/intern-access", json={"open": True}).json().get("review") is None
     assert intern.post(f"/api/jobs/{job}/open").status_code == 200
-    # an intern can't hand over a draft another intern is editing, nor change a staff-only draft, nor open one to interns
+
+
+def test_the_review_mark_comes_off_when_staff_submit_the_job(api, login, services, add_uploaded):
+    _reader(services)
+    intern = _second_user(services, "intern")
+    job = intern.post("/api/jobs", json={"name": "Box 9"}).json()["id"]
+    add_uploaded(job, ["15-1234_1.jpg"], api=intern)
+    assert intern.post(f"/api/jobs/{job}/review").status_code == 200
+    login()
+    listed = {j["id"]: j for j in api.get("/api/jobs").json()["jobs"]}[job]
+    assert listed["review"]["by"] == "intern"  # the Drafts list marks it "Needs review"
+    r = api.post(f"/api/jobs/{job}/schedule")  # Submit… from the Drafts list
+    assert r.status_code == 200 and r.json()["status"] == "Queued" and r.json().get("review") is None
+    api.post(f"/api/jobs/{job}/to-drafts")
+    assert services.storage.get_job(job).get("review") is None  # back in Drafts later, it isn't waiting for review
+
+
+def test_a_draft_with_a_document_that_needs_fixing_cannot_be_sent_for_review(api, login, services, add_uploaded, fake):
+    _reader(services)
+    intern = _second_user(services, "intern")
+    job = intern.post("/api/jobs", json={"name": "Not yet"}).json()["id"]
+    assert intern.post(f"/api/jobs/{job}/review").status_code == 409  # no documents
+    add_uploaded(job, ["15-1234_1.jpg", "20-0777_1.jpg"], api=intern)  # the second: no such object
+    r = intern.post(f"/api/jobs/{job}/review")
+    assert r.status_code == 409 and r.json()["detail"]["rows"] == [2]
+    assert r.json()["detail"]["message"].startswith("1 document needs fixing first.")
+    j = services.storage.get_job(job)
+    assert j["internOpen"] is True and not j.get("review") and j["editingBy"] == "intern"  # nothing changed
+    intern.patch(f"/api/jobs/{job}/rows/2", json={"include": False})
+    assert intern.post(f"/api/jobs/{job}/review").status_code == 200
+
+    # not a draft another intern is editing, not a staff-only draft; and staff don't use it
+    job2 = intern.post("/api/jobs", json={"name": "Mine"}).json()["id"]
     fake.role_overrides["newstaff"] = ["ROLE_15_BMU_INTERN"]
     other = _second_user(services, "newstaff")
-    r = other.post(f"/api/jobs/{job}/intern-access", json={"open": False})
+    r = other.post(f"/api/jobs/{job2}/review")
     assert r.status_code == 409 and "intern is editing this draft" in r.json()["detail"]
+    login()
     mine = new_job(api)
+    assert other.post(f"/api/jobs/{mine}/review").status_code == 403
     assert other.post(f"/api/jobs/{mine}/intern-access", json={"open": True}).status_code == 403
+    assert api.post(f"/api/jobs/{mine}/review").status_code == 409
     assert services.storage.get_job(mine)["internOpen"] is False
 
 
