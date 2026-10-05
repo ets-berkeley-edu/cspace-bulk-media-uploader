@@ -44,6 +44,11 @@ def test_with_the_reader_account_an_interns_documents_are_really_checked(service
     assert not any("can't read" in t for r in rows.values() for t in _blocks(r))
     assert any("No object 20-0777 in CollectionSpace" in t for t in _blocks(missing))  # a real problem, found for the intern
     assert not any("No object" in t for t in _blocks(found))
+    # the Media record that already has this number is reported, but not which record it is
+    exists = [c["text"] for c in found["checks"] if "already exists" in c["text"]]
+    assert exists == ["A Media record with ID 15-1234 already exists in CollectionSpace."]
+    assert "CSID" not in json.dumps(found) and not any(found["lookups"]["media"]["csids"])
+    assert "(CSID " in json.dumps(services.storage.get_row(job, found["n"])["checks"])  # staff still get it
     # the permission checks on the intern's own account are still there until they are skipped for interns (part 4)
     assert any("can't create relations" in t for t in _blocks(found))
     # the lookups were the reader account's, not the intern's

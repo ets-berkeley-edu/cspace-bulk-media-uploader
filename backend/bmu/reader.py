@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from typing import Any, Callable
 
@@ -160,6 +161,9 @@ PROTECTED_REASON = "marked sensitive in CollectionSpace"
 SOFT_SIGNAL = "a note about access in CollectionSpace"
 
 
+_CSID_NOTE = re.compile(r"\s*\(CSIDs? [^)]*\)")
+
+
 def minimal(payload: Any) -> Any:
     """Cut every document row in an API answer down to what an intern may see, in place. A row is recognized by
     its number and its checks."""
@@ -185,10 +189,16 @@ def _minimal_row(row: dict) -> None:
     if signals:
         swaps.append((", ".join(signals), SOFT_SIGNAL))
         row["softSignals"] = [SOFT_SIGNAL]
-    for check in row.get("checks") or []:
-        for old, new in swaps:
-            check["text"] = str(check.get("text", "")).replace(old, new)
     lookups = row.get("lookups")
+    csids = [c for found in (lookups or {}).values() if isinstance(found, dict) for c in found.get("csids") or [] if c]
+    for check in row.get("checks") or []:
+        text = str(check.get("text", ""))
+        for old, new in swaps:
+            text = text.replace(old, new)
+        text = _CSID_NOTE.sub("", text)  # "… already exists in CollectionSpace (CSID …)." names the record
+        for csid in csids:
+            text = text.replace(csid, "")
+        check["text"] = text
     if isinstance(lookups, dict):
         lookups.pop("objectSensitivity", None)  # the Object's sensitivity fields, as read
         for found in lookups.values():
