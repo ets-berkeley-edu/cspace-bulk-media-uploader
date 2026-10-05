@@ -237,7 +237,8 @@ data "aws_iam_policy_document" "staging_bucket" {
     }
   }
 
-  # A request that names no encryption gets the bucket's default (the staging key).
+  # Every PutObject must name SSE-KMS and the staging key: with IfExists, a request that names no encryption is
+  # refused too. The browser's uploads and the app's own writes (Storage.put_bytes) both name them.
   statement {
     sid       = "OnlyKmsEncryptedUploads"
     effect    = "Deny"

@@ -197,3 +197,19 @@ def test_the_reader_accounts_secret_is_created_empty_and_only_named_in_the_setti
     assert env["BMU_READER_SECRET_ID"] == "${aws_secretsmanager_secret.reader.arn}"
     assert "BMU_READER_USER" not in env and "BMU_READER_PASSWORD" not in env
     assert "reader.py" not in (Path(appmod.__file__).parent / "worker.py").read_text()  # the worker never uses it
+
+
+def test_what_the_app_writes_to_s3_names_the_staging_key_as_the_bucket_policy_requires(settings, aws):
+    """The bucket refuses a PutObject without SSE-KMS and the staging key (s3.tf: StringNotEqualsIfExists also
+    refuses a request that names neither). Thumbnails and audit detail are written by the app itself."""
+    policy = (APP / "s3.tf").read_text()
+    assert policy.count("StringNotEqualsIfExists") == 2 and "OnlyKmsEncryptedUploads" in policy and "OnlyTheStagingKey" in policy
+    sent = []
+    for key_id in (None, "arn:aws:kms:us-west-2:111122223333:key/abc"):
+        settings.s3_kms_key_id = key_id
+        storage = Storage(settings)
+        storage.s3 = type("S3", (), {"put_object": lambda self, **kw: sent.append(kw)})()
+        storage.put_bytes("staging/pahma/j/00001/thumb-x", b"jpeg", "image/jpeg")
+    assert "ServerSideEncryption" not in sent[0]  # locally: no key, plain upload
+    assert sent[1]["ServerSideEncryption"] == "aws:kms" and sent[1]["SSEKMSKeyId"] == "arn:aws:kms:us-west-2:111122223333:key/abc"
+    assert "put_object(" not in (Path(appmod.__file__).parent / "storage.py").read_text().replace("self.s3.put_object(Bucket=self.s.s3_bucket, Key=key, Body=data, ContentType=content_type, **sse)", "")
