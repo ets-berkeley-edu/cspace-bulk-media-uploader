@@ -96,6 +96,20 @@ run "passwords_are_not_backed_up_and_demo_is_off" {
   }
 }
 
+run "the_reader_secret_is_created_empty_and_named_for_the_environment" {
+  command = plan
+
+  assert {
+    condition     = aws_secretsmanager_secret.reader.name == "${local.name}/cspace-reader"
+    error_message = "The read-only account's secret is named bmu-<env>/cspace-reader."
+  }
+
+  assert {
+    condition     = aws_secretsmanager_secret.reader.recovery_window_in_days == (var.protect_data ? 30 : 0)
+    error_message = "A trial environment's secret is deleted at once, so the environment can be created again."
+  }
+}
+
 run "allowlist_is_written_into_the_function" {
   command = plan
 

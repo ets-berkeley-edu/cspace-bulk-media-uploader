@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import logging
 import secrets
 import time
@@ -23,6 +24,7 @@ from .config import Settings, get_settings
 from .crypto import Crypto, make_crypto
 from .cspace import CSpaceClient, CSpaceError, Permissions
 from .failures import catalog
+from .reader import Reader, ReaderLimit, ReaderUnavailable, ensure_logged, minimal
 from .filetypes import content_type, unsupported
 from .rows import (PROBLEM_TEXT, apply_edit, can_replace_file, check_rows, clean_filename, collision_checks, created_records,
                    object_plans,
@@ -76,6 +78,8 @@ class Services:
         # The time the job schedule is judged by (design: Job scheduling); tests replace it to move time.
         self.clock: Callable[[], float] = clock or now
         self.demo = demo.DemoState(settings)  # Demo tools (BMU_DEMO only); tests replace its HTTP clients
+        # The read-only account that checks an intern's drafts (design: Roles); it signs in the same way
+        self.reader = Reader(settings, lambda u, p: self.client_factory(u, p))
         # The queued and running jobs with their rows, by tenant, kept a few seconds (see _queue_rows)
         self.queue_rows: dict[str, tuple[float, list[tuple[dict, list[dict]]]]] = {}
 
@@ -83,6 +87,7 @@ class Services:
 def create_app(services: Services | None = None) -> FastAPI:
     app = FastAPI(title="New BMU (prototype)", docs_url="/api/docs", openapi_url="/api/openapi.json")
     logsafe.install()  # uvicorn has set up its logging by the time the app is created
+    ensure_logged()  # each intern's use of the read-only account is written to the log (design: Roles)
     if services is None:
         s = get_settings()
         storage = Storage(s)
@@ -100,10 +105,30 @@ def create_app(services: Services | None = None) -> FastAPI:
             if request.headers.get(CSRF_HEADER) != "1":
                 return JSONResponse({"detail": "Missing X-BMU header"}, status_code=403)
         resp = await call_next(request)
+        if getattr(request.state, "intern", False) and resp.headers.get("content-type", "").startswith("application/json"):
+            # Design (Roles): an intern's copy of the documents is cut down as it is sent (bmu/reader.py, minimal)
+            body = b"".join([chunk async for chunk in resp.body_iterator])
+            headers = {k: v for k, v in resp.headers.items() if k.lower() not in ("content-length", "content-type")}
+            try:
+                resp = JSONResponse(minimal(json.loads(body)), status_code=resp.status_code, headers=headers)
+            except ValueError:
+                resp = Response(body, status_code=resp.status_code, headers=headers, media_type="application/json")
         # The built app's files have content hashes in their names, so they never change; everything else is fresh.
         immutable = request.url.path.startswith("/assets/") and resp.status_code == 200
         resp.headers.setdefault("Cache-Control", "public, max-age=31536000, immutable" if immutable else "no-store")
         return resp
+
+    @app.exception_handler(ReaderUnavailable)
+    async def reader_unavailable(request: Request, exc: ReaderUnavailable):
+        return JSONResponse({"detail": {"code": "reader", "message":
+                             f"The BMU can't check this against CollectionSpace now: {exc}. (An intern's documents are checked "
+                             "with the BMU's read-only account.) Your changes are saved; tell a staff member."}}, status_code=503)
+
+    @app.exception_handler(ReaderLimit)
+    async def reader_limit(request: Request, exc: ReaderLimit):
+        return JSONResponse({"detail": {"code": "reader_limit", "message":
+                             "You have made more CollectionSpace lookups in the past hour than the BMU allows for one "
+                             "person. Your changes are saved; the checks work again within the hour."}}, status_code=429)
 
     @app.exception_handler(RowChanged)
     async def row_changed(request: Request, exc: RowChanged):
@@ -170,6 +195,7 @@ def current_session(request: Request, s: Services = Depends(svc)) -> Session:
         s.storage.end_session(item["PK"], item.get("tenant"))  # with its hold on any draft it was editing
         raise HTTPException(401, f"You were signed out after {s.settings.session_idle_minutes} minutes without activity. "
                                  "Please sign in again; everything you changed was saved.")
+    request.state.intern = item["role"] == "intern"  # the answer is cut down for an intern (see csrf_guard)
     if request.headers.get("x-bmu-poll") != "1" and t - last > 60:
         s.storage.touch_session(item["PK"], t)
     return Session(key=item["PK"], user=item["user"], tenant=item["tenant"], perms=item["perms"],
@@ -479,6 +505,27 @@ def _public(job: dict, sess: "Session", s: "Services | None" = None, view: Queue
     return out
 
 
+def _reads_as_reader(s: "Services", sess: "Session") -> bool:
+    """Design (Roles): an intern's lookups are made with the read-only service account, when one is set up. Staff
+    always use their own sign-in."""
+    return sess.role == "intern" and s.reader.configured
+
+
+def _lookup_client(s: "Services", sess: "Session", what: str) -> CSpaceClient:
+    """The client for a request that only reads CollectionSpace to check or fill in a draft."""
+    return s.reader.client(sess.user, what) if _reads_as_reader(s, sess) else sess.client(s)
+
+
+def _lookup_perms(s: "Services", sess: "Session") -> dict[str, bool]:
+    """The permissions those lookups go by: what the reader account may read, with the intern's own for the rest."""
+    return {**sess.perms, **s.reader.perms()} if _reads_as_reader(s, sess) else sess.perms
+
+
+def _lookup_http(s: "Services", sess: "Session", e: CSpaceError) -> Exception:
+    """A failed lookup: the reader account's failure is not the intern's sign-in failing."""
+    return s.reader.refused(e) if _reads_as_reader(s, sess) else _cspace_http(e)
+
+
 def _cspace_http(e: CSpaceError) -> HTTPException:
     if e.code == "auth":
         return HTTPException(401, "CollectionSpace didn't accept your sign-in. Please sign in again.")
@@ -656,14 +703,15 @@ def _routes(app: FastAPI) -> None:
         if not kinds:
             raise HTTPException(400, "Not an authority field")
         # As in the CollectionSpace UI, sources the user can't read are dropped silently.
-        readable = {"personauthorities": sess.perms.get("readPersons", True), "orgauthorities": sess.perms.get("readOrgs", True)}
+        perms = _lookup_perms(s, sess)
+        readable = {"personauthorities": perms.get("readPersons", True), "orgauthorities": perms.get("readOrgs", True)}
         kinds = [k for k in kinds if k in s.tenant.authorities]  # a source not set up for this tenant is skipped, as in the UI
         if not kinds:
             return {"terms": [], "total": 0}
         kinds = [k for k in kinds if readable.get(s.tenant.authorities[k]["service"], True)]
         if not kinds:
             return {"terms": [], "total": 0, "message": "Your CollectionSpace account can't read the Person or Organization authorities, so it can't search them."}
-        client = sess.client(s)
+        client = _lookup_client(s, sess, f"searching {field}")
         try:
             terms, total, more = [], 0, False
             for kind in kinds:
@@ -674,7 +722,7 @@ def _routes(app: FastAPI) -> None:
                 more = more or n > len(found)
             return {"terms": terms, "total": total, "more": more}
         except CSpaceError as e:
-            raise _cspace_http(e)
+            raise _lookup_http(s, sess, e)
         finally:
             client.close()
 
@@ -684,11 +732,11 @@ def _routes(app: FastAPI) -> None:
         text = text.strip()
         if not text:
             return {"ok": True, "group": {}}
-        client = sess.client(s)
+        client = _lookup_client(s, sess, "checking a date")
         try:
             group = client.parse_date(text[:200])
         except CSpaceError as e:
-            raise _cspace_http(e)
+            raise _lookup_http(s, sess, e)
         finally:
             client.close()
         return {"ok": group is not None, "group": group or {}}
@@ -698,11 +746,11 @@ def _routes(app: FastAPI) -> None:
     def vocabulary(name: str, sess: Session = Depends(current_session), s: Services = Depends(svc)):
         if name not in VOCABULARIES:
             raise HTTPException(404, "No such vocabulary")
-        client = sess.client(s)
+        client = _lookup_client(s, sess, f"the {name} vocabulary")
         try:
             return {"terms": vocabulary_terms(sess.tenant, client, name)}
         except CSpaceError as e:
-            raise _cspace_http(e)
+            raise _lookup_http(s, sess, e)
         finally:
             client.close()
 
@@ -1391,13 +1439,14 @@ def _recheck(s: Services, sess: Session, job_id: str, targets: set[int] | None, 
     auto = ("checks", "lookups", "protected", "softSignals", "restricted", "restrictedAuto", "thumbKey",
             "creator", "contributor", "rightsHolder", "language")  # a renamed term's current refName (see rows.value_findings)
     before = {r["n"]: copy.deepcopy(tuple(r.get(k) for k in auto)) for r in rows}
-    client = sess.client(s)
+    perms = _lookup_perms(s, sess)  # an intern's lookups are the reader account's (design: Roles)
+    client = _lookup_client(s, sess, f"checking job {job_id}")
     try:
-        partial = check_rows(s.tenant, rows, client, sess.perms, targets=targets, refresh=refresh, group_on=group_on,
+        partial = check_rows(s.tenant, rows, client, perms, targets=targets, refresh=refresh, group_on=group_on,
                              set_publish=editable, group_exists=group_exists,
                              languages=lambda: vocabulary_terms(sess.tenant, client, "languages", fresh=refresh))
     except CSpaceError as e:
-        raise _cspace_http(e)
+        raise _lookup_http(s, sess, e)
     finally:
         client.close()
     # Design (Jobs that collide in the queue): what the jobs that run before this one will have changed by then

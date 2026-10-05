@@ -796,7 +796,10 @@ class Storage:
         return self.s3.get_object(**kw)["Body"]
 
     def put_bytes(self, key: str, data: bytes, content_type: str) -> None:
-        self.s3.put_object(Bucket=self.s.s3_bucket, Key=key, Body=data, ContentType=content_type)
+        # In AWS the bucket's policy refuses a PutObject that doesn't name SSE-KMS with the staging key (s3.tf), so
+        # what the app writes itself (thumbnails, audit detail) names it, as the browser's uploads do.
+        sse = {"ServerSideEncryption": "aws:kms", "SSEKMSKeyId": self.s.s3_kms_key_id} if self.s.s3_kms_key_id else {}
+        self.s3.put_object(Bucket=self.s.s3_bucket, Key=key, Body=data, ContentType=content_type, **sse)
 
     def get_bytes(self, key: str) -> bytes | None:
         try:

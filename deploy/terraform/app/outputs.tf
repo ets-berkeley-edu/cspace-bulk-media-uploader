@@ -34,3 +34,8 @@ output "web_log_group" {
 output "worker_log_group" {
   value = aws_cloudwatch_log_group.worker.name
 }
+
+output "reader_secret" {
+  description = "The secret that holds the read-only CollectionSpace account's sign-in; set its value by hand (deploy/README.md)."
+  value       = aws_secretsmanager_secret.reader.name
+}

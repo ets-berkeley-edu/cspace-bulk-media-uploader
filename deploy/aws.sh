@@ -8,12 +8,14 @@
 #   ./bmu aws logs web|worker   follow a service's logs (the last 30 minutes first)
 #   ./bmu aws pause         stop both services to save money (the data stays); ./bmu aws resume starts them
 #   ./bmu aws allow-my-ip   add this computer's current address to the allowlist
+#   ./bmu aws reader-secret set or change the read-only CollectionSpace account's sign-in (asks; nothing is shown or saved here)
 #   ./bmu aws destroy       delete everything in AWS for this environment, data included (asks first)
 #   ./bmu aws init          point Terraform at this environment's state, to run terraform commands yourself
 #
 # Which environment: --env NAME or BMU_AWS_ENV (default personal-dev). Its settings are in
 # deploy/environments/NAME.conf; NAME.local.conf (not committed) holds the account number and allowed addresses.
-# Sign in first with: aws sso login --profile <the environment's AWS_PROFILE>. Nothing here handles a password or key.
+# Sign in first with: aws sso login --profile <the environment's AWS_PROFILE>. Nothing here handles a password or key,
+# except reader-secret, which passes what you type straight to AWS Secrets Manager.
 # Terraform (deploy/terraform) creates everything; its state is in an S3 bucket in the same account, which the first
 # deploy creates. BMU_AWS_YES=1 skips Terraform's "yes" prompt. Works with the macOS bash (3.2).
 set -euo pipefail
@@ -240,6 +242,37 @@ status() {
       --query "services[].[serviceName, join('', ['running ', to_string(runningCount), ' of ', to_string(desiredCount)])]" --output text 2>/dev/null || true; } |
   while IFS="$(printf '\t')" read -r name counts; do echo "  $name: $counts"; done
   echo "Allowed addresses: $ALLOWED_CIDRS"
+  case "$(reader_secret_field 'length(keys(VersionIdsToStages || `{}`))')" in
+    "") echo "Read-only account for interns' checks: no secret yet (the next ./bmu aws deploy creates it)" ;;
+    0)  echo "Read-only account for interns' checks: NOT SET (./bmu aws reader-secret)" ;;
+    *)  echo "Read-only account for interns' checks: set, last changed $(reader_secret_field LastChangedDate | cut -c1-10) (change it every 90 days)" ;;
+  esac
+}
+
+# ---- the read-only CollectionSpace account for interns' checks (design: Roles; backend/bmu/reader.py) ----------------
+reader_secret_field() {  # reader_secret_field QUERY: one fact about the secret; never reads its value
+  aws_ secretsmanager describe-secret --secret-id "$NAME/cspace-reader" --query "$1" --output text 2>/dev/null || true
+}
+
+json_string() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }  # printf is a builtin: not in the process list
+
+reader_secret() {
+  load_env; check_account
+  local secret="$NAME/cspace-reader" user="" password="" again=""
+  aws_ secretsmanager describe-secret --secret-id "$secret" >/dev/null 2>&1 ||
+    die "No secret $secret yet. ./bmu aws deploy creates it; then run this again."
+  echo "The read-only CollectionSpace account that checks interns' drafts (role BMU_Reader, nothing else)."
+  echo "What you type goes to AWS Secrets Manager ($secret). It isn't shown, saved on this computer or logged."
+  printf "Its user name: "; IFS= read -r user
+  printf "Its password (not shown): "; IFS= read -rs password; echo
+  printf "The password again: "; IFS= read -rs again; echo
+  [ -n "$user" ] && [ -n "$password" ] || die "Nothing was changed: the user name and the password are both needed."
+  [ "$password" = "$again" ] || die "Nothing was changed: the two passwords differ."
+  printf '{"username":"%s","password":"%s"}' "$(json_string "$user")" "$(json_string "$password")" |
+    aws_ secretsmanager put-secret-value --secret-id "$secret" --secret-string file:///dev/stdin >/dev/null
+  password="" again=""
+  echo "Saved. The BMU uses it within 5 minutes; no deploy or restart is needed."
+  echo "Check it: sign in to the BMU as an intern and open a draft. Its documents are checked against CollectionSpace."
 }
 
 logs() {
@@ -294,7 +327,8 @@ case "$CMD" in
     case "$(deployed_image)" in ""|*"No outputs"*|*Warning*) echo "Saved; it applies at the first deploy." ;; *) reapply "$(was_running)" ;; esac ;;
   init) prepare; tf registry init -reconfigure -backend-config="bucket=$STATE_BUCKET" -backend-config="key=bmu/$BMU_ENV_NAME/registry.tfstate" -backend-config="region=$AWS_REGION" -backend-config="use_lockfile=true"
         tf app init -reconfigure -backend-config="bucket=$STATE_BUCKET" -backend-config="key=bmu/$BMU_ENV_NAME/app.tfstate" -backend-config="region=$AWS_REGION" -backend-config="use_lockfile=true" ;;
+  reader-secret) reader_secret ;;
   destroy) destroy ;;
-  help|-h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//' ;;
+  help|-h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//' ;;
   *) die "Unknown command '$CMD'. ./bmu aws help lists them." ;;
 esac

@@ -164,8 +164,8 @@ def test_status_lists_the_simulators_users_without_their_passwords_and_says_who_
     login()
     st = api.get("/api/_demo/status").json()
     assert (st["user"], st["role"]) == ("admin", "staff")
-    assert [u["user"] for u in st["users"]] == ["admin", "limited", "reader", "intern", "newstaff"]
-    assert st["users"][3] == {"user": "intern", "about": "Intern: no CollectionSpace permissions"}
+    assert [u["user"] for u in st["users"]] == ["admin", "limited", "intern", "newstaff", "reader"]  # people, not bmureader
+    assert st["users"][2] == {"user": "intern", "about": "Intern: no CollectionSpace permissions"}
     assert "password" not in str(st)
 
 

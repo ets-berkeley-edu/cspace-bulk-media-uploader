@@ -32,11 +32,15 @@ env_settings() {
       export BMU_UI_PORT=5173 BMU_API_PORT=8000 BMU_S3_PORT=9000 BMU_DYNAMODB_PORT=8001 BMU_SIM_PORT=8180
       export BMU_CSPACE_URL="http://fakecspace:8180" BMU_DEMO=true BMU_COOKIE_NAME=bmu_session
       export BMU_ENV_LABEL="Local · simulated CollectionSpace"
+      export BMU_READER_USER=bmureader BMU_READER_PASSWORD=bmureader   # the simulator's read-only account, for interns' checks
       export BMU_ALWAYS_RUN_TIME="${BMU_ALWAYS_RUN_TIME:-false}" ;;
     qa)
       export BMU_UI_PORT=5273 BMU_API_PORT=8100 BMU_S3_PORT=9100 BMU_DYNAMODB_PORT=8101 BMU_SIM_PORT=8280
       export BMU_CSPACE_URL="$QA_CSPACE_URL" BMU_DEMO=false BMU_COOKIE_NAME=bmu_session_qa
       export BMU_ENV_LABEL="Local · PAHMA QA"
+      # QA's read-only account for interns' checks, if you have one: set both in your shell, never in a file here.
+      # Without them an intern's documents are checked with the intern's own sign-in.
+      export BMU_READER_USER="${BMU_QA_READER_USER:-}" BMU_READER_PASSWORD="${BMU_QA_READER_PASSWORD:-}"
       export BMU_ALWAYS_RUN_TIME="${BMU_ALWAYS_RUN_TIME:-false}" ;;
     *) echo "Unknown environment '$1': use sim or qa." >&2; exit 2 ;;
   esac

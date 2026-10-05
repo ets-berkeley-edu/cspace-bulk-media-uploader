@@ -16,6 +16,13 @@ to run it; `deploy/README.md` covers AWS.
   removes it from the BMU only.
 - **Credentials are the user's own**, HTTP Basic only. A password is never stored permanently: it is encrypted at
   rest (session key while signed in, job key while a job waits or runs) and deleted when the run ends.
+  - **The one exception** (decided 4 October 2026; design doc: "Roles", the read-only service account): one
+    CollectionSpace account per museum whose role (BMU_Reader) can read and nothing else. It is used only for the
+    lookups an intern's draft needs, because an intern's own account has no permissions. Its sign-in is a secret
+    in AWS Secrets Manager that only the web app's task role may read; it is fetched when needed, kept in memory for a
+    few minutes, and never written to a table, a file or a log. Staff always use their own sign-in, and every write
+    to CollectionSpace uses the submitting staff member's. Don't widen this: no other use of the account, no second
+    stored account, and never a write with it.
 - **No hard-coded list values, and no creating vocabulary or authority terms.** Media types, languages, persons and
   organizations are read from CollectionSpace; per-tenant settings are in `backend/bmu/tenants/<tenant>.yaml`.
 - **Never read `.env` files, and never put a login, token or AWS key in the repo, a test or a chat.** Tests use the
@@ -62,6 +69,7 @@ While working, run only the test files a change affects. Run both full suites on
 - **`app.py`** — the web app (`create_app()`; entry point `main.py`). All routes are `/api/*`; it also serves the
   built frontend for every other address.
 - **Roles** (design doc: "Roles") — every user has the CollectionSpace role BMU_Staff or BMU_Intern (named per tenant in `tenants/<key>.yaml` under `roles`; they carry no permissions). `app.py` refuses a sign-in with neither role, and a staff sign-in that lacks the tenant's `staff_permissions`. A session keeps its `role`. Endpoints take one of three dependencies: `current_session` (anyone signed in: viewing), `editor_session` (creates or changes a draft; `_intern_may` then limits an intern to drafts with `internOpen`), and `staff_session` (submit, schedule, queue, finished jobs), which reads the roles from CollectionSpace again on every request. A job keeps `createdBy`, `createdByRole` and `internOpen`. `POST /api/jobs/{id}/intern-access` changes `internOpen` (staff either way; an intern only to hand a draft over), `POST …/to-drafts` moves a queued job to Drafts without opening it, and `POST …/schedule` also submits a draft nobody has open (Submit from the Drafts list). In the frontend, `lib/roles.ts` holds the same rules and the reasons shown on switched-off controls; components take a `staff` prop. Simulator users: `admin` and `limited` (staff), `intern`, and `newstaff` and `reader` (both refused at sign-in).
+- **The read-only service account** (`reader.py`; design doc: "Roles") — an intern's lookups (the draft checks, authority autocomplete, vocabularies, the date parser) go through `_lookup_client`, `_lookup_perms` and `_lookup_http` in `app.py`, which use the reader account when the session is an intern's and one is set up (`BMU_READER_SECRET_ID` in AWS; `BMU_READER_USER` and `BMU_READER_PASSWORD` locally, the simulator's `bmureader`). Every request it makes is counted against the intern (`reader_lookups_per_hour`, answer 429 `reader_limit`) and logged ("reader: <intern> made N lookups (<what>)"). If the account can't be used the answer is 503 `reader`, never a 401, so the intern stays signed in. Rows are stored in full; `minimal()` cuts every row in an answer to an intern (in the `csrf_guard` middleware) down to found or not and protected or not: no reason for protection, no access notes, no CSIDs. A new endpoint that reads CollectionSpace for a draft must use `_lookup_client`; a new row field that comes from an Object or Media record must be added to `_minimal_row`.
 
 - **`worker.py`** — runs queued jobs (`python -m bmu.worker`): one job at a time per tenant, each document's steps
   in order, each step recording its CSID so a rerun runs only unfinished steps.

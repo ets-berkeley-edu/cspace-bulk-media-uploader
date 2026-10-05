@@ -16,6 +16,10 @@ x-bmu-env: &bmu-env
   BMU_DEMO: ${BMU_DEMO:-true}                      # Demo tools pane's endpoints (local stack only; never in production)
   BMU_ENV_LABEL: ${BMU_ENV_LABEL:-Local · simulated CollectionSpace}   # shown on the sign-in page and in the header
   BMU_COOKIE_NAME: ${BMU_COOKIE_NAME:-bmu_session} # differs per environment, so two on localhost keep separate sign-ins
+  # The read-only account that checks an intern's drafts (bmu/reader.py). The simulator's is bmureader; empty: no such
+  # account, and an intern's documents are checked with the intern's own sign-in. In AWS it comes from Secrets Manager.
+  BMU_READER_USER: ${BMU_READER_USER-bmureader}
+  BMU_READER_PASSWORD: ${BMU_READER_PASSWORD-bmureader}
   AWS_ACCESS_KEY_ID: local                        # moto accepts any credentials
   AWS_SECRET_ACCESS_KEY: local
   AWS_DEFAULT_REGION: us-west-2
