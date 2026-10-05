@@ -142,5 +142,8 @@ not-for-profit purposes; commercial use needs a license from UC Berkeley's Offic
 - **UI mockup** — `docs/mockup/bmu-mockup.html` (plain HTML; the same layout and functions as the prototype, not
   the same look). A change to what a screen shows or does is made in both.
 - **README.md** — what the prototype does, and the Frontend section.
-- The design document ("New BMU (uploadmedia): High-Level Architecture") is kept outside the repo; update the
-  mockup and the documents once per pull request, not alongside each change.
+- **Design document** — `docs/design.md` ("New BMU (uploadmedia): High-Level Architecture"). It is the only copy:
+  the Claude document it came from holds just a pointer to this file. Change it in the same pull request as the
+  code it describes, and add a dated line to its Status list (at the end of "Prototype plan") for a decision or a
+  finished piece of work. Code comments that say "design:" name its sections.
+- Update the mockup and the documents once per pull request, not alongside each change.
