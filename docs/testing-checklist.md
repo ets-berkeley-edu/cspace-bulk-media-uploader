@@ -318,6 +318,18 @@ The ticks below were made on October 5, 2026, from the record of the October 4 t
 - [x] `./bmu aws reader-secret`: enter the QA reader account's user name and password. Expect "Saved." Then `./bmu aws status` reads "set, last changed <today>". This command has never run against real AWS; if `put-secret-value` complains about `file:///dev/stdin`, tell Claude.
 - [ ] Sign in as an intern account and add a file: its object is looked up. `./bmu aws logs web` shows "reader: <user> made N lookups" and no `AccessDenied`.
 
+## 5. Pinned backend dependencies (15 minutes, plus the next deploy)
+
+Branch `feature/pin-backend-deps`. The backend now installs exact versions with hashes from `backend/requirements*.txt`. Claude ran the backend suite on Python 3.11 installed only from the pins (395 passed), checked that every pinned package has hashed wheels for Linux ARM64 (the Fargate image) and macOS, and checked that `pin-requirements.sh` reproduces the files exactly. Claude could not build either Docker image: its workspace can't reach Docker Hub or Amazon ECR Public.
+
+- [ ] CI on the pull request: `backend`, `frontend` and the new `dependencies` job pass. Then add `dependencies` to the required checks in the `main` ruleset.
+- [ ] `./bmu down all`, then `./bmu up sim`: the images build (watch for "Hashes are required" or "THESE PACKAGES DO NOT MATCH THE HASHES"), sign in, add a file and run a small job.
+- [ ] Build a second time after changing only a file in `backend/bmu/`: the `pip install --require-hashes -r requirements.txt` step says CACHED.
+- [ ] Next `./bmu aws deploy`: the ARM64 image builds, and the web and worker tasks start (`./bmu aws status`, `./bmu aws logs web`).
+- [ ] After merging: run "Dependency audit" once by hand (Actions, Dependency audit, Run workflow). Expect both jobs to pass.
+- [ ] The first Dependabot pip PR (a Monday after merging): it should change only `backend/requirements*.txt`, keeping the hashes and the header's options, and not `pyproject.toml`. If it changes `pyproject.toml`, drops hashes or fails to update the files, tell Claude: the fallback is to switch Dependabot off for pip and run `backend/pin-requirements.sh --upgrade` monthly.
+- [ ] Dependabot's first Docker PRs offer only patch updates (no Python 3.12+ or Node 24).
+
 ## Not tests, but still open
 
 - The design doc's "For Richard to address" list (from the October 3 comparison of the doc with the prototype).

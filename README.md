@@ -294,8 +294,20 @@ copy: the hosted copy that used to be republished from it is no longer kept up t
 ## Development without Docker
 
 ```sh
-cd backend && python3 -m venv .venv && . .venv/bin/activate && pip install -e '.[dev]' && pytest
+cd backend && python3.11 -m venv .venv && . .venv/bin/activate \
+  && pip install --require-hashes -r requirements-dev.txt && pip install --no-deps --no-build-isolation -e . && pytest
 cd frontend && npm ci && npm run lint && npm test && npm run typecheck && npm run build
+```
+
+The backend installs exact versions, checked against their hashes, from `backend/requirements*.txt`; the frontend's
+are in `frontend/package-lock.json`. The requirements files are generated from `backend/pyproject.toml` by
+`backend/pin-requirements.sh` and never edited by hand: to add or upgrade a Python package, change `pyproject.toml`
+(or pass `--upgrade-package <name>`), run the script with Python 3.11 and commit the result:
+
+```sh
+python3.11 -m venv /tmp/bmu-tools && . /tmp/bmu-tools/bin/activate
+pip install --require-hashes -r backend/requirements-tools.txt
+backend/pin-requirements.sh                       # or: --upgrade, --upgrade-package boto3
 ```
 
 ## Frontend
@@ -372,7 +384,7 @@ recheck them (for example against another tenant), run the check script from a m
 server. It is read-only unless you pass `--create`.
 
 ```sh
-pip install -e backend
+pip install --require-hashes -r backend/requirements.txt && pip install --no-deps --no-build-isolation ./backend
 export CSPACE_URL=https://pahma.qa.collectionspace.org CSPACE_USER=... CSPACE_PASSWORD=...
 python scripts/check_cspace.py --object <an existing object number> --term <3+ letters of a person's name>
 python scripts/check_cspace.py --object <number> --show-object   # the Object's fields and the sensitivity verdict
