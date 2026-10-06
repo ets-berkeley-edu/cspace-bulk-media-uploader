@@ -2,6 +2,9 @@ name: CI
 on:
   push:
   pull_request:
+# The workflow's token can only read the repository: no job here writes to GitHub.
+permissions:
+  contents: read
 jobs:
   backend:
     runs-on: ubuntu-latest

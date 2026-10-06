@@ -5,6 +5,9 @@ on:
   schedule:
     - cron: "17 14 * * 1"   # 14:17 UTC: 7:17 AM PDT, 6:17 AM PST
   workflow_dispatch:
+# The workflow's token can only read the repository: no job here writes to GitHub.
+permissions:
+  contents: read
 jobs:
   python:
     runs-on: ubuntu-latest
