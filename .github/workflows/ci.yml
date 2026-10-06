@@ -30,7 +30,11 @@ jobs:
             exit 1
           }
       - name: No known vulnerabilities in the pinned Python packages
-        run: pip-audit --require-hashes --disable-pip -r requirements.txt -r requirements-dev.txt -r requirements-tools.txt
+        run: |
+          # Two runs: the tools file pins click differently (see requirements-tools.in), and pip-audit refuses a
+          # package pinned twice.
+          pip-audit --require-hashes --disable-pip -r requirements.txt -r requirements-dev.txt
+          pip-audit --require-hashes --disable-pip -r requirements-tools.txt
   frontend:
     runs-on: ubuntu-latest
     defaults: { run: { working-directory: frontend } }

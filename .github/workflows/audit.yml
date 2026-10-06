@@ -14,7 +14,11 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version-file: .python-version }
       - run: pip install --require-hashes -r requirements-tools.txt
-      - run: pip-audit --require-hashes --disable-pip -r requirements.txt -r requirements-dev.txt -r requirements-tools.txt
+      - run: |
+          # Two runs: the tools file pins click differently (see requirements-tools.in), and pip-audit refuses a
+          # package pinned twice.
+          pip-audit --require-hashes --disable-pip -r requirements.txt -r requirements-dev.txt
+          pip-audit --require-hashes --disable-pip -r requirements-tools.txt
   npm:
     runs-on: ubuntu-latest
     defaults: { run: { working-directory: frontend } }
