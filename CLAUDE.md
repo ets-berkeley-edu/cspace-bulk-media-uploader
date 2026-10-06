@@ -149,4 +149,6 @@ not-for-profit purposes; commercial use needs a license from UC Berkeley's Offic
   the Claude document it came from holds just a pointer to this file. Change it in the same pull request as the
   code it describes, and add a dated line to its Status list (at the end of "Prototype plan") for a decision or a
   finished piece of work. Code comments that say "design:" name its sections.
+- **Background notes** — `docs/background/`: notes on CollectionSpace and comparisons with it, such as
+  `type-ahead-comparison.md`. They describe; the design document decides.
 - Update the mockup and the documents once per pull request, not alongside each change.
