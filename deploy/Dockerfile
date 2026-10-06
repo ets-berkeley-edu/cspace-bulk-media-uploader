@@ -16,10 +16,14 @@ RUN npm run build
 FROM public.ecr.aws/docker/library/python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 BMU_STATIC_DIR=/app/static
 WORKDIR /app
+# The pinned dependencies first, checked against their hashes, so a change to the code alone reuses this layer.
+COPY backend/requirements.txt ./
+RUN pip install --no-cache-dir --require-hashes -r requirements.txt
 COPY backend/pyproject.toml ./
 COPY backend/bmu ./bmu
 COPY backend/fakecspace ./fakecspace
-RUN pip install --no-cache-dir . && useradd -r -u 10001 bmu
+# The BMU itself downloads nothing: its dependencies and setuptools came from requirements.txt.
+RUN pip install --no-cache-dir --no-deps --no-build-isolation . && useradd -r -u 10001 bmu
 COPY --from=frontend /src/dist ./static
 # Readable by the non-root user whatever file modes the checkout has (e.g. a umask of 077).
 RUN chmod -R a+rX /app

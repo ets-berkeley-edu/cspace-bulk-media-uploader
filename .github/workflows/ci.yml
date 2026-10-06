@@ -9,9 +9,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: "3.11" }
-      - run: pip install -e '.[dev]'
+        with: { python-version-file: .python-version }
+      # Only the pinned versions, checked against their hashes (requirements files: see pin-requirements.sh).
+      - run: pip install --require-hashes -r requirements-dev.txt
+      - run: pip install --no-deps --no-build-isolation -e .
       - run: pytest -q
+  dependencies:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: backend } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version-file: .python-version }
+      - run: pip install --require-hashes -r requirements-tools.txt
+      - name: The requirements files match pyproject.toml and requirements-tools.in
+        run: |
+          ./pin-requirements.sh
+          git diff --exit-code -- . || {
+            echo "::error::The requirements files are out of step. Run backend/pin-requirements.sh and commit the result."
+            exit 1
+          }
+      - name: No known vulnerabilities in the pinned Python packages
+        run: pip-audit --require-hashes --disable-pip -r requirements.txt -r requirements-dev.txt -r requirements-tools.txt
   frontend:
     runs-on: ubuntu-latest
     defaults: { run: { working-directory: frontend } }
