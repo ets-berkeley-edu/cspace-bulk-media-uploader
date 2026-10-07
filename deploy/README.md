@@ -222,13 +222,26 @@ bucket, those become variables in `app/variables.tf` or settings in `deploy/aws.
 
 ## Checking the Terraform code
 
-Neither of the first two needs an AWS sign-in.
+CI (the `terraform` job in `.github/workflows/ci.yml`) runs the first three on every pull request and every push
+to `main`, with the Terraform version pinned there. None of them needs an AWS sign-in.
 
-- **`terraform validate`.** In each folder: `terraform init -backend=false && terraform validate`. It checks
-  every resource and argument against the provider.
+- **`terraform fmt`.** From the repository: `terraform fmt -check -recursive deploy/terraform` lists files that
+  aren't formatted; without `-check` it fixes them.
+- **`terraform validate`.** It checks every resource and argument against the provider.
 - **`terraform test`.** In `deploy/terraform/app`. It plans against a simulated AWS provider and checks names,
   the paused state, the allowlist, data protection and that bad input is refused
   (`tests/app.tftest.hcl`).
+
+To run `validate` and `test` on your computer, use a separate, empty Terraform folder (`TF_DATA_DIR`). A folder
+that `./bmu aws` has already initialized points at the environment's state in S3, and `init -backend=false` would
+still try to read it (and fail with a 403 when you aren't signed in):
+
+```bash
+(cd deploy/terraform/registry && export TF_DATA_DIR="$(mktemp -d)" &&
+  terraform init -backend=false -lockfile=readonly && terraform validate)
+(cd deploy/terraform/app && export TF_DATA_DIR="$(mktemp -d)" &&
+  terraform init -backend=false -lockfile=readonly && terraform validate && terraform test)
+```
 - **App checks.** `backend/tests/test_deploy.py` checks that the Terraform code matches the app: tables,
   settings, Demo tools off, key policies, and the production build in the image.
 - **`./bmu aws plan`.** Against the real account: what a deploy would change.

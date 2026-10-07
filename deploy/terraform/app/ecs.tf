@@ -27,7 +27,7 @@ locals {
     BMU_KMS_JOB_KEY_ID     = aws_kms_key.job.arn
     BMU_COOKIE_SECURE      = "true"
     BMU_ALWAYS_RUN_TIME    = tostring(var.always_run_time)
-    BMU_DEMO               = "false" # never in AWS
+    BMU_DEMO               = "false"                              # never in AWS
     BMU_READER_SECRET_ID   = aws_secretsmanager_secret.reader.arn # only the web role may read it (iam.tf)
   }
   container_environment = [for name, value in local.app_environment : { name = name, value = value }]
