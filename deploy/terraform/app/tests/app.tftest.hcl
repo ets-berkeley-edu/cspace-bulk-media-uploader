@@ -166,3 +166,27 @@ run "a_bad_address_is_refused" {
 
   expect_failures = [var.allowed_cidrs]
 }
+
+run "the_collectionspace_server_is_recorded_for_the_server_check" {
+  command = plan
+
+  variables {
+    cspace_url = "https://cspace.example.org"
+    tenant     = "pahma"
+  }
+
+  assert {
+    condition     = output.cspace_url == "https://cspace.example.org" && output.tenant == "pahma"
+    error_message = "./bmu aws reads cspace_url and tenant from the state to refuse a change of server (deploy/aws.sh, check_server)."
+  }
+}
+
+run "a_server_address_with_a_path_or_trailing_slash_is_refused" {
+  command = plan
+
+  variables {
+    cspace_url = "https://cspace.example.org/"
+  }
+
+  expect_failures = [var.cspace_url]
+}

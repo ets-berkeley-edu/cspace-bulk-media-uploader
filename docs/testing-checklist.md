@@ -330,6 +330,15 @@ Branch `feature/pin-backend-deps`. The backend now installs exact versions with 
 - [ ] The first Dependabot pip PR (a Monday after merging): it should change only `backend/requirements*.txt`, keeping the hashes and the header's options, and not `pyproject.toml`. If it changes `pyproject.toml`, drops hashes or fails to update the files, tell Claude: the fallback is to switch Dependabot off for pip and run `backend/pin-requirements.sh --upgrade` monthly.
 - [ ] Dependabot's first Docker PRs offer only patch updates (no Python 3.12+ or Node 24).
 
+## 6. Deploy guards (10 minutes, with the next deploy)
+
+Branch `feature/deploy-guards`. `./bmu aws` now refuses to change a deployed environment's CollectionSpace server or tenant, and the first use of an environment on a computer asks first when the account already holds Terraform state for that name. Claude tested both against stand-ins for `aws` and `terraform` (`backend/tests/test_aws_script.py`), not against AWS, and could not run `terraform test` (2 new runs). CI runs it.
+
+- [ ] CI on the pull request: `backend` (the new script tests) and `terraform` (11 runs) pass.
+- [ ] `./bmu aws plan`: the only changes are the two new outputs, `cspace_url` and `tenant`. Then `./bmu aws deploy` records them.
+- [ ] In `deploy/environments/personal-dev.local.conf`, add a line `CSPACE_URL=https://example.org` and run `./bmu aws plan`. Expect "'personal-dev' was deployed for https://pahma.qa.collectionspace.org (tenant pahma), but its settings now say https://example.org …" and no plan. Remove the line; `./bmu aws plan` works again.
+- [ ] The takeover question: copy the `ACCOUNT_ID=` line of `personal-dev.local.conf` somewhere, delete it from the file, and run `./bmu aws status`. Expect the account question, then "This account already has a BMU environment named 'dev' …". Answer `n`: expect "Stopped; nothing was changed." and no `ACCOUNT_ID` line in the file. Run it again and answer `y` twice: the status shows, and the `ACCOUNT_ID` line is back with the same number.
+
 ## Not tests, but still open
 
 - The design doc's "For Richard to address" list (from the October 3 comparison of the doc with the prototype).

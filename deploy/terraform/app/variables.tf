@@ -42,6 +42,11 @@ variable "cspace_url" {
   description = "CollectionSpace server, without /cspace-services."
   type        = string
   default     = "https://pahma.qa.collectionspace.org"
+
+  validation {
+    condition     = can(regex("^https?://[^/]+$", var.cspace_url))
+    error_message = "cspace_url must be the server's address alone, such as https://pahma.qa.collectionspace.org (no path, no trailing /)."
+  }
 }
 
 variable "tenant" {
