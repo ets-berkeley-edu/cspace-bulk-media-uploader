@@ -19,7 +19,7 @@ prototype: the image is built from this repository and runs on ECS Fargate. Demo
 | `./bmu aws plan` | Shows what a deploy of the running image would change, without changing anything. |
 | `./bmu aws status` | Shows the address, the running tasks, the deployed image and the allowed addresses. |
 | `./bmu aws url` | Prints the address. |
-| `./bmu aws logs web` / `worker` | Follows a service's logs, starting with the last 30 minutes. |
+| `./bmu aws logs web` / `worker` / `fakecspace` | Follows a service's logs, starting with the last 30 minutes. `fakecspace` only with the simulated CollectionSpace. |
 | `./bmu aws pause` / `resume` | Stops or starts both services to save money. The data stays. Terraform shows the change and asks first. |
 | `./bmu aws allow-my-ip` | Adds this computer's current address to the allowlist, and applies it. |
 | `./bmu aws reader-secret` | Sets or changes the sign-in of the read-only CollectionSpace account that checks interns' drafts. It asks for the user name and password; see below. |
@@ -98,6 +98,7 @@ under ECS, Clusters, `bmu-dev`. To check the app itself, `curl -s https://<addre
    prints the address (`https://<something>.cloudfront.net`).
 
 **Signing in.** Sign in with your PAHMA QA account. Jobs create real records on the QA tenant, and they stay.
+With the simulated CollectionSpace (see "The simulated CollectionSpace"), sign in with the simulator's accounts instead.
 
 **Then set the read-only account's sign-in.** Run `./bmu aws reader-secret` (see the next section). A new
 environment's secret is always empty, and `./bmu aws status` says "NOT SET" until you do. Until then, staff work as
@@ -142,14 +143,47 @@ now" and nothing is lost.
 **Who can read the secret.** The web app's task role, and anyone with administrator access to the AWS account.
 CloudTrail records every read (`GetSecretValue`). The worker's role can't read it.
 
+**With the simulated CollectionSpace** the first deploy sets the secret to the simulator's own read-only account;
+see "The simulated CollectionSpace".
+
 **If it isn't set.** Interns can still sign in and prepare drafts, but the languages list doesn't load and each
 check answers "The BMU can't check this against CollectionSpace now: its secret can't be read." Staff are not
 affected.
+
+## The simulated CollectionSpace
+
+For trying the BMU in AWS without a CollectionSpace account: the environment runs its own copy of the simulated
+CollectionSpace (`backend/fakecspace`, the same one as `./bmu up sim`), and nothing reaches a real server. It is off
+by default. To use it, put this in the environment's `.local.conf` before its first deploy:
+
+```bash
+SIMULATED_CSPACE=true
+ALWAYS_RUN_TIME=true   # optional: queued jobs start at once instead of at PAHMA's run time
+```
+
+- **Signing in.** With the simulator's accounts, as in `./bmu up sim` (listed in `README.md`): `admin` and
+  `limited` (staff) and `intern`, each with its name as its password. Those passwords are public, so the allowlist
+  is what keeps others out.
+- **Interns' checks** use the simulator's read-only account, `bmureader`. The first deploy puts it in the secret, so
+  `./bmu aws reader-secret` isn't needed (and refuses).
+- **Its records don't last.** The simulator keeps them in memory: a pause, a deploy or a restart starts it again
+  with its sample data, while the BMU keeps its jobs. Finished jobs then point at records that are gone. That's
+  fine for trying things out; never use it for anything that matters (it can't be combined with `PROTECT_DATA`).
+- **The label** reads "AWS · <env> · simulated CollectionSpace", unless `ENV_LABEL` is set in `.local.conf`.
+  `CSPACE_URL` is ignored.
+- **No switching.** Turning it on or off in a deployed environment changes its CollectionSpace server, which
+  `./bmu aws` refuses (see "One CollectionSpace server per environment"). Destroy first, or use another
+  `BMU_ENV_NAME`.
+- **How it runs.** One small task (`fakecspace`, 0.25 vCPU and 512 MB) from its own image
+  (`deploy/fakecspace.Dockerfile`) and repository: the BMU's image never contains the simulator. The web app and the
+  worker find it as `fakecspace.bmu-<env>.internal` (a private DNS namespace), and only they can connect to it.
+  `./bmu aws status` lists it with the other services; `./bmu aws logs fakecspace` follows its log.
 
 ## What it creates
 
 **`deploy/terraform/registry`**
 - The image repository. It keeps the 10 newest images, scanned on push.
+- With the simulated CollectionSpace: its own repository, `bmu-<env>-fakecspace`, keeping the 3 newest images.
 
 **`deploy/terraform/app`, all in one region**
 
@@ -164,12 +198,15 @@ affected.
 | Secrets Manager | `bmu-<env>/cspace-reader`: the read-only CollectionSpace account's sign-in. Terraform creates it empty; `./bmu aws reader-secret` sets the value. Only the web role may read it. With `protect_data = false` it is deleted at once on `destroy`; with `true`, AWS keeps it for 30 days. |
 | KMS | Three keys: session, job and staging. Rotation is on. See the key policies below. |
 | IAM | Separate roles for the web app and the worker, each with only what its code uses. The web app can save and delete a job's sign-in but not read it; the worker can read and delete it. Only the web app adds staged files; both can read and delete them (the web app makes the TIFF thumbnails). Both can add audit entries and audit files, and neither can read, change or delete them. The worker role has no access to the session key and can only decrypt with the job key. |
-| CloudWatch Logs | `/bmu/<env>/web` and `/bmu/<env>/worker`, kept 30 days. |
+| CloudWatch Logs | `/bmu/<env>/web` and `/bmu/<env>/worker` (and `/bmu/<env>/fakecspace`), kept 30 days. |
+| Simulated CollectionSpace | Only with `SIMULATED_CSPACE=true` (`fakecspace.tf`): the `fakecspace` service, a private DNS namespace `bmu-<env>.internal`, its own security group (port 8180, from the web app's and the worker's groups only) and log group. No task role: it calls no AWS service. |
 
 **The two services**
 - **`web`**: 0.25 vCPU and 1 GB. Runs uvicorn on port 8000 and serves the built Vue app with the API.
 - **`worker`**: 0.5 vCPU and 2 GB. Runs `python -m bmu.worker`. One at a time: the old task stops before the
   new one starts.
+- **`fakecspace`** (only with the simulated CollectionSpace): 0.25 vCPU and 512 MB. Runs the simulator on port
+  8180. One at a time, like the worker.
 
 **Key policies** (design: Envelope encryption)
 - The session key: `GenerateDataKey` and `Decrypt` for the web role.
@@ -210,6 +247,9 @@ These are rough us-west-2 prices.
 | Running | About **$1.75 a day** (about $50 a month) | The load balancer (about $16 a month), the worker (about $17), the web app (about $9), two public IPv4 addresses (about $7) and the KMS keys ($3). CloudFront, DynamoDB, S3 and the logs cost cents at test volumes. |
 | Paused | About **$0.65 a day** | The load balancer and the KMS keys still bill. |
 | Destroyed | Nothing | — |
+
+The simulated CollectionSpace adds about $13 a month while running (its task, about $9; a public IPv4 address,
+about $3.60; the DNS namespace, about $0.60) and nothing while paused, except the namespace.
 
 The `bmu-monthly` budget ($25), which you created in the Billing console when setting up the account, emails you
 if a month heads past it. Pause or destroy the environment between test sessions.
@@ -312,4 +352,6 @@ still try to read it (and fail with a 403 when you aren't signed in):
   - "its secret has no user name or password yet": run `./bmu aws reader-secret`.
   - "CollectionSpace refused its sign-in": the password was changed in CollectionSpace or the account lost its
     role; set the secret again or ask the CollectionSpace administrator.
+- **With the simulated CollectionSpace, records and finished jobs don't match.** The simulator lost its records when
+  it restarted (a pause, a deploy). Expected: start new jobs. `./bmu aws logs fakecspace` shows when it started.
 - **The app doesn't come up.** Run `./bmu aws logs web` or `./bmu aws logs worker`, and `./bmu aws status`.

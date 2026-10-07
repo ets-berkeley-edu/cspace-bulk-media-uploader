@@ -52,6 +52,12 @@ variable "env_name" {
   }
 }
 
+variable "simulated_cspace" {
+  description = "true also creates the simulated CollectionSpace's repository (../app/fakecspace.tf)."
+  type        = bool
+  default     = false
+}
+
 resource "aws_ecr_repository" "app" {
   name                 = "bmu-${var.env_name}"
   image_tag_mutability = "IMMUTABLE" # every deploy pushes a new tag (commit and time)
@@ -79,7 +85,42 @@ resource "aws_ecr_lifecycle_policy" "app" {
   })
 }
 
+# The simulated CollectionSpace's image: its own repository, so the BMU's image never contains the simulator.
+resource "aws_ecr_repository" "fakecspace" {
+  count                = var.simulated_cspace ? 1 : 0
+  name                 = "bmu-${var.env_name}-fakecspace"
+  image_tag_mutability = "IMMUTABLE"
+  force_delete         = true
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  encryption_configuration {
+    encryption_type = "AES256"
+  }
+}
+
+resource "aws_ecr_lifecycle_policy" "fakecspace" {
+  count      = var.simulated_cspace ? 1 : 0
+  repository = aws_ecr_repository.fakecspace[0].name
+
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "Keep the 3 newest images"
+      selection    = { tagStatus = "any", countType = "imageCountMoreThan", countNumber = 3 }
+      action       = { type = "expire" }
+    }]
+  })
+}
+
 output "repository_url" {
   description = "Where ./bmu aws deploy pushes the image."
   value       = aws_ecr_repository.app.repository_url
+}
+
+output "fakecspace_repository_url" {
+  description = "Where ./bmu aws deploy pushes the simulated CollectionSpace's image; empty without it."
+  value       = var.simulated_cspace ? aws_ecr_repository.fakecspace[0].repository_url : ""
 }

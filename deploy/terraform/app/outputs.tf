@@ -28,6 +28,16 @@ output "tenant" {
   value       = var.tenant
 }
 
+output "simulated_cspace" {
+  description = "Whether the environment runs the simulated CollectionSpace (fakecspace.tf)."
+  value       = var.simulated_cspace
+}
+
+output "fakecspace_image_uri" {
+  description = "The simulated CollectionSpace's image; empty without it."
+  value       = var.fakecspace_image_uri
+}
+
 output "allowed_cidrs" {
   description = "Addresses allowed to open the BMU."
   value       = var.allowed_cidrs
