@@ -63,7 +63,12 @@ CI (`.github/workflows/ci.yml`) runs `pytest -q`, then `npm run lint`, `typechec
 for the app's (no AWS sign-in; the Terraform version is pinned in the job). After changing a `.tf` file, run
 `terraform fmt -recursive deploy/terraform`.
 `.github/workflows/audit.yml` repeats the audit, with `npm audit`, every Monday.
-
+A pull request that changes only documentation (`docs/`, `*.md`, `LICENSE`, issue/PR templates) skips `backend`,
+`frontend` and `terraform`; the `changes` job decides, and a skipped job counts as passing. `dependencies` and
+`.github/workflows/security.yml` (`gitleaks` over the whole history, and `npm audit`) run on every pull request and
+push, whatever changed: never add a path filter or a docs-only condition to them. A gitleaks match that isn't a
+secret goes in `.gitleaksignore`, by fingerprint, with a comment saying why. Actions are pinned by commit SHA with 
+the version in a comment; Dependabot moves both.
 ### Backend dependencies (pinned)
 
 - `backend/pyproject.toml` lists what the code needs, with minimum versions. Every install (CI, both Dockerfiles,
