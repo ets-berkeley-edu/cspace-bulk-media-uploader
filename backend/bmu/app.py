@@ -435,10 +435,11 @@ def _after_rows_deleted(s: "Services", sess: "Session", job: dict, rows: list[di
 SIMULATORS = {"localhost", "127.0.0.1", "fakecspace", "fake"}
 
 
-def real_cspace(url: str) -> bool:
-    """Whether the BMU talks to a real CollectionSpace server, not the local simulator (backend/fakecspace)."""
+def real_cspace(url: str, simulated: bool = False) -> bool:
+    """Whether the BMU talks to a real CollectionSpace server, not the simulator (backend/fakecspace): locally the
+    simulator is known by its host name; in AWS the setting cspace_simulated says so."""
     from urllib.parse import urlparse
-    return (urlparse(url).hostname or "") not in SIMULATORS
+    return not simulated and (urlparse(url).hostname or "") not in SIMULATORS
 
 
 def _upload_form(s: "Services", key: str, size: int, content_type: str) -> dict:
@@ -693,7 +694,8 @@ def _routes(app: FastAPI) -> None:
     def environment(s: Services = Depends(svc)):
         """Which environment this is, for the sign-in page and the header (no sign-in needed): its label, and
         whether it talks to a real CollectionSpace (records created there stay), so the page can say so."""
-        return {"label": s.settings.env_label, "realCollectionSpace": real_cspace(s.settings.cspace_url)}
+        return {"label": s.settings.env_label,
+                "realCollectionSpace": real_cspace(s.settings.cspace_url, s.settings.cspace_simulated)}
 
     # ---- sign-in (Basic Auth checked against CollectionSpace) ----------------------------
     @app.post("/api/login")

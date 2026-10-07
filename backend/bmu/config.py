@@ -12,6 +12,9 @@ class Settings(BaseSettings):
 
     # CollectionSpace server (without /cspace-services), e.g. https://pahma.qa.collectionspace.org
     cspace_url: str = "http://localhost:8180"
+    # true when cspace_url is the simulated CollectionSpace under a name the host check below can't recognise (an AWS
+    # environment with SIMULATED_CSPACE=true: http://fakecspace.bmu-<env>.internal:8180). Only the label uses it.
+    cspace_simulated: bool = False
     cspace_timeout_seconds: float = 300.0
     tenant: str = "pahma"
 

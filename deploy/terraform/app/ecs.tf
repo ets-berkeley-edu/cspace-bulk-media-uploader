@@ -16,6 +16,7 @@ locals {
   # The app's settings (backend/bmu/config.py); backend/tests/test_deploy.py checks that each one exists.
   app_environment = {
     BMU_CSPACE_URL         = var.cspace_url
+    BMU_CSPACE_SIMULATED   = tostring(var.simulated_cspace)
     BMU_TENANT             = var.tenant
     BMU_ENV_LABEL          = var.env_label
     BMU_AWS_REGION         = var.region

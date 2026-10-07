@@ -47,6 +47,11 @@ variable "cspace_url" {
     condition     = can(regex("^https?://[^/]+$", var.cspace_url))
     error_message = "cspace_url must be the server's address alone, such as https://pahma.qa.collectionspace.org (no path, no trailing /)."
   }
+
+  validation {
+    condition     = !var.simulated_cspace || var.cspace_url == "http://fakecspace.bmu-${var.env_name}.internal:8180"
+    error_message = "With simulated_cspace, cspace_url must be the simulator's address in the VPC, http://fakecspace.bmu-<env_name>.internal:8180 (fakecspace.tf)."
+  }
 }
 
 variable "tenant" {
@@ -88,4 +93,26 @@ variable "protect_data" {
   description = "true for an environment whose data matters: the tables can't be deleted, and the buckets can't be destroyed while they hold objects. false lets ./bmu aws destroy remove everything."
   type        = bool
   default     = false
+}
+
+variable "simulated_cspace" {
+  description = "true runs the simulated CollectionSpace (backend/fakecspace) in the environment, and the BMU uses it (fakecspace.tf). For trying the BMU without a CollectionSpace account; never for data that matters."
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = !(var.simulated_cspace && var.protect_data)
+    error_message = "simulated_cspace can't be used with protect_data: the simulator's data is lost on every restart, and its accounts' passwords are public."
+  }
+}
+
+variable "fakecspace_image_uri" {
+  description = "The simulated CollectionSpace's image, <repository URL>:<tag> (./bmu aws deploy builds and pushes it). Empty when simulated_cspace is false."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = !var.simulated_cspace || length(var.fakecspace_image_uri) > 0
+    error_message = "simulated_cspace needs fakecspace_image_uri."
+  }
 }

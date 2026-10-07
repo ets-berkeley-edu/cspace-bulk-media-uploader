@@ -115,6 +115,32 @@ def test_the_image_builds_the_production_app():
     assert "**/.env" in ignore and "deploy/environments/*.local.conf" in ignore and "**/.terraform" in ignore
 
 
+def test_the_production_image_has_no_simulator_and_the_simulators_image_has_no_bmu():
+    production = (DEPLOY / "Dockerfile").read_text()
+    simulator = (DEPLOY / "fakecspace.Dockerfile").read_text()
+    assert "COPY backend/fakecspace" not in production
+    assert "COPY backend/fakecspace ./fakecspace" in simulator and "backend/bmu" not in simulator
+    assert "pip install --no-cache-dir --require-hashes -r requirements.txt" in simulator  # the same pins
+    assert "USER fakecspace" in simulator and '"--port", "8180"' in simulator
+
+
+def test_the_simulator_is_off_by_default_never_with_protected_data_and_wholly_optional():
+    variables = {name: body for block in _tf("variables.tf")["variable"] for name, body in block.items()}
+    assert variables["simulated_cspace"]["default"] is False and variables["fakecspace_image_uri"]["default"] == ""
+    conditions = [v["condition"] for v in variables["simulated_cspace"]["validation"]]
+    assert any("var.protect_data" in c for c in conditions)
+    # every simulator resource exists only with simulated_cspace (fakecspace.tf)
+    resources = [(t, n, body) for block in _tf("fakecspace.tf")["resource"] for t, named in block.items()
+                 for n, body in named.items()]
+    assert len(resources) >= 8 and all(body.get("count") == "${local.simulated}" for _, _, body in resources), resources
+    assert 'count                = var.simulated_cspace ? 1 : 0' in (DEPLOY / "terraform" / "registry" / "main.tf").read_text()
+    # only the web app and the worker can reach it
+    rules = _blocks("fakecspace.tf", "resource", "aws_vpc_security_group_ingress_rule")
+    assert {r["referenced_security_group_id"] for r in rules.values()} == {"${aws_security_group.web.id}",
+                                                                          "${aws_security_group.worker.id}"}
+    assert _local("ecs.tf", "app_environment")["BMU_CSPACE_SIMULATED"] == "${tostring(var.simulated_cspace)}"
+
+
 def test_state_and_local_settings_are_never_committed():
     ignore = (DEPLOY.parent / ".gitignore").read_text()
     for pattern in (".terraform/", "*.tfstate", "deploy/environments/*.local.conf"):

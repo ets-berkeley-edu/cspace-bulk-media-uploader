@@ -190,3 +190,98 @@ run "a_server_address_with_a_path_or_trailing_slash_is_refused" {
 
   expect_failures = [var.cspace_url]
 }
+
+run "the_simulated_collectionspace_is_off_by_default" {
+  command = plan
+
+  assert {
+    condition     = length(aws_ecs_service.fakecspace) == 0 && length(aws_service_discovery_private_dns_namespace.main) == 0 && length(aws_security_group.fakecspace) == 0
+    error_message = "Without simulated_cspace, nothing of the simulator is created."
+  }
+
+  assert {
+    condition     = local.app_environment["BMU_CSPACE_SIMULATED"] == "false" && output.fakecspace_image_uri == ""
+    error_message = "Without simulated_cspace, the app is told CollectionSpace is real."
+  }
+}
+
+run "the_simulated_collectionspace_runs_in_the_environment" {
+  command = plan
+
+  variables {
+    simulated_cspace     = true
+    cspace_url           = "http://fakecspace.bmu-dev.internal:8180"
+    fakecspace_image_uri = "123456789012.dkr.ecr.us-west-2.amazonaws.com/bmu-dev-fakecspace:abc1234"
+  }
+
+  assert {
+    condition     = aws_ecs_service.fakecspace[0].desired_count == 1 && aws_ecs_task_definition.fakecspace[0].cpu == "256"
+    error_message = "One small simulator task runs."
+  }
+
+  assert {
+    condition     = aws_service_discovery_private_dns_namespace.main[0].name == "bmu-dev.internal" && aws_service_discovery_service.fakecspace[0].name == "fakecspace"
+    error_message = "The simulator is found as fakecspace.bmu-<env>.internal."
+  }
+
+  assert {
+    condition     = local.fakecspace_url == var.cspace_url && local.app_environment["BMU_CSPACE_SIMULATED"] == "true"
+    error_message = "The BMU uses the simulator's address and knows it is the simulator."
+  }
+
+  assert {
+    condition     = aws_vpc_security_group_ingress_rule.fakecspace_from_web[0].from_port == 8180 && aws_vpc_security_group_ingress_rule.fakecspace_from_worker[0].from_port == 8180
+    error_message = "Only the web app and the worker can connect to the simulator, on its port."
+  }
+}
+
+run "the_simulator_is_paused_with_the_others" {
+  command = plan
+
+  variables {
+    simulated_cspace     = true
+    cspace_url           = "http://fakecspace.bmu-dev.internal:8180"
+    fakecspace_image_uri = "123456789012.dkr.ecr.us-west-2.amazonaws.com/bmu-dev-fakecspace:abc1234"
+    running              = false
+  }
+
+  assert {
+    condition     = aws_ecs_service.fakecspace[0].desired_count == 0
+    error_message = "./bmu aws pause stops the simulator too."
+  }
+}
+
+run "the_simulator_is_refused_where_data_is_protected" {
+  command = plan
+
+  variables {
+    simulated_cspace     = true
+    cspace_url           = "http://fakecspace.bmu-dev.internal:8180"
+    fakecspace_image_uri = "x:1"
+    protect_data         = true
+  }
+
+  expect_failures = [var.simulated_cspace]
+}
+
+run "the_simulator_needs_its_image" {
+  command = plan
+
+  variables {
+    simulated_cspace = true
+    cspace_url       = "http://fakecspace.bmu-dev.internal:8180"
+  }
+
+  expect_failures = [var.fakecspace_image_uri]
+}
+
+run "with_the_simulator_the_bmu_must_use_its_address" {
+  command = plan
+
+  variables {
+    simulated_cspace     = true
+    fakecspace_image_uri = "x:1"
+  }
+
+  expect_failures = [var.cspace_url]
+}

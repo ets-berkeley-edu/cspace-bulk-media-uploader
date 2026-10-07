@@ -334,10 +334,33 @@ Branch `feature/pin-backend-deps`. The backend now installs exact versions with 
 
 Branch `feature/deploy-guards`. `./bmu aws` now refuses to change a deployed environment's CollectionSpace server or tenant, and the first use of an environment on a computer asks first when the account already holds Terraform state for that name. Claude tested both against stand-ins for `aws` and `terraform` (`backend/tests/test_aws_script.py`), not against AWS, and could not run `terraform test` (2 new runs). CI runs it.
 
-- [ ] CI on the pull request: `backend` (the new script tests) and `terraform` (11 runs) pass.
-- [ ] `./bmu aws plan`: the only changes are the two new outputs, `cspace_url` and `tenant`. Then `./bmu aws deploy` records them.
-- [ ] In `deploy/environments/personal-dev.local.conf`, add a line `CSPACE_URL=https://example.org` and run `./bmu aws plan`. Expect "'personal-dev' was deployed for https://pahma.qa.collectionspace.org (tenant pahma), but its settings now say https://example.org …" and no plan. Remove the line; `./bmu aws plan` works again.
-- [ ] The takeover question: copy the `ACCOUNT_ID=` line of `personal-dev.local.conf` somewhere, delete it from the file, and run `./bmu aws status`. Expect the account question, then "This account already has a BMU environment named 'dev' …". Answer `n`: expect "Stopped; nothing was changed." and no `ACCOUNT_ID` line in the file. Run it again and answer `y` twice: the status shows, and the `ACCOUNT_ID` line is back with the same number.
+- [x] CI on the pull request: `backend` (the new script tests) and `terraform` (11 runs) pass.
+- [x] `./bmu aws plan`: the only changes are the two new outputs, `cspace_url` and `tenant`. Then `./bmu aws deploy` records them.
+- [x] In `deploy/environments/personal-dev.local.conf`, add a line `CSPACE_URL=https://example.org` and run `./bmu aws plan`. Expect "'personal-dev' was deployed for https://pahma.qa.collectionspace.org (tenant pahma), but its settings now say https://example.org …" and no plan. Remove the line; `./bmu aws plan` works again.
+- [x] The takeover question: copy the `ACCOUNT_ID=` line of `personal-dev.local.conf` somewhere, delete it from the file, and run `./bmu aws status`. Expect the account question, then "This account already has a BMU environment named 'dev' …". Answer `n`: expect "Stopped; nothing was changed." and no `ACCOUNT_ID` line in the file. Run it again and answer `y` twice: the status shows, and the `ACCOUNT_ID` line is back with the same number.
+
+All four done by Richard on October 7, 2026, with the personal-dev environment (PAHMA QA is its recorded server).
+
+## 7. The simulated CollectionSpace in AWS (45 minutes, mostly waiting)
+
+Branch `feature/simulated-cspace`. Claude ran the backend suite and `deploy/aws.sh` against stand-ins for `aws`, `terraform`, `docker` and `curl` (`backend/tests/test_aws_script.py`). Claude could not run Terraform, build either image or reach AWS. The simulator needs its own environment, because personal-dev's server is PAHMA QA and can't change: these steps use a second environment in the same account, `sim`, and destroy it at the end.
+
+**Before deploying**
+
+- [ ] CI on the pull request: `backend`, `frontend`, `dependencies` and `terraform` (17 runs) pass. Locally, the `TF_DATA_DIR` checks in `deploy/README.md` ("Checking the Terraform code") pass too.
+- [ ] personal-dev is unchanged: `./bmu aws plan` shows only `BMU_CSPACE_SIMULATED = "false"` added to both task definitions and the two new outputs (`simulated_cspace`, `fakecspace_image_uri`). Then `./bmu aws deploy`: its production image builds without `backend/fakecspace` and the services start.
+
+**A simulator environment**
+
+- [ ] Create `deploy/environments/sim.conf` by copying `personal-dev.conf` (don't commit it), and `deploy/environments/sim.local.conf` with `BMU_ENV_NAME=sim`, `SIMULATED_CSPACE=true` and `ALWAYS_RUN_TIME=true`.
+- [ ] `./bmu aws deploy --env sim`: answer the account question; there's no "is it yours?" question (no `sim` state yet). Two images build (`deploy/Dockerfile`, then `deploy/fakecspace.Dockerfile`), tagged `-dirty` because `sim.conf` isn't committed; the plan creates the `fakecspace` service, the namespace `bmu-sim.internal`, its security group and log group; after the apply, "The read-only account for interns' checks is the simulator's bmureader." and "It uses the simulated CollectionSpace".
+- [ ] `./bmu aws status --env sim`: `web`, `worker` and `fakecspace` each "running 1 of 1"; "CollectionSpace: the simulated one"; the read-only account "set".
+- [ ] Open the address. The label reads "AWS · sim · simulated CollectionSpace", without the warning colour of a real CollectionSpace. Sign in as `admin` / `admin`.
+- [ ] Add two files, submit, and let the job run (it starts at once with `ALWAYS_RUN_TIME`). Finished jobs shows it completed, with CSIDs. Watch `./bmu aws logs web --env sim`, `logs worker` and `logs fakecspace` for errors and `AccessDenied`.
+- [ ] Sign in as `intern` / `intern` and open a draft: the languages list loads (the reader account works).
+- [ ] `./bmu aws reader-secret --env sim` is refused ("uses the simulated CollectionSpace").
+- [ ] `./bmu aws pause --env sim`, then `resume --env sim`: all three services stop and start. The finished job's records are gone from the simulator (expected); the job is still listed.
+- [ ] `./bmu aws destroy --env sim`: everything goes, including the `bmu-sim-fakecspace` repository and the namespace. If it stops at the VPC or the namespace, run it again a few minutes later. Then delete `sim.conf` and `sim.local.conf`.
 
 ## Not tests, but still open
 
