@@ -1,6 +1,8 @@
 name: CI
 on:
+  # Pushes to main only; a PR branch is covered by its pull_request run.
   push:
+    branches: [main]
   pull_request:
 # The workflow's token can only read the repository: no job here writes to GitHub.
 permissions:
