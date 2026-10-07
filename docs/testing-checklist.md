@@ -362,6 +362,17 @@ Branch `feature/simulated-cspace`. Claude ran the backend suite and `deploy/aws.
 - [ ] `./bmu aws pause --env sim`, then `resume --env sim`: all three services stop and start. The finished job's records are gone from the simulator (expected); the job is still listed.
 - [ ] `./bmu aws destroy --env sim`: everything goes, including the `bmu-sim-fakecspace` repository and the namespace. If it stops at the VPC or the namespace, run it again a few minutes later. Then delete `sim.conf` and `sim.local.conf`.
 
+## 8. One deployment for several museums: the backend (15 minutes)
+
+Branch `feature/multi-museum-backend` (PR B of the multi-museum work; design: One deployment for several museums). The backend now takes the museum from the session or the job everywhere, keeps a configuration, a CollectionSpace connection and a read-only account per museum, and runs one worker thread per museum. Claude ran the full backend suite on Python 3.11, with new cross-museum tests (`backend/tests/test_museums.py`) that use a second, test-only museum. Only PAHMA has a configuration, so two museums can't be tried by hand yet: the sign-in page's museum list comes with PR C. Here, check that one museum works exactly as before.
+
+- [ ] CI on the pull request: all four jobs pass.
+- [ ] `./bmu down all`, then `./bmu up sim` (the images are rebuilt). Sign in as `admin` / `admin`: there's no museum to choose, and the header shows PAHMA.
+- [ ] Add two files, check the thumbnails appear, submit, and let the job run. Finished jobs shows it completed.
+- [ ] Sign in as `intern` / `intern` and open a draft open to interns: the languages list loads (the read-only account works).
+- [ ] `./bmu logs sim worker`: it says "worker … started for tenant pahma", from the thread `worker-pahma`.
+- [ ] `./bmu up qa` (optional): sign in with your PAHMA QA account as before.
+
 ## Not tests, but still open
 
 - The design doc's "For Richard to address" list (from the October 3 comparison of the doc with the prototype).

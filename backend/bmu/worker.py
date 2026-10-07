@@ -20,7 +20,7 @@ from botocore.exceptions import ClientError
 from . import logsafe
 from . import schedule as sched
 from .config import Settings, get_settings
-from .crypto import Crypto, make_crypto
+from .crypto import Crypto, job_context, make_crypto
 from .cspace import CSpaceClient, CSpaceError, CSpaceUnavailable
 from .cspace.client import display_name
 from .cspace.payloads import group_xml, media_xml, object_xml, relation_xml
@@ -141,10 +141,14 @@ class _Heartbeat(threading.Thread):
 
 class Worker:
     def __init__(self, settings: Settings, storage: Storage, crypto: Crypto, client_factory, tenant: Tenant | None = None,
-                 clock=None, lookup_clock=None):
-        """clock: the time the job schedule is judged by (design: Job scheduling), a callable returning epoch
-        seconds; tests pass their own to move time. Expiry and the sweeps keep the real time. lookup_clock: the time
-        a run's value lookups age by (VALUE_CHECK_SECONDS), in seconds; tests pass their own."""
+                 clock=None, lookup_clock=None, sweep_sessions: bool = True):
+        """One museum's worker (design: One deployment for several museums; main() runs one per museum).
+        client_factory(museum, username, password) gives a client for that museum's CollectionSpace. tenant: the
+        museum; by default the deployment's first. clock: the time the job schedule is judged by (design: Job
+        scheduling), a callable returning epoch seconds; tests pass their own to move time. Expiry and the sweeps
+        keep the real time. lookup_clock: the time a run's value lookups age by (VALUE_CHECK_SECONDS), in seconds;
+        tests pass their own. sweep_sessions: whether this worker also sweeps the sign-in sessions, which belong to
+        no one museum; main() gives that to one worker only."""
         self.s = settings
         self.clock = clock or now
         self.lookup_clock = lookup_clock or time.monotonic
@@ -152,7 +156,8 @@ class Worker:
         self.storage = storage
         self.crypto = crypto
         self.client_factory = client_factory
-        self.tenant = tenant or load_tenant(settings.tenant)
+        self.tenant = tenant or load_tenant(next(iter(settings.museums())))
+        self._sweeps_sessions = sweep_sessions
         self.owner = f"{socket.gethostname()}-{uuid.uuid4().hex[:6]}"
         self._last_sweep = 0.0
         self._last_abandoned_sweep = 0.0
@@ -185,7 +190,8 @@ class Worker:
         self.sweep_unfinished_deletions()
         self.sweep_interrupted_transitions()
         self.sweep_protected_staged()
-        self.storage.sweep_sessions(self.s.session_idle_minutes * 60)
+        if self._sweeps_sessions:
+            self.storage.sweep_sessions(self.s.session_idle_minutes * 60)
         if now() - self._last_abandoned_sweep > 3600:  # hourly is plenty for a one-day limit
             self._last_abandoned_sweep = now()
             self.sweep_abandoned_uploads()
@@ -468,8 +474,8 @@ class Worker:
         self._where = "while starting the run"
         try:
             self._start_run(job, run_no, t)
-            pw = self.crypto.decrypt("job", cred["token"], {"user": cred["user"], "job": job_id})
-            client = self.client_factory(cred["user"], pw)
+            pw = self.crypto.decrypt("job", cred["token"], job_context(cred["user"], job_id, self.tenant.key))
+            client = self.client_factory(self.tenant.key, cred["user"], pw)
             del pw
             # Design: five failed requests in a row stop the job; the client sends nothing after the fifth
             client.max_failures_in_a_row = MAX_CONSECUTIVE_SERVER_ERRORS
@@ -1118,15 +1124,28 @@ def _progress(rows: list[dict]) -> dict:
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    """One worker per museum the deployment serves, each in its own thread with its own connections (boto3
+    resources aren't shared between threads): museums' queues run in parallel, each museum one job at a time
+    (design: One deployment for several museums, Job scheduling)."""
+    import threading
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(threadName)s %(name)s %(message)s")
     logsafe.install()
     s = get_settings()
-    storage = Storage(s)
+    servers = s.museums()
     if s.create_tables:
-        storage.create_tables()
-    worker = Worker(s, storage, make_crypto(s),
-                    lambda u, p: CSpaceClient(s.cspace_url, u, p, timeout=s.cspace_timeout_seconds, agent="bmu-worker"))
-    worker.run_forever()
+        Storage(s).create_tables()
+
+    def factory(tenant: str, user: str, password: str) -> CSpaceClient:
+        return CSpaceClient(servers[tenant], user, password, timeout=s.cspace_timeout_seconds, agent="bmu-worker")
+
+    threads = []
+    for i, key in enumerate(servers):
+        w = Worker(s, Storage(s), make_crypto(s), factory, tenant=load_tenant(key), sweep_sessions=i == 0)
+        threads.append(threading.Thread(target=w.run_forever, name=f"worker-{key}", daemon=True))
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
 
 
 if __name__ == "__main__":

@@ -4,7 +4,8 @@ is, and two on one host keep separate sign-ins."""
 
 def test_the_environment_label_and_whether_collectionspace_is_real_need_no_sign_in(api, services):
     from bmu.app import real_cspace
-    assert api.get("/api/env").json() == {"label": "", "realCollectionSpace": False}  # tests use the simulator
+    assert api.get("/api/env").json() == {"label": "", "realCollectionSpace": False,  # tests use the simulator
+                                          "tenants": [{"key": "pahma", "name": "PAHMA"}]}
     services.settings.env_label = "Local · PAHMA QA"
     assert api.get("/api/env").json()["label"] == "Local · PAHMA QA"
     assert real_cspace("https://pahma.qa.collectionspace.org") and not real_cspace("http://fakecspace:8180")

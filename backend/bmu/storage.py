@@ -423,12 +423,13 @@ class Storage:
                 return False
             raise
 
-    def staging_key(self, job_id: str, n: int | str) -> str:
-        """Design (Browser uploads): staging/<tenant>/<job-id>/<row>/<random-id>; the filename is never in the key."""
+    def staging_key(self, tenant: str, job_id: str, n: int | str) -> str:
+        """Design (Browser uploads): staging/<tenant>/<job-id>/<row>/<random-id>; the filename is never in the key.
+        The museum is the job's (design: One deployment for several museums)."""
         part = f"{n:05d}" if isinstance(n, int) else n
-        return f"staging/{self.s.tenant}/{job_id}/{part}/{uuid.uuid4().hex}"
+        return f"staging/{tenant}/{job_id}/{part}/{uuid.uuid4().hex}"
 
-    def add_rows(self, job_id: str, rows: list[dict]) -> list[dict]:
+    def add_rows(self, tenant: str, job_id: str, rows: list[dict]) -> list[dict]:
         """Append rows, numbering them after the job's existing rows, each with its staging key."""
         r = self.jobs.update_item(Key={"PK": f"JOB#{job_id}", "SK": "META"},
                                   UpdateExpression="SET nextRow = nextRow + :n, rowCount = rowCount + :n",
@@ -438,7 +439,7 @@ class Storage:
         with self.jobs.batch_writer() as bw:
             for i, row in enumerate(rows):
                 row = {**row, "n": first + i}
-                row["s3Key"] = self.staging_key(job_id, row["n"])
+                row["s3Key"] = self.staging_key(tenant, job_id, row["n"])
                 bw.put_item(Item=_dyn({"PK": f"JOB#{job_id}", "SK": f"ROW#{row['n']:05d}", **row}))
                 out.append(row)
         return out
@@ -762,12 +763,20 @@ class Storage:
         if content_type:
             fields["Content-Type"] = content_type
             conditions.append({"Content-Type": content_type})
-        if self.s.s3_kms_key_id:
-            fields.update({"x-amz-server-side-encryption": "aws:kms", "x-amz-server-side-encryption-aws-kms-key-id": self.s.s3_kms_key_id})
+        if kms_key := self._kms_key(key):
+            fields.update({"x-amz-server-side-encryption": "aws:kms", "x-amz-server-side-encryption-aws-kms-key-id": kms_key})
             conditions += [{"x-amz-server-side-encryption": "aws:kms"},
-                           {"x-amz-server-side-encryption-aws-kms-key-id": self.s.s3_kms_key_id}]
+                           {"x-amz-server-side-encryption-aws-kms-key-id": kms_key}]
         return self.s3_public.generate_presigned_post(Bucket=self.s.s3_bucket, Key=key, Fields=fields, Conditions=conditions,
                                                       ExpiresIn=self.s.upload_url_seconds)
+
+    def _kms_key(self, key: str) -> str | None:
+        """The SSE-KMS key for an object: its museum's, from the key's second part (staging/<tenant>/... and
+        audit/<tenant>/...; design: One deployment for several museums). The bucket policy refuses any other."""
+        parts = key.split("/")
+        if len(parts) < 3 or parts[0] not in ("staging", "audit"):
+            raise ValueError(f"not a staging or audit key: {key}")
+        return self.s.kms_key_for(parts[1])
 
     def list_staged(self, prefix: str):
         """(key, last modified epoch) of every staged object under a prefix."""
@@ -798,7 +807,8 @@ class Storage:
     def put_bytes(self, key: str, data: bytes, content_type: str) -> None:
         # In AWS the bucket's policy refuses a PutObject that doesn't name SSE-KMS with the staging key (s3.tf), so
         # what the app writes itself (thumbnails, audit detail) names it, as the browser's uploads do.
-        sse = {"ServerSideEncryption": "aws:kms", "SSEKMSKeyId": self.s.s3_kms_key_id} if self.s.s3_kms_key_id else {}
+        kms_key = self._kms_key(key)
+        sse = {"ServerSideEncryption": "aws:kms", "SSEKMSKeyId": kms_key} if kms_key else {}
         self.s3.put_object(Bucket=self.s.s3_bucket, Key=key, Body=data, ContentType=content_type, **sse)
 
     def get_bytes(self, key: str) -> bytes | None:
@@ -807,11 +817,11 @@ class Storage:
         except ClientError:
             return None
 
-    def store_thumbnail(self, job_id: str, n: int, jpeg: bytes, attempts: int = 5) -> bool:
+    def store_thumbnail(self, tenant: str, job_id: str, n: int, jpeg: bytes, attempts: int = 5) -> bool:
         """Store a row's thumbnail and record its key on the row (re-reading the row if it changed meanwhile).
         Never for a protected row. Returns False if the row is gone or protected."""
         from .thumbnails import thumb_key
-        key = thumb_key(self.s.tenant, job_id, n)
+        key = thumb_key(tenant, job_id, n)
         self.put_bytes(key, jpeg, "image/jpeg")
         for _ in range(attempts):
             row = self.get_row(job_id, n)

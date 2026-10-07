@@ -49,6 +49,8 @@ esac
 """
 
 FAKE_DOCKER = r"""#!/usr/bin/env bash
+# docker login reads the token from the pipe; without reading it, aws.sh's pipe could fail with SIGPIPE (141)
+[ "$1" != login ] || cat > /dev/null
 [ "$1" = info ] || echo "DOCKER $*"
 """
 

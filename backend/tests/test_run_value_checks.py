@@ -131,7 +131,7 @@ def test_a_media_type_no_longer_in_the_tenant_list_fails_its_document(api, login
     job, _ = make_job(api, add_uploaded, {"15-1234_1.jpg": {"type": ["slide", "image"]}, "12-5678_1.jpg": {"type": ["image"]}})
     schedule(api, job, fake)
     # the tenant's list changed (a new deployment) after the job was submitted
-    base = services.tenant
+    base = services.tenants["pahma"]
     tenant = dataclasses.replace(base, media_types=tuple(o for o in base.media_types if o.value != "slide"))
     assert isinstance(tenant.media_types[0], Option)
     w = Worker(services.settings, services.storage, services.crypto, worker_factory, tenant=tenant)

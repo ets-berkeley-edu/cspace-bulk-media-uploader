@@ -1,4 +1,5 @@
 """End-to-end run path against the simulated CollectionSpace and mocked AWS."""
+from bmu.crypto import job_context
 from bmu.storage import now
 
 
@@ -151,7 +152,7 @@ def test_wrong_credentials_stop_job_and_delete_password(api, login, add_uploaded
     assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
     # simulate the password changing in CollectionSpace after scheduling
     cred = services.storage.get_credential(job)
-    services.storage.put_credential(job, "admin", services.crypto.encrypt("job", "changed", {"user": "admin", "job": job}),
+    services.storage.put_credential(job, "admin", services.crypto.encrypt("job", "changed", job_context("admin", job, "pahma")),
                                     cred["expires"])
     worker.tick()
     j = api.get(f"/api/jobs/{job}").json()
@@ -451,7 +452,7 @@ def test_a_stale_check_never_overwrites_a_newer_upload_confirmation(api, login, 
     stale = services.storage.get_rows(job)  # the batch check reads the rows...
     services.storage.s3.put_object(Bucket=services.settings.s3_bucket, Key=row["s3Key"], Body=b"abc")
     assert api.post(f"/api/jobs/{job}/rows/{row['n']}/uploaded").json()["row"]["upload"]["s"] == "done"
-    check_rows(services.tenant, stale, factory("admin", "admin"), {"media": True, "relations": True, "objects": True})
+    check_rows(services.tenants["pahma"], stale, factory("pahma", "admin", "admin"), {"media": True, "relations": True, "objects": True})
     assert services.storage.save_checks(job, stale[0]) is False  # ...and its stale result is not saved
     assert services.storage.get_row(job, row["n"])["upload"]["s"] == "done"
 
@@ -874,7 +875,7 @@ def test_abandoned_staged_files_are_deleted_after_a_day(api, login, add_uploaded
     login()
     job = new_job(api)
     kept = add_uploaded(job, ["15-1234_a.jpg"])[0]["s3Key"]
-    stray = services.storage.staging_key(job, 99)
+    stray = services.storage.staging_key("pahma", job, 99)
     services.storage.put_bytes(stray, b"orphan", "image/jpeg")
     assert worker.sweep_abandoned_uploads() == []  # too recent
     monkeypatch.setattr(worker.s, "abandoned_upload_hours", -1)
@@ -1004,7 +1005,7 @@ def test_deleting_the_last_document_of_a_new_draft_deletes_the_draft(api, login,
 def test_an_authority_source_not_set_up_for_the_tenant_is_skipped(api, login, services, monkeypatch):
     """Design (Authority term fields, Unconfigured vocabularies): skipped, as in the CollectionSpace UI."""
     login()
-    fields = services.tenant.authority_fields
+    fields = services.tenants["pahma"].authority_fields
     monkeypatch.setitem(fields, "creator", [*fields["creator"], "person_shared"])
     r = api.get("/api/authorities", params={"field": "creator", "q": "freu"})
     assert r.status_code == 200 and r.json()["terms"]

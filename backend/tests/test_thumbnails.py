@@ -64,9 +64,9 @@ def test_no_thumbnail_is_kept_for_a_protected_file(api, login, add_uploaded, ser
     login()
     job = new_job(api)
     n = add_uploaded(job, ["12-2001.jpg"])[0]["n"]
-    assert services.storage.store_thumbnail(job, n, make_thumbnail(jpeg_with_exif((100, 100)))) is False  # already protected
+    assert services.storage.store_thumbnail("pahma", job, n, make_thumbnail(jpeg_with_exif((100, 100)))) is False  # already protected
     # stored before the checks found the object sensitive...
-    key = "jobs/x/thumbs/early"
+    key = f"staging/pahma/{job}/{n:05d}/thumb-early"
     services.storage.put_bytes(key, b"jpeg", "image/jpeg")
     row = services.storage.get_row(job, n)
     row.update(thumbKey=key, protected=None)
@@ -100,7 +100,7 @@ def test_deleting_a_document_deletes_its_thumbnail(api, login, add_uploaded, ser
     login()
     job = api.post("/api/jobs", json={"name": "t"}).json()["id"]
     row = add_uploaded(job, ["15-1234_a.jpg"])[0]
-    assert services.storage.store_thumbnail(job, row["n"], make_thumbnail(jpeg_with_exif((100, 100))))
+    assert services.storage.store_thumbnail("pahma", job, row["n"], make_thumbnail(jpeg_with_exif((100, 100))))
     got = services.storage.get_row(job, row["n"])
     thumb, staged = got["thumbKey"], got["s3Key"]
     assert services.storage.head_object(thumb) and services.storage.head_object(staged)

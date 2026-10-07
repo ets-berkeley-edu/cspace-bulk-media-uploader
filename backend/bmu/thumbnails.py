@@ -48,7 +48,7 @@ def thumb_key(tenant: str, job_id: str, n: int) -> str:
     return f"staging/{tenant}/{job_id}/{n:05d}/thumb-{uuid.uuid4().hex}"
 
 
-def tiff_thumbnail_step(storage, job_id: str, n: int) -> None:
+def tiff_thumbnail_step(storage, tenant: str, job_id: str, n: int) -> None:
     """Make a TIFF's thumbnail from its staged file, unless the row is protected (or has one already)."""
     row = storage.get_row(job_id, n)
     if not row or row.get("protected") or row.get("thumbKey") or (row.get("upload") or {}).get("s") != "done":
@@ -64,4 +64,4 @@ def tiff_thumbnail_step(storage, job_id: str, n: int) -> None:
     except Exception:  # a thumbnail is a convenience: the row shows its type icon instead
         log.warning("no thumbnail for job %s row %s", job_id, n, exc_info=True)
         return
-    storage.store_thumbnail(job_id, n, thumb)
+    storage.store_thumbnail(tenant, job_id, n, thumb)

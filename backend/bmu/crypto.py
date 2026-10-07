@@ -24,6 +24,12 @@ class Crypto(Protocol):
     def decrypt(self, purpose: str, token: str, context: dict[str, str]) -> str: ...
 
 
+def job_context(user: str, job_id: str, tenant: str) -> dict[str, str]:
+    """The encryption context of a job's saved password: it can only be decrypted for this user, job and museum
+    (design: One deployment for several museums)."""
+    return {"user": user, "job": job_id, "tenant": tenant}
+
+
 def _aad(purpose: str, context: dict[str, str]) -> bytes:
     return json.dumps({"purpose": purpose, **context}, sort_keys=True).encode()
 

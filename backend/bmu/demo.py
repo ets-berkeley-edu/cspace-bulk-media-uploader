@@ -162,7 +162,7 @@ def register(app: FastAPI) -> None:
         known = {u["user"]: u["password"] for u in sim_call(s, "GET", "/_fake/users")}
         if body.user not in known:
             raise HTTPException(404, f"The simulator has no user “{body.user}”.")
-        me = _sign_in(s, response, body.user, known[body.user])  # raises before anything changes if refused
+        me = _sign_in(s, response, body.user, known[body.user], sess.museum(s))  # the same museum; raises before anything changes if refused
         s.storage.end_session(sess.key, sess.tenant)  # the session this replaces, with its hold on any draft
         log.info("demo: %s signed in as %s (%s)", sess.user, body.user, me["role"])
         return me
@@ -191,7 +191,8 @@ def register(app: FastAPI) -> None:
         in stays signed in. Only with the simulated CollectionSpace: against a real server the audit log is the record
         of what the BMU created there, and is never deleted. Refused while a job is running (the worker is writing)."""
         sim_call(s, "GET", "/_fake/settings")  # 502 with the reason unless the CollectionSpace is the simulator
-        running = [j.get("name") or "Untitled job" for j in s.storage.list_jobs(sess.tenant) if j.get("status") == "Running"]
+        # every museum's: the wipe below is the whole deployment's
+        running = [j.get("name") or "Untitled job" for t in s.tenants for j in s.storage.list_jobs(t) if j.get("status") == "Running"]
         if running:
             raise HTTPException(409, f"“{running[0]}” is running. Cancel the run or wait for it to end, then reset.")
         counts = s.storage.wipe_everything()

@@ -135,7 +135,7 @@ def test_a_partial_row_joining_the_group_needs_create_on_groups_only_before_it_e
 
 def test_the_languages_vocabulary_is_read_whole_with_pgsz_0(fake):
     from conftest import factory
-    c = factory("admin", "admin")
+    c = factory("pahma", "admin", "admin")
     seen = []
     real = c._http.request
 
@@ -261,6 +261,6 @@ def test_autocomplete_timing_comes_from_the_tenant_profile(api, login):
 
 def test_authority_vocabularies_are_listed_for_the_check_script(fake):
     from conftest import factory
-    c = factory("admin", "admin")
+    c = factory("pahma", "admin", "admin")
     assert [v["shortIdentifier"] for v in c.authority_vocabularies("personauthorities")] == ["person"]  # no "shared"
     assert [v["shortIdentifier"] for v in c.authority_vocabularies("orgauthorities")] == ["organization"]

@@ -15,7 +15,7 @@ FILE = {"name": "15-1234_1.jpg", "size": 3, "type": "image/jpeg"}
 def reader(services):
     """The simulator's reader account, set up as it is in the local stack."""
     services.settings.reader_user, services.settings.reader_password = "bmureader", "bmureader"
-    return services.reader
+    return services.readers["pahma"]
 
 
 def _blocks(row):
