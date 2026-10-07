@@ -27,6 +27,14 @@ prototype: the image is built from this repository and runs on ECS Fargate. Demo
 
 **Picking the environment.** Add `--env NAME`, or set `BMU_AWS_ENV`. The default is `personal-dev`.
 
+**One CollectionSpace server per environment.** An environment's jobs, drafts, saved sign-ins and audit entries
+belong to the CollectionSpace server and tenant it was deployed for, and a queued job runs on whatever server the
+environment points at. So once an environment is deployed, `deploy`, `plan`, `pause`, `resume` and `allow-my-ip`
+refuse to change `CSPACE_URL` or `TENANT`, and change nothing. To use another server, either put the setting
+back and `./bmu aws destroy` first (the BMU's data goes with it), or deploy it as another environment, with a
+different `BMU_ENV_NAME` in your `.local.conf`. An environment deployed before this check records its server at
+its next deploy.
+
 **Skipping the question.** `BMU_AWS_YES=1` applies without Terraform's `yes` prompt.
 
 **What a deploy builds.** `./bmu aws deploy` builds the repository folder as it is on disk, uncommitted changes
@@ -74,6 +82,10 @@ under ECS, Clusters, `bmu-dev`. To check the app itself, `curl -s https://<addre
 1. **Account check.** It shows the AWS account the profile is signed in to and asks whether that's the right
    one. It saves your answer in `deploy/environments/personal-dev.local.conf`, which isn't committed, and from
    then on refuses to deploy to any other account.
+   - If the account already has an environment with the same name (`BMU_ENV_NAME`), it asks a second question:
+     is it yours? Answer yes if you deployed it from another computer or clone. Answer no if it may be
+     someone else's in a shared account: a deploy from here would replace their code and allowed addresses. Then
+     give yours a name of its own with `BMU_ENV_NAME=<name>` in your `.local.conf`, and run the deploy again.
 2. **Allowlist.** It adds this computer's public address to the allowlist, in the same file. Everyone else gets
    a 403 from CloudFront.
 3. **State bucket.** It creates the bucket that holds Terraform's state, once per account (see Terraform
@@ -275,6 +287,13 @@ still try to read it (and fail with a 403 when you aren't signed in):
   - CloudFront can also refuse new distributions until AWS has verified a new account. AWS Support resolves
     that.
 - **403 "open only to listed addresses".** Your address changed: run `./bmu aws allow-my-ip`.
+- **"'<env>' was deployed for <server> (tenant <tenant>), but its settings now say …".** `CSPACE_URL` or `TENANT`
+  changed in the settings files after the environment was deployed (see "One CollectionSpace server per
+  environment" above). Nothing was changed. Put the setting back, or follow that section to move to another
+  server.
+- **"This account already has a BMU environment named '<name>'".** The first use of an environment on this
+  computer found Terraform state for that name in the account. If you deployed it, from another computer, another
+  clone or before a `destroy`, answer yes. Otherwise answer no and set `BMU_ENV_NAME` in your `.local.conf`.
 - **`destroy` stops at the VPC.** CloudFront removes its VPC origin's network interfaces in the background, and
   the VPC can't be deleted until they're gone. Run `./bmu aws destroy` again a few minutes later; Terraform
   continues where it stopped.

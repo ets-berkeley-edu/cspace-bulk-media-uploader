@@ -51,6 +51,7 @@ load_env() {
   # shellcheck disable=SC1090
   [ -f "$LOCAL" ] && . "$LOCAL"
   : "${AWS_PROFILE:?set AWS_PROFILE in $CONF}" "${AWS_REGION:?set AWS_REGION in $CONF}" "${BMU_ENV_NAME:?set BMU_ENV_NAME in $CONF}"
+  CSPACE_URL="${CSPACE_URL%/}"   # one spelling of the server, for the server check below
   NAME="bmu-$BMU_ENV_NAME"   # the cluster's name and the prefix of every resource
   export AWS_PAGER="" AWS_PROFILE AWS_REGION   # Terraform signs in with the same profile
   # Keys in the shell would win over the profile in Terraform (though not in "aws --profile"): never use them here.
@@ -68,6 +69,24 @@ save_local() {  # save_local KEY VALUE: set one setting in the environment's .lo
   mv "$tmp" "$LOCAL"
 }
 
+# First use of an environment on this computer: if the account already holds Terraform state for this environment's
+# name, it was deployed from somewhere else. That may be the same person on another computer or clone, or someone
+# else sharing the account, whose environment a deploy from here would take over (code, allowed addresses, label).
+check_not_someone_elses() {  # check_not_someone_elses ACCOUNT
+  local key ok found=""
+  for key in app registry; do
+    aws_ s3api head-object --bucket "bmu-tfstate-$1-$AWS_REGION" --key "bmu/$BMU_ENV_NAME/$key.tfstate" >/dev/null 2>&1 &&
+      found="s3://bmu-tfstate-$1-$AWS_REGION/bmu/$BMU_ENV_NAME/" && break
+  done
+  [ -n "$found" ] || return 0
+  echo "This account already has a BMU environment named '$BMU_ENV_NAME' (its Terraform state is in $found),"
+  echo "deployed from another computer or clone, or deployed once and destroyed. If it's yours, carry on."
+  echo "If it may be someone else's, answer no and set BMU_ENV_NAME to a name of your own in $LOCAL:"
+  echo "a deploy from here would replace their environment's code and allowed addresses."
+  read -r -p "Is the '$BMU_ENV_NAME' environment in this account yours? [y/N] " ok
+  case "$ok" in y|Y|yes) ;; *) die "Stopped; nothing was changed." ;; esac
+}
+
 # Signed in, and to the account this environment was first deployed to.
 check_account() {
   local who
@@ -76,7 +95,9 @@ check_account() {
   if [ -z "$ACCOUNT_ID" ]; then
     echo "Profile $AWS_PROFILE is signed in to AWS account $who."
     read -r -p "Is that the account for the '$ENV' environment? [y/N] " ok
-    case "$ok" in y|Y|yes) save_local ACCOUNT_ID "$who"; ACCOUNT_ID="$who" ;; *) die "Stopped; nothing was changed." ;; esac
+    case "$ok" in y|Y|yes) ;; *) die "Stopped; nothing was changed." ;; esac
+    check_not_someone_elses "$who"
+    save_local ACCOUNT_ID "$who"; ACCOUNT_ID="$who"
   elif [ "$who" != "$ACCOUNT_ID" ]; then
     die "Profile $AWS_PROFILE is signed in to account $who, but '$ENV' is account $ACCOUNT_ID ($LOCAL). Stopped."
   fi
@@ -157,6 +178,28 @@ need_deployed() {
   case "$IMAGE" in ""|*"No outputs"*|*Warning*) die "'$ENV' isn't deployed (./bmu aws deploy)." ;; esac
 }
 
+applied() {  # applied OUTPUT: a value the app was last applied with; empty if never applied or not an output then
+  local v
+  v="$(tf app output -raw "$1" 2>/dev/null || true)"
+  case "$v" in *"No outputs"*|*Warning*|*"not found"*) v="" ;; esac
+  echo "$v"
+}
+
+# One CollectionSpace server and tenant per environment. Its jobs, drafts, CSIDs, saved sign-ins and audit entries
+# belong to the server it was deployed for, and a queued job would run on whatever server it points at next: so a
+# deployed environment's server never changes. An environment applied before this check recorded nothing yet;
+# its next apply records the server.
+check_server() {  # after tf_init app
+  local url tenant
+  url="$(applied cspace_url)"; tenant="$(applied tenant)"
+  if { [ -n "$url" ] && [ "$url" != "$CSPACE_URL" ]; } || { [ -n "$tenant" ] && [ "$tenant" != "$TENANT" ]; }; then
+    echo "'$ENV' was deployed for $url (tenant ${tenant:-$TENANT}), but its settings now say $CSPACE_URL (tenant $TENANT)." >&2
+    echo "Its jobs, drafts and audit entries refer to records on the first, and a queued job would run on the new one." >&2
+    die "Stopped; nothing was changed. Put the setting back; or run ./bmu aws destroy first (it deletes the BMU's data);
+or deploy the new server as another environment: a different BMU_ENV_NAME in $LOCAL."
+  fi
+}
+
 # ---- commands -----------------------------------------------------------------------------------------------------
 prepare() { load_env; check_account; need_terraform; ensure_state_bucket; }
 
@@ -176,6 +219,7 @@ deploy() {
   command -v docker >/dev/null || die "Docker isn't installed or isn't on the PATH."
   docker info >/dev/null 2>&1 || die "Docker isn't running. Start Docker Desktop and try again."
   ensure_state_bucket
+  tf_init app; check_server   # before building anything
   local tag repo registry image url code
   tag="$(git rev-parse --short HEAD 2>/dev/null || echo nogit)"
   [ -z "$(git status --porcelain 2>/dev/null)" ] || tag="$tag-dirty"
@@ -197,7 +241,6 @@ deploy() {
   echo "== 3/3 The BMU. Terraform shows its plan and asks before changing anything."
   echo "   The first time takes about 15-25 minutes (CloudFront); it finishes when the web app and worker are running."
   echo "   If a task can't start, Terraform waits up to 20 minutes before saying so: ./bmu aws logs web shows why sooner."
-  tf_init app
   app_vars "$image" true
   # shellcheck disable=SC2046
   tf app apply -input=false $(approve) "${TF_VARS[@]}"
@@ -216,14 +259,14 @@ was_running() {  # true unless the environment is paused
 }
 
 plan() {
-  look; need_deployed
+  look; need_deployed; check_server
   app_vars "$IMAGE" "$(was_running)"
   tf app plan -input=false "${TF_VARS[@]}"
 }
 
 # Apply again with the running image: for a changed setting (pause, resume, the allowlist).
 reapply() {  # reapply RUNNING
-  prepare; tf_init app; need_deployed
+  prepare; tf_init app; need_deployed; check_server
   app_vars "$IMAGE" "$1"
   # shellcheck disable=SC2046
   tf app apply -input=false $(approve) "${TF_VARS[@]}"

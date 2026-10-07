@@ -18,6 +18,16 @@ output "running" {
   value       = var.running
 }
 
+output "cspace_url" {
+  description = "The CollectionSpace server this environment was deployed for; ./bmu aws refuses to change it."
+  value       = var.cspace_url
+}
+
+output "tenant" {
+  description = "The CollectionSpace tenant this environment was deployed for; ./bmu aws refuses to change it."
+  value       = var.tenant
+}
+
 output "allowed_cidrs" {
   description = "Addresses allowed to open the BMU."
   value       = var.allowed_cidrs
