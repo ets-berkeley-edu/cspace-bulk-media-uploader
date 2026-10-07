@@ -42,3 +42,9 @@ def test_unknown_api_paths_are_404_not_the_app(site):
     assert site.get("/api/no-such-thing").status_code == 404
     assert site.get("/api").status_code == 404
     assert site.get("/api/health").json() == {"ok": True}
+
+
+@pytest.mark.parametrize("path", ["/a%00b", "/%00", "/" + "a" * 300])
+def test_odd_paths_get_the_app_not_an_error(site, path):
+    r = site.get(path)  # a null byte or an over-long name used to be a 500
+    assert r.status_code == 200 and "<title>BMU</title>" in r.text

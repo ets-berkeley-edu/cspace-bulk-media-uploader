@@ -150,8 +150,12 @@ def create_app(services: Services | None = None) -> FastAPI:
             # files inside the build: the path arrives decoded, so "..%2f" or "%2fetc" must not reach other files.
             if path == "api" or path.startswith("api/"):
                 raise HTTPException(404, "Not found")
-            f = (root / path).resolve()
-            return FileResponse(f if path and f.is_relative_to(root) and f.is_file() else root / "index.html")
+            try:
+                f = (root / path).resolve()
+                ok = bool(path) and f.is_relative_to(root) and f.is_file()
+            except (OSError, ValueError):  # a null byte or an over-long name: not a file of the build
+                ok = False
+            return FileResponse(f if ok else root / "index.html")
 
     return app
 
