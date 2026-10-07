@@ -58,7 +58,10 @@ npm run build:demo                          # build with Demo tools
 ```
 
 CI (`.github/workflows/ci.yml`) runs `pytest -q`, then `npm run lint`, `typecheck`, `test` and `build`, and a
-`dependencies` job: the requirements files are in step (below) and `pip-audit` finds no known vulnerabilities.
+`dependencies` job: the requirements files are in step (below) and `pip-audit` finds no known vulnerabilities, and a
+`terraform` job: `terraform fmt -check`, `validate` for both configurations in `deploy/terraform`, and `terraform test`
+for the app's (no AWS sign-in; the Terraform version is pinned in the job). After changing a `.tf` file, run
+`terraform fmt -recursive deploy/terraform`.
 `.github/workflows/audit.yml` repeats the audit, with `npm audit`, every Monday.
 
 ### Backend dependencies (pinned)

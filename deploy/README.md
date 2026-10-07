@@ -222,8 +222,11 @@ bucket, those become variables in `app/variables.tf` or settings in `deploy/aws.
 
 ## Checking the Terraform code
 
-Neither of the first two needs an AWS sign-in.
+CI (the `terraform` job in `.github/workflows/ci.yml`) runs the first three on every pull request and every push
+to `main`, with the Terraform version pinned there. None of them needs an AWS sign-in.
 
+- **`terraform fmt`.** From the repository: `terraform fmt -check -recursive deploy/terraform` lists files that
+  aren't formatted; without `-check` it fixes them.
 - **`terraform validate`.** In each folder: `terraform init -backend=false && terraform validate`. It checks
   every resource and argument against the provider.
 - **`terraform test`.** In `deploy/terraform/app`. It plans against a simulated AWS provider and checks names,
