@@ -87,7 +87,12 @@ under ECS, Clusters, `bmu-dev`. To check the app itself, `curl -s https://<addre
 
 **Signing in.** Sign in with your PAHMA QA account. Jobs create real records on the QA tenant, and they stay.
 
-**The read-only account for interns' checks.** Do this once after the first deploy; see the next section.
+**Then set the read-only account's sign-in.** Run `./bmu aws reader-secret` (see the next section). A new
+environment's secret is always empty, and `./bmu aws status` says "NOT SET" until you do. Until then, staff work as
+usual, but an intern's drafts can't be checked: the languages list doesn't load ("Couldn't load the languages list:
+The BMU can't check this against CollectionSpace now: its secret can't be read.") and every check gives the same
+reason. The same applies after `./bmu aws destroy` and a new deploy: with `protect_data = false` (the default),
+`destroy` deletes the secret and the deploy creates a new, empty one.
 
 **Later deploys.** Run the same command. Terraform shows only what changed, which takes about 3–5 minutes. Each
 deploy pushes a new image tag (commit and time), so `./bmu aws status` shows which code is running.
@@ -110,8 +115,9 @@ AWS Secrets Manager.
 2. `./bmu aws reader-secret`. It asks for the account's user name and its password twice. The password isn't
    shown. It goes straight to Secrets Manager: it is not saved on this computer, not in the shell's history and
    not in Terraform's state.
-3. Check it: sign in to the BMU as an intern and open a draft. `./bmu aws status` shows whether the secret is set
-   and when it last changed; it never reads the value.
+3. Check it: sign in to the BMU as an intern and open a draft; the languages list loads. A secret set for the first
+   time is used from the next request, with no deploy or restart. `./bmu aws status` shows whether the secret is
+   set and when it last changed; it never reads the value.
 
 **Changing the password.** Every 90 days, and whenever a staff member who could read the secret leaves:
 1. Change the account's password in CollectionSpace.
@@ -124,8 +130,9 @@ now" and nothing is lost.
 **Who can read the secret.** The web app's task role, and anyone with administrator access to the AWS account.
 CloudTrail records every read (`GetSecretValue`). The worker's role can't read it.
 
-**If it isn't set.** Interns can still sign in and prepare drafts. Each check answers that the read-only account
-isn't ready, and staff are not affected.
+**If it isn't set.** Interns can still sign in and prepare drafts, but the languages list doesn't load and each
+check answers "The BMU can't check this against CollectionSpace now: its secret can't be read." Staff are not
+affected.
 
 ## What it creates
 
@@ -204,6 +211,8 @@ Nothing in the Terraform code names an account.
 2. **Settings.** Check the region and the label in `ucb-dev.conf`.
 3. **Deploy.** Run `./bmu aws deploy --env ucb-dev`. Everything is created fresh there: its own state bucket,
    new keys, new tables and a new address. No state is moved between accounts.
+4. **The read-only account.** Run `./bmu aws reader-secret --env ucb-dev`. The new environment's secret starts
+   empty.
 
 The personal environment is unaffected; `./bmu aws destroy --env personal-dev` removes it when you're done with
 it.
@@ -259,8 +268,16 @@ Neither of the first two needs an AWS sign-in.
 - **"Error acquiring the state lock".** An earlier run was interrupted. Check that no other deploy is running,
   then run `./bmu aws init` (it points Terraform at this environment's state) and
   `AWS_PROFILE=<profile> terraform -chdir=deploy/terraform/app force-unlock <the lock ID in the message>`.
-- **An intern sees "The BMU can't check this against CollectionSpace now".** The read-only account can't be
-  used. "its secret can't be read" or "its secret has no user name or password yet": run `./bmu aws reader-secret`. "CollectionSpace refused
-  its sign-in": the password was changed in CollectionSpace or the account lost its role; set the secret again
-  or ask the CollectionSpace administrator.
+- **An intern sees "The BMU can't check this against CollectionSpace now"**, for example "Couldn't load the
+  languages list". The read-only account can't be used; the rest of the message says why. Staff are not affected.
+  - "its secret can't be read": usually the secret was never set. This is normal after a first deploy, and after
+    `destroy` and a new deploy. `./bmu aws status` then says "NOT SET": run `./bmu aws reader-secret`, then reload
+    the draft. If `status` says it is set, the web app's log says why it can't use it (the name of the error, never the
+    secret): `./bmu aws logs web` and look for "the reader account's secret can't be used".
+    `ResourceNotFoundException` means no value; `AccessDeniedException` means the web role isn't allowed to read
+    it (a fault in `deploy/terraform/app/iam.tf`); `KeyError` or `JSONDecodeError` means the value isn't the
+    user name and password `reader-secret` writes (for example, set in the console): run `./bmu aws reader-secret`.
+  - "its secret has no user name or password yet": run `./bmu aws reader-secret`.
+  - "CollectionSpace refused its sign-in": the password was changed in CollectionSpace or the account lost its
+    role; set the secret again or ask the CollectionSpace administrator.
 - **The app doesn't come up.** Run `./bmu aws logs web` or `./bmu aws logs worker`, and `./bmu aws status`.
