@@ -8,6 +8,10 @@ updates:
   - package-ecosystem: pip
     directory: /backend
     schedule: { interval: weekly, day: monday, time: "06:00", timezone: America/Los_Angeles }
+    ignore:
+      # requirements-tools.in caps click below 8.5 (pip-tools 7.6.1 header bug); lift both together.
+      - dependency-name: "click"
+        versions: [">=8.5"]
     groups:
       python:
         patterns: ["*"]
@@ -20,6 +24,12 @@ updates:
       - dependency-name: "eslint"
         update-types: [version-update:semver-major]
       - dependency-name: "@eslint/js"
+        update-types: [version-update:semver-major]
+      # TypeScript 7 waits until typescript-eslint and vue-tsc support it.
+      - dependency-name: "typescript"
+        update-types: [version-update:semver-major]
+      # Vuetify 4 is a deliberate upgrade, done on its own branch after the UI review.
+      - dependency-name: "vuetify"
         update-types: [version-update:semver-major]
     groups:
       # Minor and patch updates together; a major update (a new Vue or Vuetify, say) comes as its own PR.
