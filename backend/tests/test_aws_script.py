@@ -82,6 +82,11 @@ def run(tree, *args, answers="", **fake):
                           capture_output=True, text=True, env=env, timeout=30)
 
 
+def test_the_script_is_executable():
+    """./bmu runs deploy/aws.sh directly, so it must keep its executable bit in git (lost once, in PR #78)."""
+    assert os.access(SCRIPT, os.X_OK), "chmod +x deploy/aws.sh && git update-index --chmod=+x deploy/aws.sh"
+
+
 # ---- the server check -----------------------------------------------------------------------------------------------
 
 def test_the_same_server_goes_ahead(tree):
