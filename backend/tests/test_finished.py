@@ -289,8 +289,8 @@ def test_the_check_searches_for_the_object_once_and_the_object_step_reuses_it(ap
     assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
     searches, real = [], worker.client_factory
 
-    def counting(u, p):
-        c = real(u, p)
+    def counting(t, u, p):
+        c = real(t, u, p)
         find = c.find_objects
         c.find_objects = lambda num: (searches.append(num), find(num))[1]
         return c
@@ -308,9 +308,9 @@ def test_if_permissions_cannot_be_read_the_run_goes_on_and_a_refusal_shows_at_it
     assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
     real = worker.client_factory
 
-    def unreadable(u, p):
+    def unreadable(t, u, p):
         from bmu.cspace import CSpaceError
-        c = real(u, p)
+        c = real(t, u, p)
 
         def boom():
             raise CSpaceError("server_error", "GET accounts/0/accountperms returned 500", status=500)
@@ -783,7 +783,7 @@ def test_only_a_success_resets_the_failed_request_count(fake):
     import pytest
     from bmu.cspace import CSpaceError
     from conftest import factory
-    c = factory("admin", "admin")
+    c = factory("pahma", "admin", "admin")
     c.failures_in_a_row = 3
     with pytest.raises(CSpaceError):
         c._request("GET", "media/no-such-csid")  # a 404: an answer about one record, not an outage
@@ -945,8 +945,8 @@ def test_no_request_is_sent_after_the_fifth_failure_in_a_row(api, login, add_upl
     fail_on("mediaSearch", status=503, count=0)
     real = worker.client_factory
 
-    def four_failed_already(u, p):
-        c = real(u, p)
+    def four_failed_already(t, u, p):
+        c = real(t, u, p)
         find_objects = c.find_objects
 
         def then_four_failures(num):  # the document's check finds its object: then four failures
@@ -967,7 +967,7 @@ def test_the_client_refuses_to_send_once_the_limit_is_reached(fake):
     import pytest
     from bmu.cspace import CSpaceError, CSpaceUnavailable
     from conftest import factory
-    c = factory("admin", "admin")
+    c = factory("pahma", "admin", "admin")
     c.failures_in_a_row = 5
     assert c.find_objects("15-1234")  # the web app's clients have no limit
     c.failures_in_a_row, c.max_failures_in_a_row = 5, 5

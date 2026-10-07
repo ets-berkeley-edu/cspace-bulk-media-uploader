@@ -43,8 +43,8 @@ PRESETS = {"mediaonly": {"type": ["image"], "contributor": HEARST, "copyright": 
 
 @pytest.fixture
 def preset_tenant(services):
-    services.tenant = tenant_with(PRESETS)
-    return services.tenant
+    services.tenants["pahma"] = tenant_with(PRESETS)
+    return services.tenants["pahma"]
 
 
 @pytest.fixture(autouse=True)

@@ -12,6 +12,13 @@ to run it; `deploy/README.md` covers AWS.
 
 ## Rules that are not negotiable
 
+- **The museum comes from the session or the job, never from the deployment or the browser** (design doc: "One
+  deployment for several museums"). One deployment serves several museums: `Services.tenants` holds each one's
+  configuration and `Services.readers` its read-only account; use `sess.museum(s)` (or `s.tenants[job["tenant"]]`),
+  `sess.client(s)`, staging and thumbnail keys built from the job's museum, and the encryption contexts
+  `session_context` and `job_context`, which include the museum. There is no deployment-wide tenant. A new endpoint
+  that reads a job must go through `_job_or_404` (it refuses another museum's job), and gets a case in
+  `tests/test_museums.py`.
 - **The BMU is create-only.** It never deletes or cleans up anything in CollectionSpace. Deleting a job or a document
   removes it from the BMU only.
 - **Credentials are the user's own**, HTTP Basic only. A password is never stored permanently: it is encrypted at
@@ -91,13 +98,15 @@ While working, run only the test files a change affects. Run both full suites on
 ### Backend (`backend/bmu/`, FastAPI + DynamoDB + S3)
 
 - **`app.py`** — the web app (`create_app()`; entry point `main.py`). All routes are `/api/*`; it also serves the
-  built frontend for every other address.
+  built frontend for every other address. Sign-in takes the museum chosen (`tenant`, checked against the
+  deployment's list; optional when it serves one); `/api/env` lists the museums for the sign-in page.
 - **Roles** (design doc: "Roles") — every user has the CollectionSpace role BMU_Staff or BMU_Intern (named per tenant in `tenants/<key>.yaml` under `roles`; they carry no permissions). `app.py` refuses a sign-in with neither role, and a staff sign-in that lacks the tenant's `staff_permissions`. A session keeps its `role`. Endpoints take one of three dependencies: `current_session` (anyone signed in: viewing), `editor_session` (creates or changes a draft; `_intern_may` then limits an intern to drafts with `internOpen`), and `staff_session` (submit, schedule, queue, finished jobs), which reads the roles from CollectionSpace again on every request. A job keeps `createdBy`, `createdByRole` and `internOpen`. `POST /api/jobs/{id}/intern-access` changes `internOpen` (staff only; opening a draft to interns also clears its `review`). `POST …/review` is an intern's Submit for review: refused while a document needs fixing (not for `creator` documents), it makes the draft staff only and sets `review: {by, at}`, which Submit clears; the draft never enters the queue. In the editor it is the button at the bottom of the job, in place of Submit job, which an intern doesn't have. The frontend ids for it still read `hand-over-btn` (with `hand-over-confirm`, `hand-over-confirm-btn`, `hand-over-cancel-btn`) and `job-<id>-hand-over-btn` from "Hand over to staff", which it replaced; the mark is `job-<id>-review` and `review-note`. `POST …/to-drafts` moves a queued job to Drafts without opening it, and `POST …/schedule` also submits a draft nobody has open (Submit from the Drafts list). In the frontend, `lib/roles.ts` holds the same rules and the reasons shown on switched-off controls; components take a `staff` prop. Simulator users: `admin` and `limited` (staff), `intern`, and `newstaff` and `reader` (both refused at sign-in).
 - **Three kinds of result** (design doc: "Roles") — a permission problem is never shown as a mistake in the job. A check's level is `block` (needs fixing), `creator` (the document needs a new Object and this user can't create Objects: `rows.needs_creator`, `rows.CREATOR`), `warn` or `info`; `rows.worst` ranks them in that order. `_recheck` counts `block`, `warn`, `creator` and `newObjects` (documents that will create an Object, whoever looks). `POST …/schedule` refuses a job with `creator` documents (409 `creator`): a job is submitted whole, by someone who can create its Objects, and there is deliberately no way to submit only the rest (it was built and removed on 5 October 2026, because the documents left out had nowhere to go once the job completed). Creating groups is the one other permission staff can lack after sign-in: `_account_problem` refuses Submit with 409 `account`, nothing is put on the documents, and the worker still checks it at the run (`permission_checks(..., run=True)`). For an intern, `_lookup_perms` assumes every permission except creating Objects (`proxy`), so nothing is held against the intern's own account. In the frontend: `lib/status.ts` (`NEEDS_CREATOR`, tone and theme colour `creator`, `CHECK_PREFIX`, `checksText`, `handlingNote`), `GROUP_PROBLEM` in `lib/roles.ts`, and ids `creator-note`, `show-creator-btn`, `group-account-problem`, `preview-needs-creator`. Don't add a permission check that marks a document "needs fixing".
 - **The read-only service account** (`reader.py`; design doc: "Roles") — an intern's lookups (the draft checks, authority autocomplete, vocabularies, the date parser) go through `_lookup_client`, `_lookup_perms` and `_lookup_http` in `app.py`, which use the reader account when the session is an intern's and one is set up (`BMU_READER_SECRET_ID` in AWS; `BMU_READER_USER` and `BMU_READER_PASSWORD` locally, the simulator's `bmureader`; an AWS environment with the simulated CollectionSpace keeps `bmureader` in its secret, set by `./bmu aws deploy`). Every request it makes is counted against the intern (`reader_lookups_per_hour`, answer 429 `reader_limit`) and logged ("reader: <intern> made N lookups (<what>)"). If the account can't be used the answer is 503 `reader`, never a 401, so the intern stays signed in. Rows are stored in full; `minimal()` cuts every row in an answer to an intern (in the `csrf_guard` middleware) down to found or not and protected or not: no reason for protection, no access notes, no CSIDs. A new endpoint that reads CollectionSpace for a draft must use `_lookup_client`; a new row field that comes from an Object or Media record must be added to `_minimal_row`.
 
-- **`worker.py`** — runs queued jobs (`python -m bmu.worker`): one job at a time per tenant, each document's steps
-  in order, each step recording its CSID so a rerun runs only unfinished steps.
+- **`worker.py`** — runs queued jobs (`python -m bmu.worker`): one `Worker` per museum, each in its own thread with
+  its own connections (`main()`), one job at a time per museum, each document's steps in order, each step recording
+  its CSID so a rerun runs only unfinished steps.
 - **`rows.py`** — the checks on each document ("Must fix", "Warning"), used by the editor, by Submit and by the
   worker just before each document.
 - **`schedule.py`** — run times, queue order, Run now, hold, pause.
@@ -111,7 +120,9 @@ While working, run only the test files a change affects. Run both full suites on
 - **`backend/fakecspace/`** — a simulated CollectionSpace for development and tests. It is not CollectionSpace:
   check real behaviour with `scripts/check_cspace.py` against the QA tenant.
 
-Settings are environment variables prefixed `BMU_` (`config.py`, `.env.example`).
+Settings are environment variables prefixed `BMU_` (`config.py`, `.env.example`). The museums a deployment serves are
+`BMU_TENANTS` (JSON, museum to CollectionSpace server; `Settings.museums()`), with `BMU_S3_KMS_KEY_IDS` and
+`BMU_READER_SECRET_IDS` per museum in AWS; without them, `BMU_TENANT` on `BMU_CSPACE_URL` is the one museum.
 
 ### Frontend (`frontend/src/`, Vue 3 + TypeScript + Vuetify 3)
 

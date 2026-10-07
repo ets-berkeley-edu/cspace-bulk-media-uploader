@@ -21,7 +21,7 @@ from . import demo
 from . import logsafe
 from . import schedule as sched
 from .config import Settings, get_settings
-from .crypto import Crypto, make_crypto
+from .crypto import Crypto, job_context, make_crypto
 from .cspace import CSpaceClient, CSpaceError, Permissions
 from .failures import catalog
 from .reader import Reader, ReaderLimit, ReaderUnavailable, ensure_logged, minimal
@@ -40,7 +40,7 @@ CSRF_HEADER = "x-bmu"
 RESCHEDULABLE = ("Draft",)
 FIXABLE = ("NeedsAttention", "Failed")
 
-ClientFactory = Callable[[str, str], CSpaceClient]
+ClientFactory = Callable[[str, str, str], CSpaceClient]  # (museum, username, password): that museum's CollectionSpace
 
 RUN_AT_GRACE_SECONDS = 60  # a job's own run time may be this far in the past (the browser picks whole minutes)
 
@@ -74,12 +74,16 @@ class Services:
         self.storage = storage
         self.crypto = crypto
         self.client_factory = client_factory
-        self.tenant: Tenant = load_tenant(settings.tenant)
+        # The museums this deployment serves (design: One deployment for several museums), each with its own
+        # configuration. Requests take the museum from the session, or from the job; never from the browser.
+        self.tenants: dict[str, Tenant] = {key: load_tenant(key) for key in settings.museums()}
         # The time the job schedule is judged by (design: Job scheduling); tests replace it to move time.
         self.clock: Callable[[], float] = clock or now
         self.demo = demo.DemoState(settings)  # Demo tools (BMU_DEMO only); tests replace its HTTP clients
         # The read-only account that checks an intern's drafts (design: Roles); it signs in the same way
-        self.reader = Reader(settings, lambda u, p: self.client_factory(u, p))
+        self.readers: dict[str, Reader] = {
+            key: Reader(settings, lambda u, p, key=key: self.client_factory(key, u, p), secret_id=settings.reader_secret_for(key))
+            for key in self.tenants}
         # The queued and running jobs with their rows, by tenant, kept a few seconds (see _queue_rows)
         self.queue_rows: dict[str, tuple[float, list[tuple[dict, list[dict]]]]] = {}
 
@@ -93,8 +97,9 @@ def create_app(services: Services | None = None) -> FastAPI:
         storage = Storage(s)
         if s.create_tables:
             storage.create_tables()
+        servers = s.museums()
         services = Services(s, storage, make_crypto(s),
-                            lambda u, p: CSpaceClient(s.cspace_url, u, p, timeout=s.cspace_timeout_seconds))
+                            lambda t, u, p: CSpaceClient(servers[t], u, p, timeout=s.cspace_timeout_seconds))
     app.state.svc = services
 
     @app.middleware("http")
@@ -178,8 +183,19 @@ class Session(BaseModel):
     role: str = "staff"  # "staff" or "intern": the user's BMU role (design: Roles)
 
     def client(self, s: Services) -> CSpaceClient:
-        pw = s.crypto.decrypt("session", self.password_token, {"user": self.user, "session": self.key})
-        return s.client_factory(self.user, pw)
+        return s.client_factory(self.tenant, self.user, self.password(s))
+
+    def password(self, s: Services) -> str:
+        return s.crypto.decrypt("session", self.password_token, session_context(self.user, self.key, self.tenant))
+
+    def museum(self, s: Services) -> Tenant:
+        """The configuration of the session's museum."""
+        return s.tenants[self.tenant]
+
+
+def session_context(user: str, key: str, tenant: str) -> dict[str, str]:
+    """The encryption context of a session's password: it can only be decrypted for this user, session and museum."""
+    return {"user": user, "session": key, "tenant": tenant}
 
 
 def current_session(request: Request, s: Services = Depends(svc)) -> Session:
@@ -190,7 +206,7 @@ def current_session(request: Request, s: Services = Depends(svc)) -> Session:
     item = s.storage.get_session(_hash(token)) if token else None
     if not item:
         raise HTTPException(401, "Please sign in with your CollectionSpace account.")
-    if item.get("role") not in ROLES:  # a session from before the BMU had roles
+    if item.get("role") not in ROLES or item.get("tenant") not in s.tenants:  # from before roles, or a museum removed
         s.storage.end_session(item["PK"], item.get("tenant"))
         raise HTTPException(401, "Please sign in again.")
     t = now()
@@ -225,25 +241,25 @@ def _join(parts: list[str]) -> str:
     return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " or " + parts[-1]
 
 
-def _staff_missing(s: Services, perms: Permissions) -> str:
+def _staff_missing(tenant: Tenant, perms: Permissions) -> str:
     """Design (Roles): what a staff account lacks of the tenant's staff_permissions, in words ("create Media
     records or read Objects"); "" if nothing. The roles carry no permissions, so having BMU_Staff doesn't mean the
     account can do what the BMU exists for."""
-    missing = perms.missing(s.tenant.staff_permissions)
+    missing = perms.missing(tenant.staff_permissions)
     return _join([f"{_ACTION_LABEL.get(a, a)} {_RESOURCE_LABEL.get(res, res)}" for res, a in missing]) if missing else ""
 
 
-def _account_refused(s: Services, missing: str) -> HTTPException:
+def _account_refused(tenant: Tenant, missing: str) -> HTTPException:
     return HTTPException(403, {"code": "account", "message":
-                               f"Your CollectionSpace account has the {_join(list(s.tenant.staff_roles))} role, but it can't "
+                               f"Your CollectionSpace account has the {_join(list(tenant.staff_roles))} role, but it can't "
                                f"{missing}. The BMU needs that to create Media records. {ADMIN_HELP}"})
 
 
-def _read_role(s: Services, client: CSpaceClient) -> str:
+def _read_role(tenant: Tenant, client: CSpaceClient) -> str:
     """The account's BMU role for this tenant, "staff", "intern" or "" (design: Roles). Raises CSpaceError if
     the roles can't be read."""
     roles = client.account_roles()
-    return s.tenant.role_of(roles.tenant_id, roles.role_names)
+    return tenant.role_of(roles.tenant_id, roles.role_names)
 
 
 def editor_session(sess: Session = Depends(current_session)) -> Session:
@@ -258,7 +274,7 @@ def _role_now(s: Services, sess: Session) -> str:
     CollectionSpace that doesn't answer (or no longer accepts the sign-in) is reported as such."""
     client = sess.client(s)
     try:
-        role = _read_role(s, client)
+        role = _read_role(sess.museum(s), client)
     except CSpaceError as e:
         if e.code in ("auth", "unavailable", "server"):
             raise _cspace_http(e)
@@ -449,10 +465,10 @@ def _upload_form(s: "Services", key: str, size: int, content_type: str) -> dict:
     return demo.route_upload(s, form)
 
 
-def _me(s: "Services", user: str, perms: dict, role: str) -> dict:
+def _me(s: "Services", tenant: Tenant, user: str, perms: dict, role: str) -> dict:
     """What the browser needs about the signed-in user and the app: the tenant's settings, the user's permissions,
     and the per-file size limit, so the page skips files over it before asking to add them (design: Browser uploads)."""
-    return {"user": user, "tenant": s.tenant.public_summary(), "perms": perms, "role": role,
+    return {"user": user, "tenant": tenant.public_summary(), "perms": perms, "role": role,
             "maxFileBytes": s.settings.max_file_bytes}
 
 
@@ -513,12 +529,12 @@ def _public(job: dict, sess: "Session", s: "Services | None" = None, view: Queue
 def _reads_as_reader(s: "Services", sess: "Session") -> bool:
     """Design (Roles): an intern's lookups are made with the read-only service account, when one is set up. Staff
     always use their own sign-in."""
-    return sess.role == "intern" and s.reader.configured
+    return sess.role == "intern" and s.readers[sess.tenant].configured
 
 
 def _lookup_client(s: "Services", sess: "Session", what: str) -> CSpaceClient:
     """The client for a request that only reads CollectionSpace to check or fill in a draft."""
-    return s.reader.client(sess.user, what) if _reads_as_reader(s, sess) else sess.client(s)
+    return s.readers[sess.tenant].client(sess.user, what) if _reads_as_reader(s, sess) else sess.client(s)
 
 
 def _lookup_perms(s: "Services", sess: "Session") -> dict[str, bool]:
@@ -528,7 +544,7 @@ def _lookup_perms(s: "Services", sess: "Session") -> dict[str, bool]:
     member has, so a document that needs a new Object says so (proxy: as information for whoever submits)."""
     if sess.role != "intern":
         return sess.perms
-    reads = s.reader.perms() if _reads_as_reader(s, sess) else {}
+    reads = s.readers[sess.tenant].perms() if _reads_as_reader(s, sess) else {}
     return {**sess.perms, **reads, "media": True, "mediaUpdate": True, "relations": True, "groups": True,
             "objects": False, "proxy": True}
 
@@ -550,7 +566,7 @@ def _account_problem(tenant: Tenant, job: dict, perms: dict[str, bool], work: li
 
 def _lookup_http(s: "Services", sess: "Session", e: CSpaceError) -> Exception:
     """A failed lookup: the reader account's failure is not the intern's sign-in failing."""
-    return s.reader.refused(e) if _reads_as_reader(s, sess) else _cspace_http(e)
+    return s.readers[sess.tenant].refused(e) if _reads_as_reader(s, sess) else _cspace_http(e)
 
 
 def _cspace_http(e: CSpaceError) -> HTTPException:
@@ -565,6 +581,9 @@ def _cspace_http(e: CSpaceError) -> HTTPException:
 class LoginBody(BaseModel):
     username: str = Field(min_length=1, max_length=200)
     password: str = Field(min_length=1, max_length=500)
+    # The museum chosen on the sign-in page (design: One deployment for several museums). Checked against the
+    # deployment's list; may be left out when the deployment serves one museum.
+    tenant: str | None = Field(default=None, max_length=40)
 
 
 class NewJob(BaseModel):
@@ -643,15 +662,26 @@ class RunAt(BaseModel):
 
 
 
-def _sign_in(s: Services, response: Response, username: str, password: str) -> dict:
+def _museum_chosen(s: Services, chosen: str | None) -> Tenant:
+    """The museum a sign-in is for: the one chosen, if the deployment serves it; the only one, if it serves one."""
+    if chosen:
+        if chosen not in s.tenants:
+            raise HTTPException(400, {"code": "tenant", "message": "Choose one of the museums listed."})
+        return s.tenants[chosen]
+    if len(s.tenants) == 1:
+        return next(iter(s.tenants.values()))
+    raise HTTPException(400, {"code": "tenant", "message": "Choose your museum."})
+
+
+def _sign_in(s: Services, response: Response, username: str, password: str, tenant: Tenant) -> dict:
     """Check the username and password against CollectionSpace (Basic Auth), read the account's permissions and
     roles, and start a session with its cookie. Raises 401 for a wrong sign-in, and 403 with the reason for an
     account the BMU doesn't let in (design: Roles)."""
-    client = s.client_factory(username, password)
+    client = s.client_factory(tenant.key, username, password)
     try:
         perms = client.account_permissions()
         try:
-            role = _read_role(s, client)
+            role = _read_role(tenant, client)
         except CSpaceError as e:
             if e.code in ("auth", "unavailable", "server"):
                 raise
@@ -666,23 +696,23 @@ def _sign_in(s: Services, response: Response, username: str, password: str) -> d
     # Design (Roles): every BMU user has one of the two roles; staff must also be able to do what the BMU
     # exists for. Both refusals say whom to ask.
     if role not in ROLES:
-        names = _join([*s.tenant.staff_roles, *s.tenant.intern_roles])
+        names = _join([*tenant.staff_roles, *tenant.intern_roles])
         raise HTTPException(403, {"code": "no_role", "message":
                                   f"Your CollectionSpace account doesn't have the {names} role, which the BMU needs. "
                                   f"{ADMIN_HELP}"})
-    if role == "staff" and (missing := _staff_missing(s, perms)):
-        raise _account_refused(s, missing)
+    if role == "staff" and (missing := _staff_missing(tenant, perms)):
+        raise _account_refused(tenant, missing)
     token = secrets.token_urlsafe(32)
     key = _hash(token)
     expires = now() + s.settings.session_hours * 3600
     s.storage.put_session(key, {
-        "user": username, "tenant": s.tenant.key, "perms": perms.summary, "role": role,
+        "user": username, "tenant": tenant.key, "perms": perms.summary, "role": role,
         "expires": int(expires), "lastSeen": now(),
-        "password": s.crypto.encrypt("session", password, {"user": username, "session": key}),
+        "password": s.crypto.encrypt("session", password, session_context(username, key, tenant.key)),
     })
     response.set_cookie(s.settings.cookie_name, token, httponly=True, secure=s.settings.cookie_secure, samesite="strict",
                         max_age=int(s.settings.session_hours * 3600), path="/")
-    return _me(s, username, perms.summary, role)
+    return _me(s, tenant, username, perms.summary, role)
 
 
 def _routes(app: FastAPI) -> None:
@@ -692,15 +722,17 @@ def _routes(app: FastAPI) -> None:
 
     @app.get("/api/env")
     def environment(s: Services = Depends(svc)):
-        """Which environment this is, for the sign-in page and the header (no sign-in needed): its label, and
-        whether it talks to a real CollectionSpace (records created there stay), so the page can say so."""
-        return {"label": s.settings.env_label,
-                "realCollectionSpace": real_cspace(s.settings.cspace_url, s.settings.cspace_simulated)}
+        """Which environment this is, for the sign-in page and the header (no sign-in needed): its label, whether
+        it talks to a real CollectionSpace (records created there stay), so the page can say so, and the museums it
+        serves, for the sign-in page's choice (design: One deployment for several museums)."""
+        real = any(real_cspace(url, s.settings.cspace_simulated) for url in s.settings.museums().values())
+        return {"label": s.settings.env_label, "realCollectionSpace": real,
+                "tenants": [{"key": t.key, "name": t.name} for t in s.tenants.values()]}
 
     # ---- sign-in (Basic Auth checked against CollectionSpace) ----------------------------
     @app.post("/api/login")
     def login(body: LoginBody, response: Response, s: Services = Depends(svc)):
-        return _sign_in(s, response, body.username, body.password)
+        return _sign_in(s, response, body.username, body.password, _museum_chosen(s, body.tenant))
 
     @app.post("/api/logout")
     def logout(response: Response, request: Request, s: Services = Depends(svc)):
@@ -720,30 +752,30 @@ def _routes(app: FastAPI) -> None:
 
     @app.get("/api/me")
     def me(sess: Session = Depends(current_session), s: Services = Depends(svc)):
-        return _me(s, sess.user, sess.perms, sess.role)
+        return _me(s, sess.museum(s), sess.user, sess.perms, sess.role)
 
     # ---- authority autocomplete (existing terms only) ------------------------------------
     @app.get("/api/authorities")
     def authorities(field: str, q: str, sess: Session = Depends(current_session), s: Services = Depends(svc)):
-        if len(q.strip()) < s.tenant.autocomplete["min_length"]:
+        if len(q.strip()) < sess.museum(s).autocomplete["min_length"]:
             return {"terms": []}
-        kinds = s.tenant.authority_fields.get(field)
+        kinds = sess.museum(s).authority_fields.get(field)
         if not kinds:
             raise HTTPException(400, "Not an authority field")
         # As in the CollectionSpace UI, sources the user can't read are dropped silently.
         perms = _lookup_perms(s, sess)
         readable = {"personauthorities": perms.get("readPersons", True), "orgauthorities": perms.get("readOrgs", True)}
-        kinds = [k for k in kinds if k in s.tenant.authorities]  # a source not set up for this tenant is skipped, as in the UI
+        kinds = [k for k in kinds if k in sess.museum(s).authorities]  # a source not set up for this tenant is skipped, as in the UI
         if not kinds:
             return {"terms": [], "total": 0}
-        kinds = [k for k in kinds if readable.get(s.tenant.authorities[k]["service"], True)]
+        kinds = [k for k in kinds if readable.get(sess.museum(s).authorities[k]["service"], True)]
         if not kinds:
             return {"terms": [], "total": 0, "message": "Your CollectionSpace account can't read the Person or Organization authorities, so it can't search them."}
         client = _lookup_client(s, sess, f"searching {field}")
         try:
             terms, total, more = [], 0, False
             for kind in kinds:
-                a = s.tenant.authorities[kind]
+                a = sess.museum(s).authorities[kind]
                 found, n = client.search_terms_page(a["service"], a["vocabulary"], q.strip(), AUTOCOMPLETE_PAGE)
                 terms += [{**t, "source": kind} for t in found]
                 total += n
@@ -1044,11 +1076,11 @@ def _routes(app: FastAPI) -> None:
             raise HTTPException(422, str(e))
         new = []
         for f, name in zip(body.files, names):
-            row = new_row(s.tenant, name, f.size, content_type(name) or f.type, date=f.exifDate, orientation=f.orientation)
+            row = new_row(sess.museum(s), name, f.size, content_type(name) or f.type, date=f.exifDate, orientation=f.orientation)
             if job.get("fixFrom"):
                 row["addedInFix"] = True  # an abandoned fix removes it again
             new.append(row)
-        rows = s.storage.add_rows(job_id, new)
+        rows = s.storage.add_rows(sess.tenant, job_id, new)
         return {"rows": [{**r, "uploadForm": _upload_form(s, r["s3Key"], f.size, r["contentType"])}
                          for r, f in zip(rows, body.files)]}
 
@@ -1081,7 +1113,7 @@ def _routes(app: FastAPI) -> None:
         s.storage.put_row(job_id, row)
         result = _recheck_after_change(s, sess, job_id, n)
         if row["upload"]["s"] == "done" and row["file"].rsplit(".", 1)[-1].lower() in TIFF_EXTENSIONS:
-            background.add_task(tiff_thumbnail_step, s.storage, job_id, n)  # the thumbnail step (a Lambda in AWS)
+            background.add_task(tiff_thumbnail_step, s.storage, sess.tenant, job_id, n)  # the thumbnail step (a Lambda in AWS)
         return result
 
     # ---- thumbnails (design: User interface, Thumbnails) -------------------------------------------
@@ -1100,7 +1132,7 @@ def _routes(app: FastAPI) -> None:
             jpeg = make_thumbnail(body)
         except NotAnImage:
             raise HTTPException(422, "Not an image.")
-        return {"stored": s.storage.store_thumbnail(job_id, n, jpeg)}
+        return {"stored": s.storage.store_thumbnail(sess.tenant, job_id, n, jpeg)}
 
     @app.get("/api/jobs/{job_id}/rows/{n}/thumbnail")
     def get_thumbnail(job_id: str, n: int, size: str = "small", sess: Session = Depends(current_session), s: Services = Depends(svc)):
@@ -1156,7 +1188,7 @@ def _routes(app: FastAPI) -> None:
             s.storage.delete_object(row["thumbKey"])
             row["thumbKey"] = None
         row.update(file=name, fileOriginal=name, size=body.size, contentType=content_type(name) or body.type, upload={"s": "pending"},
-                   s3Key=s.storage.staging_key(job_id, n), replacedFor=(row.get("result") or {}).get("run"))
+                   s3Key=s.storage.staging_key(sess.tenant, job_id, n), replacedFor=(row.get("result") or {}).get("run"))
         s.storage.put_row(job_id, row)
         return {"row": row, "uploadForm": _upload_form(s, row["s3Key"], body.size, row["contentType"])}
 
@@ -1184,7 +1216,7 @@ def _routes(app: FastAPI) -> None:
             s.storage.delete_object(key)  # whatever part of the failed upload arrived, and its old thumbnail
         row["thumbKey"] = None
         row.update(size=body.size, contentType=content_type(name) or body.type or row.get("contentType", ""), upload={"s": "pending"},
-                   s3Key=s.storage.staging_key(job_id, n))
+                   s3Key=s.storage.staging_key(sess.tenant, job_id, n))
         s.storage.put_row(job_id, row)
         return {"row": row, "uploadForm": _upload_form(s, row["s3Key"], body.size, row["contentType"])}
 
@@ -1207,7 +1239,7 @@ def _routes(app: FastAPI) -> None:
         others = [r["file"] for r in s.storage.get_rows(job_id) if r["n"] != n] if "file" in changes else []
         before = copy.deepcopy(row)
         try:
-            apply_edit(s.tenant, row, changes, others)
+            apply_edit(sess.museum(s), row, changes, others)
         except ValueError as e:
             raise HTTPException(422, str(e))
         _note_include(row, bool(before.get("include")), sess.user)
@@ -1239,7 +1271,7 @@ def _routes(app: FastAPI) -> None:
         edited = []
         for r in targets:
             try:
-                apply_edit(s.tenant, r, body.changes)
+                apply_edit(sess.museum(s), r, body.changes)
             except ValueError as e:
                 raise HTTPException(422, f"{e} Nothing was changed.")
             _note_include(r, bool(originals[len(edited)].get("include")), sess.user)
@@ -1328,7 +1360,7 @@ def _routes(app: FastAPI) -> None:
         blocked = [r["n"] for r in work if worst(r) == "block"]
         if blocked:
             raise HTTPException(409, {"message": f"{len(blocked)} documents need fixing first.", "rows": blocked})
-        if problem := _account_problem(s.tenant, job, sess.perms, work):  # the user's account, not the job (design: Roles)
+        if problem := _account_problem(sess.museum(s), job, sess.perms, work):  # the user's account, not the job (design: Roles)
             raise HTTPException(409, {"code": "account", "message": problem})
         # Design (Roles, Three kinds of result): documents that need a new Object, which this user can't create.
         # A job is submitted whole, by someone who can do all of it: this user leaves the draft for a colleague who
@@ -1341,12 +1373,12 @@ def _routes(app: FastAPI) -> None:
                                       "a new Object. Leave the draft for a colleague who can create Objects, change "
                                       f"{'its' if n == 1 else 'their'} handling, or take {'it' if n == 1 else 'them'} out of the job."})
         # Hand the job its own copy of the password, encrypted with the job key; the worker deletes it after the run.
-        pw = s.crypto.decrypt("session", sess.password_token, {"user": sess.user, "session": sess.key})
+        pw = sess.password(s)
         expires = now() + s.settings.credential_hours * 3600
         t = now()
         # One write: the job's sign-in is stored and the job queued together, or neither (design: State rules)
         if not s.storage.queue_with_credential(
-                job_id, sess.user, s.crypto.encrypt("job", pw, {"user": sess.user, "job": job_id}), expires,
+                job_id, sess.user, s.crypto.encrypt("job", pw, job_context(sess.user, job_id, sess.tenant)), expires,
                 {"status": "Queued", "queuedAt": t, "queuePos": t, "scheduledBy": sess.user, "note": "",
                  "review": None,  # reviewed: a staff member submitted it (design: Roles, Submit for review)
                  "runNow": False, "runAt": None, "held": None,  # staff's settings from an earlier time in the queue
@@ -1482,8 +1514,8 @@ def _refresh_permissions(s: Services, sess: Session) -> Session:
         raise _cspace_http(e)
     finally:
         client.close()
-    if sess.role == "staff" and (missing := _staff_missing(s, account)):
-        raise _account_refused(s, missing)
+    if sess.role == "staff" and (missing := _staff_missing(sess.museum(s), account)):
+        raise _account_refused(sess.museum(s), missing)
     perms = account.summary
     if perms != sess.perms:
         s.storage.update_session_perms(sess.key, perms)
@@ -1512,7 +1544,7 @@ def _recheck(s: Services, sess: Session, job_id: str, targets: set[int] | None, 
     perms = _lookup_perms(s, sess)  # an intern's lookups are the reader account's (design: Roles)
     client = _lookup_client(s, sess, f"checking job {job_id}")
     try:
-        partial = check_rows(s.tenant, rows, client, perms, targets=targets, refresh=refresh, group_on=group_on,
+        partial = check_rows(sess.museum(s), rows, client, perms, targets=targets, refresh=refresh, group_on=group_on,
                              set_publish=editable, group_exists=group_exists,
                              languages=lambda: vocabulary_terms(sess.tenant, client, "languages", fresh=refresh))
     except CSpaceError as e:
@@ -1559,7 +1591,7 @@ def _recheck(s: Services, sess: Session, job_id: str, targets: set[int] | None, 
         w = worst(r)
         if w in (CREATOR, "block", "warn"):
             counts[w] += 1
-        if w != "block" and _creates_object(s.tenant, r):
+        if w != "block" and _creates_object(sess.museum(s), r):
             counts["newObjects"] += 1
     return {"rows": rows, "changed": changed, "counts": counts}
 
@@ -1599,7 +1631,7 @@ def _collisions(s: Services, tenant: str, job: dict, rows: list[dict], fresh: bo
         return {}
     ids = {j["id"] for j in sched.ahead_of([j for j, _ in queue], job, sched.load(s.storage, tenant), s.clock(),
                                            s.settings.always_run_time)}
-    return collision_checks(s.tenant, rows, [(j, rs) for j, rs in queue if j["id"] in ids])
+    return collision_checks(s.tenants[tenant], rows, [(j, rs) for j, rs in queue if j["id"] in ids])
 
 
 def _queue_failures(s: Services, tenant: str, queue: list[tuple[dict, list[dict]]], jobs: list[dict] | None = None) -> list[dict]:
@@ -1614,7 +1646,7 @@ def _queue_failures(s: Services, tenant: str, queue: list[tuple[dict, list[dict]
         if job.get("status") != "Queued":
             continue
         ahead = sched.ahead_of(jobs, job, schedule, t, s.settings.always_run_time)
-        found = collision_checks(s.tenant, rows_of[job["id"]], [(a, rows_of[a["id"]]) for a in ahead])
+        found = collision_checks(s.tenants[tenant], rows_of[job["id"]], [(a, rows_of[a["id"]]) for a in ahead])
         files = {r["n"]: r.get("file") or "" for r in rows_of[job["id"]]}
         for n, checks in sorted(found.items()):
             for c in checks:
@@ -1659,7 +1691,7 @@ def _repair_plan(s: Services, tenant: str) -> dict:
     rows_of = {j["id"]: rs for j, rs in queue}
     queued = sorted((j for j, _ in queue if j.get("status") == "Queued"), key=sched.queue_key)
     name = {j["id"]: j.get("name") or "Untitled job" for j in queued}
-    plans = {j["id"]: object_plans(s.tenant, rows_of[j["id"]]) for j in queued}
+    plans = {j["id"]: object_plans(s.tenants[tenant], rows_of[j["id"]]) for j in queued}
     before: dict[str, set[str]] = {j["id"]: set() for j in queued}  # job -> the jobs that must run before it
     for c in queued:
         for e in queued:

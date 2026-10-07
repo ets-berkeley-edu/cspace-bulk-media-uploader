@@ -53,8 +53,10 @@ class ReaderLimit(Exception):
 
 class Reader:
     def __init__(self, settings: Settings, client_factory: Callable[[str, str], CSpaceClient],
-                 fetch_secret: Callable[[str], str] | None = None, clock: Callable[[], float] = time.time):
+                 fetch_secret: Callable[[str], str] | None = None, clock: Callable[[], float] = time.time,
+                 secret_id: str | None = None):
         self.settings = settings
+        self._secret_id = secret_id  # one museum's own secret (design: One deployment for several museums)
         self.client_factory = client_factory
         self._fetch_secret = fetch_secret or self._from_secrets_manager
         self._clock = clock
@@ -62,11 +64,17 @@ class Reader:
         self._perms: tuple[float, dict[str, bool]] | None = None
         self._used: dict[str, tuple[float, int]] = {}  # intern -> (start of their hour, lookups in it)
 
+    @property
+    def secret_id(self) -> str | None:
+        """The Secrets Manager secret holding this museum's account; None locally (read when used, so a test or a
+        change of settings takes effect)."""
+        return self._secret_id or self.settings.reader_secret_id
+
     # ---- the account ----------------------------------------------------------------------------------------
     @property
     def configured(self) -> bool:
         s = self.settings
-        return bool(s.reader_secret_id or (s.reader_user and s.reader_password))
+        return bool(self.secret_id or (s.reader_user and s.reader_password))
 
     def _from_secrets_manager(self, secret_id: str) -> str:
         import boto3  # only where a secret is configured
@@ -80,9 +88,9 @@ class Reader:
         if self._fresh(self._credentials):
             return self._credentials[1]  # type: ignore[index]
         s = self.settings
-        if s.reader_secret_id:
+        if self.secret_id:
             try:
-                secret = json.loads(self._fetch_secret(s.reader_secret_id))
+                secret = json.loads(self._fetch_secret(self.secret_id))
                 pair = (str(secret["username"]), str(secret["password"]))
             except Exception as e:  # not found, not allowed, not JSON, a key missing: never the secret's text
                 log.error("the reader account's secret can't be used (%s)", e.__class__.__name__)

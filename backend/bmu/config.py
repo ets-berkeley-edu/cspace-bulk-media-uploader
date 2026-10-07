@@ -12,6 +12,10 @@ class Settings(BaseSettings):
 
     # CollectionSpace server (without /cspace-services), e.g. https://pahma.qa.collectionspace.org
     cspace_url: str = "http://localhost:8180"
+    # The museums (tenants) this deployment serves, each with its CollectionSpace server (design: One deployment for
+    # several museums): {"pahma": "https://...", ...}, from BMU_TENANTS as JSON. Empty: the one museum of `tenant`
+    # on `cspace_url`, as before. See museums().
+    tenants: dict[str, str] = {}
     # true when cspace_url is the simulated CollectionSpace under a name the host check below can't recognise (an AWS
     # environment with SIMULATED_CSPACE=true: http://fakecspace.bmu-<env>.internal:8180). Only the label uses it.
     cspace_simulated: bool = False
@@ -26,6 +30,9 @@ class Settings(BaseSettings):
     s3_public_endpoint: str | None = None
     s3_bucket: str = "bmu-staging"
     s3_kms_key_id: str | None = None  # SSE-KMS key for staged files (AWS); uploads must use it
+    # A staging key per museum (AWS, design: One deployment for several museums), from BMU_S3_KMS_KEY_IDS as JSON;
+    # a museum without one uses s3_kms_key_id. See kms_key_for().
+    s3_kms_key_ids: dict[str, str] = {}
     upload_url_seconds: int = 900  # a presigned upload is good for about 15 minutes
     abandoned_upload_hours: float = 24  # staged files no document refers to are deleted after about a day
     table_prefix: str = "bmu"
@@ -66,6 +73,7 @@ class Settings(BaseSettings):
     # below (the simulator's "bmureader"). Without either, an intern's documents are checked with the intern's own
     # account, which can read nothing.
     reader_secret_id: str | None = None
+    reader_secret_ids: dict[str, str] = {}  # one secret per museum (AWS), from BMU_READER_SECRET_IDS as JSON
     reader_user: str | None = None
     reader_password: str | None = None
     reader_cache_seconds: float = 300.0  # how long the account's sign-in and permissions are kept in memory
@@ -76,6 +84,18 @@ class Settings(BaseSettings):
     heartbeat_seconds: float = 30.0  # a running job's heartbeat is renewed this often
     heartbeat_stale_seconds: float = 300.0  # a Running job whose heartbeat is older stops as "worker_stopped"
     static_dir: str | None = None  # serve the built Vue app from here, if set
+
+    def museums(self) -> dict[str, str]:
+        """{museum: its CollectionSpace server}, in the order configured: `tenants`, or else `tenant` on `cspace_url`."""
+        return {k: v.rstrip("/") for k, v in (self.tenants or {self.tenant: self.cspace_url}).items()}
+
+    def kms_key_for(self, tenant: str) -> str | None:
+        """The SSE-KMS key for one museum's staged files, thumbnails and audit files; None locally."""
+        return self.s3_kms_key_ids.get(tenant) or self.s3_kms_key_id
+
+    def reader_secret_for(self, tenant: str) -> str | None:
+        """The Secrets Manager secret of one museum's read-only account; None locally."""
+        return self.reader_secret_ids.get(tenant) or self.reader_secret_id
 
     def draft_days_for(self, job: dict | None) -> int:
         """A draft's expiry period: 7 days if any of its documents is a protected file (excluded ones too), 30

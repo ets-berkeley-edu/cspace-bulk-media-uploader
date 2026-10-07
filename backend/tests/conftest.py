@@ -35,11 +35,12 @@ def fake():
     return fake_store
 
 
-def factory(user, password):
+def factory(tenant, user, password):
+    """Every museum's CollectionSpace is the simulator in the tests."""
     return CSpaceClient("http://fake", user, password, http=TestClient(fake_app, base_url="http://fake"))
 
 
-def worker_factory(user, password):
+def worker_factory(tenant, user, password):
     return CSpaceClient("http://fake", user, password, http=TestClient(fake_app, base_url="http://fake"), agent="bmu-worker")
 
 
