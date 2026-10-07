@@ -7,24 +7,76 @@ on:
 # The workflow's token can only read the repository: no job here writes to GitHub.
 permissions:
   contents: read
+# A pull request that changes only documentation skips backend, frontend and terraform. They are skipped with
+# `if:`, not left out with paths-ignore, so each still reports (as skipped, which counts as passing) and a required
+# check never waits on "Expected". The `dependencies` job and everything in security.yml run on every pull request
+# and every push, whatever changed: README and docs files are where a secret or personal data most often leaks.
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+    steps:
+      # A pull request's checkout is its merge commit with the base branch, whose first parent is the base: the diff
+      # between the two is exactly what merging would change.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name == 'pull_request'
+        with: { fetch-depth: 2, persist-credentials: false }
+      - name: Documentation only?
+        id: classify
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          # Pushes to main always run everything.
+          if [ "$EVENT" != pull_request ]; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # --no-renames: a rename counts as its old path and its new one, so code renamed to .md is a code change.
+          mapfile -t files < <(git diff --name-only --no-renames HEAD^1 HEAD)
+          docs_only=true
+          [ "${#files[@]}" -gt 0 ] || docs_only=false
+          for f in "${files[@]}"; do
+            # Documentation: docs/, any .md file, LICENSE, and issue or pull request templates. Anything else under
+            # .github/ (workflows, dependabot.yml) is checked before the .md rule, so it always runs everything.
+            # A file name git had to quote (newlines, control characters) starts with " and so counts as code.
+            case "$f" in
+              .github/ISSUE_TEMPLATE/* | .github/PULL_REQUEST_TEMPLATE/* | .github/pull_request_template.md) kind=docs ;;
+              .github/*) kind=code ;;
+              docs/* | *.md | LICENSE) kind=docs ;;
+              *) kind=code ;;
+            esac
+            [ "$kind" = docs ] || docs_only=false
+            # Indented, so a file name can't be read as a workflow command (those start at the beginning of a line).
+            printf '  %-4s  %s\n' "$kind" "$f"
+          done
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+          echo "Documentation only: $docs_only"
+
   backend:
+    needs: changes
+    # Runs unless `changes` said "documentation only". If `changes` itself fails, its output is empty and this runs:
+    # a broken classifier must never turn into a skipped (passing) required check.
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     runs-on: ubuntu-latest
     defaults: { run: { working-directory: backend } }
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with: { python-version-file: .python-version }
       # Only the pinned versions, checked against their hashes (requirements files: see pin-requirements.sh).
       - run: pip install --require-hashes -r requirements-dev.txt
       - run: pip install --no-deps --no-build-isolation -e .
       - run: pytest -q
   dependencies:
+    # Security: always runs (pip-audit, and the hash-pinned requirements files in step). No `needs`, no `if`.
     runs-on: ubuntu-latest
     defaults: { run: { working-directory: backend } }
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with: { python-version-file: .python-version }
       - run: pip install --require-hashes -r requirements-tools.txt
       - name: The requirements files match pyproject.toml and requirements-tools.in
@@ -41,11 +93,14 @@ jobs:
           pip-audit --require-hashes --disable-pip -r requirements.txt -r requirements-dev.txt
           pip-audit --require-hashes --disable-pip -r requirements-tools.txt
   frontend:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     runs-on: ubuntu-latest
     defaults: { run: { working-directory: frontend } }
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with: { node-version: "22", cache: npm, cache-dependency-path: frontend/package-lock.json }
       - run: npm ci
       - run: npm run lint
@@ -55,11 +110,14 @@ jobs:
   terraform:
     # deploy/terraform: formatting, validation against the provider, and terraform test (a simulated AWS provider).
     # Nothing here signs in to AWS or reads Terraform state.
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     runs-on: ubuntu-latest
     env: { TF_IN_AUTOMATION: "1", TF_INPUT: "0" }
     defaults: { run: { working-directory: deploy/terraform } }
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
       # Pinned by commit; Dependabot moves the pin and its comment together.
       - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:

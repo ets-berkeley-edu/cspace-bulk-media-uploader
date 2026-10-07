@@ -1,0 +1,5 @@
+# gitleaks findings that are not secrets, one fingerprint per line (gitleaks prints it with each finding).
+# Every entry needs a reason. Review any change to this file closely: an entry here silences the scan.
+
+# An S3 object key in a test ("jobs/x/thumbs/early"), matched by generic-api-key.
+449fce06919d8f43823ec5041d2f6072bd4266ce:backend/tests/test_thumbnails.py:generic-api-key:69
