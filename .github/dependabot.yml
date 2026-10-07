@@ -15,6 +15,12 @@ updates:
   - package-ecosystem: npm
     directory: /frontend
     schedule: { interval: weekly, day: monday, time: "06:00", timezone: America/Los_Angeles }
+    ignore:
+      # ESLint 10 waits until eslint-plugin-import supports it (or we move to eslint-plugin-import-x).
+      - dependency-name: "eslint"
+        update-types: [version-update:semver-major]
+      - dependency-name: "@eslint/js"
+        update-types: [version-update:semver-major]
     groups:
       # Minor and patch updates together; a major update (a new Vue or Vuetify, say) comes as its own PR.
       frontend:
