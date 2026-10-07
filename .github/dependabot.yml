@@ -31,6 +31,9 @@ updates:
       # Vuetify 4 is a deliberate upgrade, done on its own branch after the UI review.
       - dependency-name: "vuetify"
         update-types: [version-update:semver-major]
+      # @types/node follows the Node we run (22, see the docker ignore); move both together.
+      - dependency-name: "@types/node"
+        update-types: [version-update:semver-major]
     groups:
       # Minor and patch updates together; a major update (a new Vue or Vuetify, say) comes as its own PR.
       frontend:
