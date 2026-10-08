@@ -18,14 +18,14 @@ output "running" {
   value       = var.running
 }
 
-output "cspace_url" {
-  description = "The CollectionSpace server this environment was deployed for; ./bmu aws refuses to change it."
-  value       = var.cspace_url
+output "tenants" {
+  description = "The museums this environment serves, each with its CollectionSpace server."
+  value       = var.tenants
 }
 
-output "tenant" {
-  description = "The CollectionSpace tenant this environment was deployed for; ./bmu aws refuses to change it."
-  value       = var.tenant
+output "museums" {
+  description = "The same as tenants, as \"museum=server museum=server\" for ./bmu aws, which refuses to change a deployed museum's server (deploy/aws.sh, check_museums)."
+  value       = join(" ", [for m, url in var.tenants : "${m}=${url}"])
 }
 
 output "simulated_cspace" {
@@ -55,7 +55,7 @@ output "worker_log_group" {
   value = aws_cloudwatch_log_group.worker.name
 }
 
-output "reader_secret" {
-  description = "The secret that holds the read-only CollectionSpace account's sign-in; set its value by hand (deploy/README.md)."
-  value       = aws_secretsmanager_secret.reader.name
+output "reader_secrets" {
+  description = "Each museum's secret holding its read-only CollectionSpace account's sign-in; set with ./bmu aws reader-secret <museum>."
+  value       = { for m, secret in aws_secretsmanager_secret.reader : m => secret.name }
 }

@@ -33,6 +33,7 @@ variables {
   env_name      = "dev"
   image_uri     = "123456789012.dkr.ecr.us-west-2.amazonaws.com/bmu-dev:abc1234"
   allowed_cidrs = ["203.0.113.7/32", "198.51.100.0/24"]
+  tenants       = { pahma = "https://pahma.qa.collectionspace.org" }
 }
 
 run "names_and_sizes" {
@@ -96,17 +97,62 @@ run "passwords_are_not_backed_up_and_demo_is_off" {
   }
 }
 
-run "the_reader_secret_is_created_empty_and_named_for_the_environment" {
+run "each_museum_has_its_reader_secret_staging_key_and_prefixes" {
   command = plan
 
-  assert {
-    condition     = aws_secretsmanager_secret.reader.name == "${local.name}/cspace-reader"
-    error_message = "The read-only account's secret is named bmu-<env>/cspace-reader."
+  variables {
+    tenants = { pahma = "https://pahma.qa.collectionspace.org", bampfa = "https://bampfa.qa.collectionspace.org" }
   }
 
   assert {
-    condition     = aws_secretsmanager_secret.reader.recovery_window_in_days == (var.protect_data ? 30 : 0)
-    error_message = "A trial environment's secret is deleted at once, so the environment can be created again."
+    condition     = sort([for s in aws_secretsmanager_secret.reader : s.name]) == tolist(["bmu-dev/cspace-reader/bampfa", "bmu-dev/cspace-reader/pahma"])
+    error_message = "Each museum's read-only account has its secret, bmu-<env>/cspace-reader/<museum>."
+  }
+
+  assert {
+    condition     = alltrue([for s in aws_secretsmanager_secret.reader : s.recovery_window_in_days == 0])
+    error_message = "A trial environment's secrets are deleted at once, so the environment can be created again."
+  }
+
+  assert {
+    condition     = sort([for a in aws_kms_alias.staging : a.name]) == tolist(["alias/bmu-dev-staging-bampfa", "alias/bmu-dev-staging-pahma"])
+    error_message = "Each museum has its staging key, alias/bmu-<env>-staging-<museum>."
+  }
+
+  assert {
+    condition     = tolist(local.museum_objects["bampfa"]) == tolist(["arn:aws:s3:::bmu-dev-staging-123456789012-us-west-2/staging/bampfa/*", "arn:aws:s3:::bmu-dev-staging-123456789012-us-west-2/audit/bampfa/*"])
+    error_message = "A museum's key may be used only for objects under its own staging/ and audit/ prefixes."
+  }
+
+  assert {
+    condition     = jsondecode(local.app_environment["BMU_TENANTS"]) == { bampfa = "https://bampfa.qa.collectionspace.org", pahma = "https://pahma.qa.collectionspace.org" }
+    error_message = "The app is told the museums and their servers (BMU_TENANTS)."
+  }
+
+  assert {
+    # (The keys' and secrets' ARNs are known only after apply, so only their museums are checked here;
+    # backend/tests/test_deploy.py checks the settings' form.)
+    condition     = sort(keys(aws_kms_key.staging)) == tolist(["bampfa", "pahma"]) && sort(keys(aws_secretsmanager_secret.reader)) == tolist(["bampfa", "pahma"])
+    error_message = "Each museum has a staging key and a read-only account's secret, which the app is told of."
+  }
+
+  assert {
+    condition     = output.museums == "bampfa=https://bampfa.qa.collectionspace.org pahma=https://pahma.qa.collectionspace.org"
+    error_message = "./bmu aws reads the museums and their servers from the museums output (deploy/aws.sh, check_museums)."
+  }
+
+  assert {
+    condition     = !one(aws_s3_bucket_server_side_encryption_configuration.staging.rule).bucket_key_enabled
+    error_message = "S3 Bucket Keys are off, so CloudTrail records each file's use of its museum's key."
+  }
+}
+
+run "the_worker_has_one_vcpu_for_its_threads" {
+  command = plan
+
+  assert {
+    condition     = aws_ecs_task_definition.worker.cpu == "1024" && aws_ecs_task_definition.worker.memory == "2048" && aws_ecs_task_definition.web.cpu == "256" && aws_ecs_task_definition.web.memory == "1024"
+    error_message = "By default the worker has 1 vCPU and 2 GB (one thread per museum), the web app 0.25 vCPU and 1 GB."
   }
 }
 
@@ -167,17 +213,16 @@ run "a_bad_address_is_refused" {
   expect_failures = [var.allowed_cidrs]
 }
 
-run "the_collectionspace_server_is_recorded_for_the_server_check" {
+run "the_museums_are_recorded_for_the_server_check" {
   command = plan
 
   variables {
-    cspace_url = "https://cspace.example.org"
-    tenant     = "pahma"
+    tenants = { pahma = "https://cspace.example.org" }
   }
 
   assert {
-    condition     = output.cspace_url == "https://cspace.example.org" && output.tenant == "pahma"
-    error_message = "./bmu aws reads cspace_url and tenant from the state to refuse a change of server (deploy/aws.sh, check_server)."
+    condition     = output.tenants == tomap({ pahma = "https://cspace.example.org" }) && output.museums == "pahma=https://cspace.example.org"
+    error_message = "./bmu aws reads the museums from the state to refuse a change of a museum's server (deploy/aws.sh, check_museums)."
   }
 }
 
@@ -185,10 +230,30 @@ run "a_server_address_with_a_path_or_trailing_slash_is_refused" {
   command = plan
 
   variables {
-    cspace_url = "https://cspace.example.org/"
+    tenants = { pahma = "https://cspace.example.org/" }
   }
 
-  expect_failures = [var.cspace_url]
+  expect_failures = [var.tenants]
+}
+
+run "no_museum_is_refused" {
+  command = plan
+
+  variables {
+    tenants = {}
+  }
+
+  expect_failures = [var.tenants]
+}
+
+run "a_museum_name_that_cant_be_part_of_a_name_is_refused" {
+  command = plan
+
+  variables {
+    tenants = { "Pahma QA" = "https://pahma.qa.collectionspace.org" }
+  }
+
+  expect_failures = [var.tenants]
 }
 
 run "the_simulated_collectionspace_is_off_by_default" {
@@ -210,7 +275,7 @@ run "the_simulated_collectionspace_runs_in_the_environment" {
 
   variables {
     simulated_cspace     = true
-    cspace_url           = "http://fakecspace.bmu-dev.internal:8180"
+    tenants              = { pahma = "http://fakecspace.bmu-dev.internal:8180" }
     fakecspace_image_uri = "123456789012.dkr.ecr.us-west-2.amazonaws.com/bmu-dev-fakecspace:abc1234"
   }
 
@@ -225,7 +290,7 @@ run "the_simulated_collectionspace_runs_in_the_environment" {
   }
 
   assert {
-    condition     = local.fakecspace_url == var.cspace_url && local.app_environment["BMU_CSPACE_SIMULATED"] == "true"
+    condition     = var.tenants["pahma"] == local.fakecspace_url && local.app_environment["BMU_CSPACE_SIMULATED"] == "true"
     error_message = "The BMU uses the simulator's address and knows it is the simulator."
   }
 
@@ -240,7 +305,7 @@ run "the_simulator_is_paused_with_the_others" {
 
   variables {
     simulated_cspace     = true
-    cspace_url           = "http://fakecspace.bmu-dev.internal:8180"
+    tenants              = { pahma = "http://fakecspace.bmu-dev.internal:8180" }
     fakecspace_image_uri = "123456789012.dkr.ecr.us-west-2.amazonaws.com/bmu-dev-fakecspace:abc1234"
     running              = false
   }
@@ -256,7 +321,7 @@ run "the_simulator_is_refused_where_data_is_protected" {
 
   variables {
     simulated_cspace     = true
-    cspace_url           = "http://fakecspace.bmu-dev.internal:8180"
+    tenants              = { pahma = "http://fakecspace.bmu-dev.internal:8180" }
     fakecspace_image_uri = "x:1"
     protect_data         = true
   }
@@ -269,7 +334,7 @@ run "the_simulator_needs_its_image" {
 
   variables {
     simulated_cspace = true
-    cspace_url       = "http://fakecspace.bmu-dev.internal:8180"
+    tenants          = { pahma = "http://fakecspace.bmu-dev.internal:8180" }
   }
 
   expect_failures = [var.fakecspace_image_uri]
@@ -283,5 +348,17 @@ run "with_the_simulator_the_bmu_must_use_its_address" {
     fakecspace_image_uri = "x:1"
   }
 
-  expect_failures = [var.cspace_url]
+  expect_failures = [var.tenants]
+}
+
+run "the_simulator_is_pahma_alone" {
+  command = plan
+
+  variables {
+    simulated_cspace     = true
+    fakecspace_image_uri = "x:1"
+    tenants              = { pahma = "http://fakecspace.bmu-dev.internal:8180", bampfa = "https://bampfa.qa.collectionspace.org" }
+  }
+
+  expect_failures = [var.tenants]
 }

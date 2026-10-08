@@ -343,6 +343,8 @@ All four done by Richard on October 7, 2026, with the personal-dev environment (
 
 ## 7. The simulated CollectionSpace in AWS (45 minutes, mostly waiting)
 
+Run this after section 10 (moved there on October 7: the deployment now lists museums). Since PR D, `sim.conf` copied from `personal-dev.conf` has a `CSPACE_TENANTS` line, which the simulator ignores (its museums are PAHMA alone), and `./bmu aws status --env sim` lists "pahma: the simulated CollectionSpace, in the environment" with its read-only account under it. Skip "Before deploying": personal-dev is deployed fresh in section 10.
+
 Branch `feature/simulated-cspace`. Claude ran the backend suite and `deploy/aws.sh` against stand-ins for `aws`, `terraform`, `docker` and `curl` (`backend/tests/test_aws_script.py`). Claude could not run Terraform, build either image or reach AWS. The simulator needs its own environment, because personal-dev's server is PAHMA QA and can't change: these steps use a second environment in the same account, `sim`, and destroy it at the end.
 
 **Before deploying**
@@ -354,7 +356,7 @@ Branch `feature/simulated-cspace`. Claude ran the backend suite and `deploy/aws.
 
 - [ ] Create `deploy/environments/sim.conf` by copying `personal-dev.conf` (don't commit it), and `deploy/environments/sim.local.conf` with `BMU_ENV_NAME=sim`, `SIMULATED_CSPACE=true` and `ALWAYS_RUN_TIME=true`.
 - [ ] `./bmu aws deploy --env sim`: answer the account question; there's no "is it yours?" question (no `sim` state yet). Two images build (`deploy/Dockerfile`, then `deploy/fakecspace.Dockerfile`), tagged `-dirty` because `sim.conf` isn't committed; the plan creates the `fakecspace` service, the namespace `bmu-sim.internal`, its security group and log group; after the apply, "The read-only account for interns' checks is the simulator's bmureader." and "It uses the simulated CollectionSpace".
-- [ ] `./bmu aws status --env sim`: `web`, `worker` and `fakecspace` each "running 1 of 1"; "CollectionSpace: the simulated one"; the read-only account "set".
+- [ ] `./bmu aws status --env sim`: `web`, `worker` and `fakecspace` each "running 1 of 1"; "pahma: the simulated CollectionSpace"; its read-only account "set".
 - [ ] Open the address. The label reads "AWS · sim · simulated CollectionSpace", without the warning colour of a real CollectionSpace. Sign in as `admin` / `admin`.
 - [ ] Add two files, submit, and let the job run (it starts at once with `ALWAYS_RUN_TIME`). Finished jobs shows it completed, with CSIDs. Watch `./bmu aws logs web --env sim`, `logs worker` and `logs fakecspace` for errors and `AccessDenied`.
 - [ ] Sign in as `intern` / `intern` and open a draft: the languages list loads (the reader account works).
@@ -380,6 +382,45 @@ Branch `feature/museum-sign-in` (PR C of the multi-museum work). The sign-in pag
 - [ ] CI on the pull request passes.
 - [ ] `./bmu down all`, then `./bmu up sim`. The sign-in page looks as before (no Museum list); sign in as `admin` / `admin`; the app bar shows PAHMA.
 - [ ] Open the UI mockup (`./bmu open mockup`): the sign-in card starts with a Museum list of the mockup's museums, above the username. Choose one and sign in: the mockup shows that museum. The dashed "Mockup only" box no longer has a Tenant list.
+
+## 10. One deployment for several museums: the deployment (90 minutes, mostly waiting)
+
+Branch `feature/museum-deploy` (PR D of the multi-museum work; design: One deployment for several museums). The settings list the museums (`CSPACE_TENANTS`); Terraform gives each museum its own staging key and read-only account's secret, with S3 Bucket Keys off; `./bmu aws` checks the museums against the deployed ones, sets a museum's read-only account (`reader-secret <museum>`) and shows each museum in `status`; the worker has 1 vCPU. Claude ran the backend suite (with `deploy/aws.sh` against stand-ins for `aws`, `terraform`, `docker` and `curl`) and `fmt` on the Terraform code (with OpenTofu, since Terraform couldn't be downloaded). Claude could not run `terraform validate` or `terraform test`, build an image or reach AWS. personal-dev was destroyed after PR B, so this is a first deploy. Only PAHMA has a configuration: a second museum is tried with a temporary copy of it, `pahma2`, on the same PAHMA QA server.
+
+**Before deploying**
+
+- [ ] Locally, the `TF_DATA_DIR` checks in `deploy/README.md` ("Checking the Terraform code") pass, `terraform test` with 21 runs. Then CI on the pull request: `backend`, `frontend`, `dependencies` and `terraform` pass.
+- [ ] If `deploy/environments/personal-dev.local.conf` sets `TENANT` or `CSPACE_URL`, replace them with one `CSPACE_TENANTS` line; otherwise `./bmu aws` stops with "not both".
+- [ ] `aws sso login --profile bmu-personal`.
+
+**personal-dev, one museum**
+
+- [ ] `./bmu aws deploy`. The plan creates `aws_kms_key.staging["pahma"]` with the alias `alias/bmu-dev-staging-pahma`, the secret `bmu-dev/cspace-reader/pahma`, the worker's task definition with `cpu = 1024`, and `BMU_TENANTS`, `BMU_S3_KMS_KEY_IDS` and `BMU_READER_SECRET_IDS` in both task definitions. After the apply: "Careful: jobs run here create real records in each museum's CollectionSpace", then "pahma: https://pahma.qa.collectionspace.org".
+- [ ] `./bmu aws status`: under "Museums", "pahma: https://pahma.qa.collectionspace.org" and "read-only account: NOT SET (./bmu aws reader-secret pahma)".
+- [ ] `./bmu aws reader-secret` (no museum needed with one): it names pahma and its server; enter the QA reader account. `status` then reads "set, last changed <today>".
+- [ ] Open the address and sign in with your PAHMA QA account: no Museum list; the header shows PAHMA.
+- [ ] Add two files (thumbnails appear), submit, and let the job run at PAHMA's run time, or set `ALWAYS_RUN_TIME=true` in the `.local.conf` and deploy first. Finished jobs shows it completed. Watch `./bmu aws logs web` and `logs worker` for `AccessDenied` or `KMS` errors: those would mean a key or bucket policy refuses what the app does.
+- [ ] Each file uses its museum's key, without a Bucket Key. While a draft has files: `aws s3api list-objects-v2 --profile bmu-personal --bucket <the staging bucket> --prefix staging/pahma/ --query 'Contents[].Key'` (`terraform output staging_bucket` after `./bmu aws init`, or the S3 console), then `aws s3api head-object --profile bmu-personal --bucket <bucket> --key <one key>`: `SSEKMSKeyId` is the key behind `alias/bmu-dev-staging-pahma` (`aws kms describe-key --profile bmu-personal --key-id alias/bmu-dev-staging-pahma --query KeyMetadata.Arn`) and there is no `"BucketKeyEnabled": true`.
+- [ ] Optional: CloudTrail, Event history, Event source `kms.amazonaws.com`: each upload has a `GenerateDataKey` whose encryption context `aws:s3:arn` names the file.
+- [ ] Sign in as an intern and open a draft open to interns: the languages list loads.
+
+**A second museum (temporary)**
+
+- [ ] Make the temporary museum (don't commit it): `sed -e 's/^key: pahma$/key: pahma2/' -e 's/^name: PAHMA$/name: PAHMA copy/' backend/bmu/tenants/pahma.yaml > backend/bmu/tenants/pahma2.yaml`. In `personal-dev.local.conf`: `CSPACE_TENANTS="pahma=https://pahma.qa.collectionspace.org pahma2=https://pahma.qa.collectionspace.org"`.
+- [ ] `./bmu aws plan`: "Adding the museum pahma2 (https://pahma.qa.collectionspace.org)". The plan adds pahma2's key, alias and secret, and changes the bucket policy, the roles' policies and both task definitions. Nothing of pahma's is replaced.
+- [ ] `./bmu aws deploy` (the image tag ends in `-dirty`). The sign-in page now starts with a Museum list: PAHMA and PAHMA copy.
+- [ ] `./bmu aws reader-secret` is refused ("one of: pahma pahma2"); `./bmu aws reader-secret pahma2` sets pahma2's (the same QA reader account). `status` lists both museums, each "set".
+- [ ] Sign in to PAHMA copy with your QA account. The header shows PAHMA copy, and PAHMA's jobs aren't listed. Add a file: `list-objects-v2 --prefix staging/pahma2/` shows it, and `head-object` shows pahma2's key (`alias/bmu-dev-staging-pahma2`).
+- [ ] Server change refused: set pahma2 to `https://example.org` in `CSPACE_TENANTS`; `./bmu aws plan` stops with "'personal-dev' was deployed with pahma2 on https://pahma.qa.collectionspace.org, but its settings now say https://example.org". Put it back.
+- [ ] Removal refused with unfinished jobs: keep the draft from above, take pahma2 out of `CSPACE_TENANTS`, and run `./bmu aws plan`: "pahma2 is no longer in the settings, but it has 1 unfinished job(s)". Nothing changes.
+- [ ] Put pahma2 back, sign in to PAHMA copy, delete the draft. Take pahma2 out again: `./bmu aws plan` explains the removal and says "(./bmu aws deploy asks before removing it.)"; the plan destroys pahma2's key, alias and secret.
+- [ ] `./bmu aws deploy`: type something else at "Type the museum's name (pahma2)": "Stopped; nothing was changed". Run it again and type `pahma2`. After the apply the sign-in page has no Museum list. In the KMS console, pahma2's key is "Pending deletion" (7 days).
+- [ ] Delete `backend/bmu/tenants/pahma2.yaml`, and deploy once more so the image is clean (its tag no longer ends in `-dirty`).
+
+**Then**
+
+- [ ] Section 7 (the simulated CollectionSpace), as amended above.
+- [ ] `./bmu aws pause` when you're done.
 
 ## Not tests, but still open
 

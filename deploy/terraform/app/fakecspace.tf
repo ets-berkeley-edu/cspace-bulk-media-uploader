@@ -6,7 +6,8 @@
 # connect to it. Its own image and repository (../registry), so the production image never contains it.
 
 locals {
-  # The address the BMU uses. ./bmu aws passes the same as cspace_url (deploy/aws.sh, sim_url); variables.tf checks it.
+  # PAHMA's address with the simulator. ./bmu aws passes it as tenants = {pahma = ...} (deploy/aws.sh, sim_url);
+  # variables.tf checks it.
   fakecspace_url = "http://fakecspace.${local.name}.internal:8180"
   simulated      = var.simulated_cspace ? 1 : 0
 }

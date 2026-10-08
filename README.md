@@ -415,9 +415,9 @@ python scripts/check_cspace.py --create                          # also creates 
 - **The read-only service account** is the one CollectionSpace sign-in the BMU keeps (design: Roles). Interns have
   no permissions in CollectionSpace, so they can't browse records or images there; the lookups their drafts need
   are made with one account per museum whose role, BMU_Reader, can read and nothing else.
-  - Its user name and password are a secret in AWS Secrets Manager (`BMU_READER_SECRET_ID`). Only the web app's
-    task role may read it. Terraform creates the secret empty; `./bmu aws reader-secret` sets it, so the password is
-    never in the code, a settings file or Terraform's state. The web app keeps it in memory for 5 minutes
+  - Its user name and password are a secret in AWS Secrets Manager, one per museum (`BMU_READER_SECRET_IDS`). Only
+    the web app's task role may read them. Terraform creates each secret empty; `./bmu aws reader-secret <museum>`
+    sets it, so the password is never in the code, a settings file or Terraform's state. The web app keeps it in memory for 5 minutes
     (`BMU_READER_CACHE_SECONDS`) and never writes it to a table, a file or a log.
   - It is used only for an intern's checks, autocomplete, vocabularies and date previews. Staff always use their
     own sign-in, and every record is created with the submitting staff member's credentials.

@@ -2,6 +2,7 @@
 (the same keys, index and TTL as Storage.create_tables makes locally), sets only settings that exist, keeps Demo
 tools off, and runs the web app and the worker the way the image expects. Terraform's own checks (terraform validate,
 terraform test) cover the configuration itself (deploy/README.md)."""
+import json
 import re
 from pathlib import Path
 
@@ -75,8 +76,13 @@ def test_containers_set_only_real_settings_and_never_demo():
     for name in env:
         assert name.startswith("BMU_") and name[4:].lower() in fields, name
     assert env["BMU_DEMO"] == "false" and env["BMU_CRYPTO_MODE"] == "kms" and env["BMU_COOKIE_SECURE"] == "true"
-    assert {"BMU_KMS_SESSION_KEY_ID", "BMU_KMS_JOB_KEY_ID", "BMU_S3_KMS_KEY_ID", "BMU_S3_BUCKET"} <= set(env)
+    assert {"BMU_KMS_SESSION_KEY_ID", "BMU_KMS_JOB_KEY_ID", "BMU_S3_KMS_KEY_IDS", "BMU_S3_BUCKET", "BMU_TENANTS"} <= set(env)
     assert "BMU_CREATE_TABLES" not in env and "BMU_SESSION_KEY_B64" not in env  # tables and keys come from Terraform
+    # several museums (design: One deployment for several museums): no single-museum setting to fall back on
+    assert not {"BMU_TENANT", "BMU_CSPACE_URL", "BMU_S3_KMS_KEY_ID", "BMU_READER_SECRET_ID"} & set(env)
+    assert env["BMU_TENANTS"] == "${jsonencode(var.tenants)}"
+    assert env["BMU_S3_KMS_KEY_IDS"] == "${jsonencode({for m, key in aws_kms_key.staging : m => key.arn})}"
+    assert env["BMU_READER_SECRET_IDS"] == "${jsonencode({for m, secret in aws_secretsmanager_secret.reader : m => secret.arn})}"
     assert env["BMU_TABLE_PREFIX"] == "${local.name}"  # the tables are named ${local.name}-<table>
     source = (APP / "ecs.tf").read_text()
     web, worker = (source[source.index(f'resource "aws_ecs_task_definition" "{n}"'):] for n in ("web", "worker"))
@@ -166,8 +172,8 @@ def test_each_role_has_only_what_its_code_uses():
     assert worker["SessionsSweep"] == ({"dynamodb:Scan", "dynamodb:DeleteItem"}, [SESSIONS])
     assert worker["CredentialsReadAndDelete"] == ({"dynamodb:GetItem", "dynamodb:DeleteItem", "dynamodb:ConditionCheckItem"}, [CREDENTIALS])
     assert "s3:PutObject" in web["StagedFiles"][0] and "s3:PutObject" not in worker["StagedFiles"][0]  # only the web app adds files
-    # the read-only CollectionSpace account's secret: the web app reads that one secret, and nothing else may
-    assert web["ReaderSecret"] == ({"secretsmanager:GetSecretValue"}, ["${aws_secretsmanager_secret.reader.arn}"])
+    # the read-only CollectionSpace accounts' secrets: the web app reads those, one per museum, and nothing else may
+    assert web["ReaderSecrets"] == ({"secretsmanager:GetSecretValue"}, "${[for secret in aws_secretsmanager_secret.reader : secret.arn]}")
     others = {**_statements("task_common"), **worker}
     assert not any(a.startswith("secretsmanager:") for actions, _ in others.values() for a in actions)
     roles = _blocks("iam.tf", "resource", "aws_iam_role_policy")
@@ -216,11 +222,12 @@ def test_the_reader_accounts_secret_is_created_empty_and_only_named_in_the_setti
     """Design (Roles, The read-only service account): Terraform makes the secret but never its value, so the
     password is not in the code or in Terraform's state; the app is told only which secret to read."""
     text = (APP / "secrets.tf").read_text()
-    assert _blocks("secrets.tf", "resource", "aws_secretsmanager_secret")["reader"]["name"] == "${local.name}/cspace-reader"
+    reader = _blocks("secrets.tf", "resource", "aws_secretsmanager_secret")["reader"]
+    assert reader["name"] == "${local.name}/cspace-reader/${each.key}" and reader["for_each"] == "${var.tenants}"  # one per museum
     assert "aws_secretsmanager_secret_version" not in "".join(p.read_text() for p in APP.glob("*.tf"))
     assert "secret_string" not in text
     env = _local("ecs.tf", "app_environment")
-    assert env["BMU_READER_SECRET_ID"] == "${aws_secretsmanager_secret.reader.arn}"
+    assert "aws_secretsmanager_secret.reader" in env["BMU_READER_SECRET_IDS"]
     assert "BMU_READER_USER" not in env and "BMU_READER_PASSWORD" not in env
     assert "reader.py" not in (Path(appmod.__file__).parent / "worker.py").read_text()  # the worker never uses it
 
@@ -229,7 +236,7 @@ def test_what_the_app_writes_to_s3_names_the_staging_key_as_the_bucket_policy_re
     """The bucket refuses a PutObject without SSE-KMS and the staging key (s3.tf: StringNotEqualsIfExists also
     refuses a request that names neither). Thumbnails and audit detail are written by the app itself."""
     policy = (APP / "s3.tf").read_text()
-    assert policy.count("StringNotEqualsIfExists") == 2 and "OnlyKmsEncryptedUploads" in policy and "OnlyTheStagingKey" in policy
+    assert policy.count("StringNotEqualsIfExists") == 2 and "OnlyKmsEncryptedUploads" in policy and "OnlyTheStagingKeyOf" in policy
     sent = []
     for key_id in (None, "arn:aws:kms:us-west-2:111122223333:key/abc"):
         settings.s3_kms_key_id = key_id
@@ -239,3 +246,66 @@ def test_what_the_app_writes_to_s3_names_the_staging_key_as_the_bucket_policy_re
     assert "ServerSideEncryption" not in sent[0]  # locally: no key, plain upload
     assert sent[1]["ServerSideEncryption"] == "aws:kms" and sent[1]["SSEKMSKeyId"] == "arn:aws:kms:us-west-2:111122223333:key/abc"
     assert "put_object(" not in (Path(appmod.__file__).parent / "storage.py").read_text().replace("self.s3.put_object(Bucket=self.s.s3_bucket, Key=key, Body=data, ContentType=content_type, **sse)", "")
+
+
+# ---- several museums (design: One deployment for several museums) ---------------------------------------------------
+def test_each_museum_has_its_staging_key_limited_to_its_objects():
+    key = _blocks("kms.tf", "resource", "aws_kms_key")["staging"]
+    assert key["for_each"] == "${var.tenants}" and key["policy"] == "${data.aws_iam_policy_document.staging_key[each.key].json}"
+    assert _blocks("kms.tf", "resource", "aws_kms_alias")["staging"]["name"] == "alias/${local.name}-staging-${each.key}"
+    doc = _blocks("kms.tf", "data", "aws_iam_policy_document")["staging_key"]
+    deny = next(s for s in doc["statement"] if s.get("effect") == "Deny")
+    assert deny["principals"] == [{"type": "AWS", "identifiers": ["*"]}]
+    assert {"kms:Decrypt", "kms:GenerateDataKey*", "kms:Encrypt", "kms:ReEncrypt*"} == set(deny["actions"])
+    # StringNotLike: a request whose context isn't one of the museum's objects, or has none (not through S3), is refused
+    assert deny["condition"] == [{"test": "StringNotLike", "variable": "kms:EncryptionContext:aws:s3:arn",
+                                  "values": "${local.museum_objects[each.key]}"}]
+    objects = _local("kms.tf", "museum_objects")
+    assert "${local.staging_bucket}/staging/${m}/*" in objects and "${local.staging_bucket}/audit/${m}/*" in objects
+    # S3 Bucket Keys off: the encryption context is each object's ARN, and CloudTrail records each file's use
+    sse = _blocks("s3.tf", "resource", "aws_s3_bucket_server_side_encryption_configuration")["staging"]["rule"][0]
+    assert sse["bucket_key_enabled"] is False and "kms_master_key_id" not in sse["apply_server_side_encryption_by_default"][0]
+
+
+def test_the_bucket_takes_each_museums_files_only_under_its_prefixes_with_its_key():
+    doc = _blocks("s3.tf", "data", "aws_iam_policy_document")["staging_bucket"]
+    prefixes = next(s for s in doc["statement"] if s["sid"] == "OnlyTheMuseumsPrefixes")
+    assert prefixes["effect"] == "Deny" and prefixes["actions"] == ["s3:PutObject"]
+    assert "/staging/${m}/*" in prefixes["not_resources"] and "/audit/${m}/*" in prefixes["not_resources"]
+    per_museum = doc["dynamic"][0]["statement"]
+    assert per_museum["for_each"] == "${var.tenants}"
+    content = per_museum["content"][0]
+    assert content["resources"] == ["${aws_s3_bucket.staging.arn}/staging/${statement.key}/*",
+                                    "${aws_s3_bucket.staging.arn}/audit/${statement.key}/*"]
+    assert content["condition"][0]["values"] == ["${aws_kms_key.staging[statement.key].arn}"]
+    assert _statements("task_common")["StagingKeys"][1] == "${[for key in aws_kms_key.staging : key.arn]}"
+
+
+def test_storage_writes_only_where_the_bucket_policy_allows():
+    """The bucket allows writes only under staging/<museum>/ and audit/<museum>/ (above); Storage refuses any other
+    key before asking S3 (storage.py, _kms_key)."""
+    storage = (Path(appmod.__file__).parent / "storage.py").read_text()
+    assert 'f"staging/{tenant}/' in storage and 'f"audit/{tenant}/' in storage
+
+
+def test_what_terraform_passes_is_what_the_app_reads(monkeypatch):
+    """BMU_TENANTS, BMU_S3_KMS_KEY_IDS and BMU_READER_SECRET_IDS are JSON objects (jsonencode in ecs.tf), read into
+    Settings' dicts; with them, every museum has its server, key and secret, with nothing to fall back on."""
+    tenants = {"bampfa": "https://bampfa.qa.collectionspace.org", "pahma": "https://pahma.qa.collectionspace.org"}
+    monkeypatch.setenv("BMU_TENANTS", json.dumps(tenants))
+    monkeypatch.setenv("BMU_S3_KMS_KEY_IDS", json.dumps({m: f"arn:aws:kms:us-west-2:111122223333:key/{m}" for m in tenants}))
+    monkeypatch.setenv("BMU_READER_SECRET_IDS", json.dumps({m: f"arn:aws:secretsmanager:us-west-2:111122223333:secret:r-{m}" for m in tenants}))
+    settings = Settings(_env_file=None)
+    assert settings.museums() == tenants
+    assert settings.kms_key_for("bampfa").endswith("key/bampfa") and settings.reader_secret_for("pahma").endswith("r-pahma")
+    assert settings.s3_kms_key_id is None and settings.reader_secret_id is None
+
+
+def test_each_museum_in_the_settings_has_a_configuration():
+    for conf in (DEPLOY / "environments").glob("*.conf"):
+        if conf.name.endswith(".local.conf"):
+            continue  # never read: not committed, and may hold an account number
+        line = next(l for l in conf.read_text().splitlines() if l.startswith("CSPACE_TENANTS="))
+        for entry in line.split("=", 1)[1].strip('"').split():
+            museum = entry.split("=", 1)[0]
+            assert (Path(appmod.__file__).parent / "tenants" / f"{museum}.yaml").exists(), (conf.name, museum)

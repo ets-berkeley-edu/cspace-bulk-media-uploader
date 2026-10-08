@@ -60,7 +60,7 @@ resource "aws_iam_role_policy_attachment" "execution" {
 #   S3 audit/   put only                                  put only
 #
 # Neither role can delete or read an audit file, or change an audit item. The session and job keys are granted in
-# their key policies (kms.tf), not here.
+# their key policies (kms.tf), not here; the staging keys here, each limited to its museum's objects by its policy.
 locals {
   jobs_actions = [
     "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem",
@@ -104,10 +104,12 @@ data "aws_iam_policy_document" "task_common" {
     resources = [local.audit_objects]
   }
 
+  # Every museum's staging key: both roles serve every museum, so this is no separation between museums in IAM
+  # (design: One deployment for several museums). Each key's own policy limits it to its museum's objects (kms.tf).
   statement {
-    sid       = "StagingKey"
+    sid       = "StagingKeys"
     actions   = ["kms:GenerateDataKey", "kms:Decrypt"]
-    resources = [aws_kms_key.staging.arn]
+    resources = [for key in aws_kms_key.staging : key.arn]
   }
 }
 
@@ -120,11 +122,12 @@ data "aws_iam_policy_document" "web" {
     resources = [aws_dynamodb_table.main["sessions"].arn]
   }
 
-  # The read-only CollectionSpace account for interns' checks: only the web app reads it, and only this one secret.
+  # The read-only CollectionSpace accounts for interns' checks: only the web app reads them, and only these secrets,
+  # one per museum.
   statement {
-    sid       = "ReaderSecret"
+    sid       = "ReaderSecrets"
     actions   = ["secretsmanager:GetSecretValue"]
-    resources = [aws_secretsmanager_secret.reader.arn]
+    resources = [for secret in aws_secretsmanager_secret.reader : secret.arn]
   }
 
   # Saved with Submit job, deleted on Edit and when a job is deleted. The web app never reads a job's sign-in, and

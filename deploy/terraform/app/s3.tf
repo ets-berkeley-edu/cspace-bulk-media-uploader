@@ -127,12 +127,13 @@ resource "aws_s3_bucket_public_access_block" "staging" {
 resource "aws_s3_bucket_server_side_encryption_configuration" "staging" {
   bucket = aws_s3_bucket.staging.id
 
+  # Every upload names its museum's key (the bucket policy below refuses any other), so the default is never used:
+  # S3's own key, never a museum's. Bucket Keys off: S3 asks KMS for each object (kms.tf).
   rule {
-    bucket_key_enabled = true
+    bucket_key_enabled = false
 
     apply_server_side_encryption_by_default {
-      sse_algorithm     = "aws:kms"
-      kms_master_key_id = aws_kms_key.staging.arn
+      sse_algorithm = "aws:kms"
     }
   }
 }
@@ -237,8 +238,8 @@ data "aws_iam_policy_document" "staging_bucket" {
     }
   }
 
-  # Every PutObject must name SSE-KMS and the staging key: with IfExists, a request that names no encryption is
-  # refused too. The browser's uploads and the app's own writes (Storage.put_bytes) both name them.
+  # Every PutObject must name SSE-KMS and its museum's staging key: with IfExists, a request that names no
+  # encryption is refused too. The browser's uploads and the app's own writes (Storage.put_bytes) both name them.
   statement {
     sid       = "OnlyKmsEncryptedUploads"
     effect    = "Deny"
@@ -257,21 +258,39 @@ data "aws_iam_policy_document" "staging_bucket" {
     }
   }
 
+  # Nothing is written outside the museums' own prefixes, staging/<museum>/ and audit/<museum>/.
   statement {
-    sid       = "OnlyTheStagingKey"
-    effect    = "Deny"
-    actions   = ["s3:PutObject"]
-    resources = ["${aws_s3_bucket.staging.arn}/*"]
+    sid           = "OnlyTheMuseumsPrefixes"
+    effect        = "Deny"
+    actions       = ["s3:PutObject"]
+    not_resources = flatten([for m in keys(var.tenants) : ["${aws_s3_bucket.staging.arn}/staging/${m}/*", "${aws_s3_bucket.staging.arn}/audit/${m}/*"]])
 
     principals {
       type        = "*"
       identifiers = ["*"]
     }
+  }
 
-    condition {
-      test     = "StringNotEqualsIfExists"
-      variable = "s3:x-amz-server-side-encryption-aws-kms-key-id"
-      values   = [aws_kms_key.staging.arn]
+  # Each museum's prefixes take only that museum's key.
+  dynamic "statement" {
+    for_each = var.tenants
+
+    content {
+      sid       = "OnlyTheStagingKeyOf${statement.key}"
+      effect    = "Deny"
+      actions   = ["s3:PutObject"]
+      resources = ["${aws_s3_bucket.staging.arn}/staging/${statement.key}/*", "${aws_s3_bucket.staging.arn}/audit/${statement.key}/*"]
+
+      principals {
+        type        = "*"
+        identifiers = ["*"]
+      }
+
+      condition {
+        test     = "StringNotEqualsIfExists"
+        variable = "s3:x-amz-server-side-encryption-aws-kms-key-id"
+        values   = [aws_kms_key.staging[statement.key].arn]
+      }
     }
   }
 }
