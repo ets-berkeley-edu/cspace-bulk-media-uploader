@@ -10,7 +10,8 @@ export const useContextStore = defineStore('context', {
   state: () => ({
     config: {
       label: '',
-      realCollectionSpace: false
+      realCollectionSpace: false,
+      tenants: []
     } as BmuConfig,
     // The signed-in user, with their tenant and permissions; null when nobody is signed in.
     currentUser: null as Me | null,
@@ -32,7 +33,7 @@ export const useContextStore = defineStore('context', {
      */
     async init() {
       const [config, currentUser] = await Promise.all([
-        getConfig().catch(() => ({label: '', realCollectionSpace: false})),
+        getConfig().catch(() => ({label: '', realCollectionSpace: false, tenants: []})),
         getMyProfile().catch((error: Error) => {
           if (!(error instanceof ApiError && error.status === 401)) {
             this.snackbarReportError(error.message)
@@ -40,7 +41,7 @@ export const useContextStore = defineStore('context', {
           return null
         })
       ])
-      this.config = config
+      this.config = {...config, tenants: config.tenants || []}
       this.currentUser = currentUser
     },
     /** A page is ready: name it in the browser's title, and put the keyboard at its heading (or another element). */

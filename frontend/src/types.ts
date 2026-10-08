@@ -316,6 +316,14 @@ export interface ScreenReaderAlert {
 export interface BmuConfig {
   label: string
   realCollectionSpace: boolean
+  // The museums the BMU serves, for the sign-in page's choice (design: One deployment for several museums)
+  tenants: Museum[]
+}
+
+/** A museum (CollectionSpace tenant) the BMU serves. */
+export interface Museum {
+  key: string
+  name: string
 }
 
 /** The message shown at the top of the page by components/util/Snackbar.vue. */

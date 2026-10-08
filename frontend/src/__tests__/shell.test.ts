@@ -26,7 +26,8 @@ const schedule = {days: [1, 2, 3, 4, 5, 6, 7], start: '19:00', end: '', timezone
 type Reply = unknown | {status: number, body: unknown}
 let calls: {url: string, method: string, body?: string}[] = []
 let signedIn: Me | null = null
-let env = {label: 'Local · simulated CollectionSpace', realCollectionSpace: false}
+let env: {label: string, realCollectionSpace: boolean, tenants?: {key: string, name: string}[]} =
+  {label: 'Local · simulated CollectionSpace', realCollectionSpace: false}
 
 /** A stand-in BMU API. routes answers first; then sign-in, the environment and empty lists. */
 function stubApi(routes: (url: string, method: string) => Reply | undefined = () => undefined) {
@@ -122,6 +123,67 @@ describe('signing in', () => {
     const w = await mountApp('/login', {JobEditor: EditorStub})
     expect(router.currentRoute.value.path).toBe('/job')
     expect(w.find('.editor-stub').exists()).toBe(true)
+    w.unmount()
+  })
+})
+
+describe('choosing the museum (design: One deployment for several museums)', () => {
+  const museums = [{key: 'pahma', name: 'PAHMA'}, {key: 'bampfa', name: 'BAMPFA'}]
+  const bampfaMe = {...me, tenant: {...tenant, key: 'bampfa', name: 'BAMPFA'}} as Me
+
+  it('with one museum there is nothing to choose, and the sign-in sends none', async () => {
+    signedIn = null
+    env = {...env, tenants: [museums[0]]}
+    stubApi((url, method) => {
+      if (url === '/api/login' && method === 'POST') { signedIn = me; return me }
+    })
+    const w = await mountApp('/')
+    expect(w.find('#museum').exists()).toBe(false)
+    await w.find('#username').setValue('admin')
+    await w.find('#password').setValue('secret')
+    await w.find('form').trigger('submit')
+    await settle()
+    expect(calls.find(c => c.url === '/api/login')!.body).toBe('{"username":"admin","password":"secret"}')
+    w.unmount()
+  })
+
+  it('with several, the list asks for one first, signs in there, and shows it in the header', async () => {
+    signedIn = null
+    env = {...env, tenants: museums}
+    stubApi((url, method) => {
+      if (url === '/api/login' && method === 'POST') { signedIn = bampfaMe; return bampfaMe }
+    })
+    const w = await mountApp('/')
+    const select = w.find('#museum')
+    expect(select.findAll('option').map(o => o.text())).toEqual(['Choose your museum', 'PAHMA', 'BAMPFA'])
+    expect((select.element as HTMLSelectElement).value).toBe('')
+    await w.find('#username').setValue('admin')
+    await w.find('#password').setValue('secret')
+    await w.find('form').trigger('submit')
+    await settle()
+    expect(w.find('#sign-in-error').text()).toBe('Choose your museum.')
+    expect(calls.some(c => c.url === '/api/login')).toBe(false)
+    await select.setValue('bampfa')
+    await w.find('#password').setValue('secret')
+    await w.find('form').trigger('submit')
+    await settle()
+    expect(JSON.parse(calls.find(c => c.url === '/api/login')!.body!)).toEqual({username: 'admin', password: 'secret', tenant: 'bampfa'})
+    expect(w.find('#tenant-name').text()).toBe('BAMPFA')
+    expect(window.localStorage.getItem('bmu-museum')).toBe('bampfa')
+    w.unmount()
+  })
+
+  it('the last museum chosen in this browser is chosen again, if the BMU still serves it', async () => {
+    signedIn = null
+    env = {...env, tenants: museums}
+    window.localStorage.setItem('bmu-museum', 'bampfa')
+    stubApi()
+    let w = await mountApp('/')
+    expect((w.find('#museum').element as HTMLSelectElement).value).toBe('bampfa')
+    w.unmount()
+    window.localStorage.setItem('bmu-museum', 'ucjeps')
+    w = await mountApp('/')
+    expect((w.find('#museum').element as HTMLSelectElement).value).toBe('')
     w.unmount()
   })
 })

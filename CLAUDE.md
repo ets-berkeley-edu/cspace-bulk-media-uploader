@@ -129,6 +129,8 @@ Settings are environment variables prefixed `BMU_` (`config.py`, `.env.example`)
 Built like the team's other apps (BOA, Damien, Diablo); `README.md`, Frontend, has the detail.
 
 - **`views/`** — pages: `Login`, `BaseView` (app bar, tabs), `EditJob`, `Drafts`, `Queue`, `Finished`, `NotFound`.
+  `Login` shows a museum list (`#museum`, options `museum-<key>`) when `/api/env` lists more than one museum, and
+  remembers the choice in the browser (`bmu-museum`); the app bar shows the museum (`#tenant-name`).
 - **`components/job/`** — the job screens; **`components/util/`** — shared pieces; **`components/demo/`** — Demo tools.
 - **`stores/`** — Pinia: `context.ts` (current user, loading, screen-reader alerts), `job-edit-session.ts` (the job
   open in the editor, shared by the tabs).
