@@ -15,21 +15,22 @@ resource "aws_ecs_cluster" "main" {
 locals {
   # The app's settings (backend/bmu/config.py); backend/tests/test_deploy.py checks that each one exists.
   app_environment = {
-    BMU_CSPACE_URL         = var.cspace_url
+    # The museums and their servers (design: One deployment for several museums), as JSON objects.
+    BMU_TENANTS            = jsonencode(var.tenants)
     BMU_CSPACE_SIMULATED   = tostring(var.simulated_cspace)
-    BMU_TENANT             = var.tenant
     BMU_ENV_LABEL          = var.env_label
     BMU_AWS_REGION         = var.region
     BMU_TABLE_PREFIX       = local.name
     BMU_S3_BUCKET          = aws_s3_bucket.staging.id
-    BMU_S3_KMS_KEY_ID      = aws_kms_key.staging.arn
+    BMU_S3_KMS_KEY_IDS     = jsonencode({ for m, key in aws_kms_key.staging : m => key.arn })
     BMU_CRYPTO_MODE        = "kms"
     BMU_KMS_SESSION_KEY_ID = aws_kms_key.session.arn
     BMU_KMS_JOB_KEY_ID     = aws_kms_key.job.arn
     BMU_COOKIE_SECURE      = "true"
     BMU_ALWAYS_RUN_TIME    = tostring(var.always_run_time)
-    BMU_DEMO               = "false"                              # never in AWS
-    BMU_READER_SECRET_ID   = aws_secretsmanager_secret.reader.arn # only the web role may read it (iam.tf)
+    BMU_DEMO               = "false" # never in AWS
+    # One read-only account per museum; only the web role may read them (iam.tf).
+    BMU_READER_SECRET_IDS = jsonencode({ for m, secret in aws_secretsmanager_secret.reader : m => secret.arn })
   }
   container_environment = [for name, value in local.app_environment : { name = name, value = value }]
 }
@@ -38,8 +39,8 @@ resource "aws_ecs_task_definition" "web" {
   family                   = "${local.name}-web"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = 256
-  memory                   = 1024
+  cpu                      = var.web_cpu
+  memory                   = var.web_memory
   execution_role_arn       = aws_iam_role.execution.arn
   task_role_arn            = aws_iam_role.web.arn
 
@@ -70,8 +71,8 @@ resource "aws_ecs_task_definition" "worker" {
   family                   = "${local.name}-worker"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = 512
-  memory                   = 2048 # files up to 2 GB are streamed through it (the web app makes the TIFF thumbnails)
+  cpu                      = var.worker_cpu    # one thread per museum
+  memory                   = var.worker_memory # files up to 2 GB are streamed through it (the web app makes the TIFF thumbnails)
   execution_role_arn       = aws_iam_role.execution.arn
   task_role_arn            = aws_iam_role.worker.arn
 

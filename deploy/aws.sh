@@ -3,24 +3,28 @@
 #
 #   ./bmu aws deploy        build the image, push it, then show Terraform's plan and apply it; prints the address
 #   ./bmu aws plan          show what a deploy of the running image would change, without changing anything
-#   ./bmu aws status        the services' tasks, the image they run and the allowed addresses
+#   ./bmu aws status        the services' tasks, the image they run, the allowed addresses and the museums
 #   ./bmu aws url           the address
 #   ./bmu aws logs web|worker|fakecspace   follow a service's logs (the last 30 minutes first)
 #   ./bmu aws pause         stop both services to save money (the data stays); ./bmu aws resume starts them
 #   ./bmu aws allow-my-ip   add this computer's current address to the allowlist
-#   ./bmu aws reader-secret set or change the read-only CollectionSpace account's sign-in (asks; nothing is shown or saved here)
+#   ./bmu aws reader-secret [MUSEUM]  set or change a museum's read-only CollectionSpace account's sign-in (asks;
+#                           nothing is shown or saved here)
 #   ./bmu aws destroy       delete everything in AWS for this environment, data included (asks first)
 #   ./bmu aws init          point Terraform at this environment's state, to run terraform commands yourself
 #
 # Which environment: --env NAME or BMU_AWS_ENV (default personal-dev). Its settings are in
 # deploy/environments/NAME.conf; NAME.local.conf (not committed) holds the account number and allowed addresses.
+# CSPACE_TENANTS lists the museums the environment serves, each with its CollectionSpace server
+# ("pahma=https://... bampfa=https://..."); TENANT and CSPACE_URL instead mean a list of one.
 # Sign in first with: aws sso login --profile <the environment's AWS_PROFILE>. Nothing here handles a password or key,
 # except reader-secret, which passes what you type straight to AWS Secrets Manager.
 # Terraform (deploy/terraform) creates everything; its state is in an S3 bucket in the same account, which the first
 # deploy creates. BMU_AWS_YES=1 skips Terraform's "yes" prompt. Works with the macOS bash (3.2).
 # SIMULATED_CSPACE=true (in the settings) runs the simulated CollectionSpace in the environment instead of using a real
-# one. A deployed environment's CollectionSpace server never changes (check_server), and the first use of an
-# environment on a computer asks first if the account already has one by that name (check_not_someone_elses).
+# one, for PAHMA alone. A deployed museum's CollectionSpace server never changes; a museum can be added, and removed
+# once it has no unfinished jobs (check_museums). The first use of an environment on a computer asks first if the
+# account already has one by that name (check_not_someone_elses).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -48,7 +52,7 @@ load_env() {
   LOCAL="$ENV_DIR/$ENV.local.conf"
   URL_FILE="$ENV_DIR/$ENV.url"
   [ -f "$CONF" ] || die "No settings for environment '$ENV' ($CONF). Environments: $(ls "$ENV_DIR" | sed -n 's/\.conf$//p' | grep -v '\.local$' | tr '\n' ' ')"
-  ACCOUNT_ID="" ALLOWED_CIDRS="" SIMULATED_CSPACE="" ENV_LABEL=""
+  ACCOUNT_ID="" ALLOWED_CIDRS="" SIMULATED_CSPACE="" ENV_LABEL="" CSPACE_TENANTS="" TENANT="" CSPACE_URL=""
   # shellcheck disable=SC1090
   . "$CONF"
   local conf_label="$ENV_LABEL"
@@ -56,13 +60,14 @@ load_env() {
   [ -f "$LOCAL" ] && . "$LOCAL"
   : "${AWS_PROFILE:?set AWS_PROFILE in $CONF}" "${AWS_REGION:?set AWS_REGION in $CONF}" "${BMU_ENV_NAME:?set BMU_ENV_NAME in $CONF}"
   NAME="bmu-$BMU_ENV_NAME"   # the cluster's name and the prefix of every resource
-  CSPACE_URL="${CSPACE_URL%/}"   # one spelling of the server, for the server check below
   case "${SIMULATED_CSPACE:=false}" in true|false) ;; *) die "SIMULATED_CSPACE must be true or false ($CONF, $LOCAL)." ;; esac
   if [ "$SIMULATED_CSPACE" = true ]; then
     [ "${PROTECT_DATA:-false}" != true ] ||
       die "SIMULATED_CSPACE=true can't be used with PROTECT_DATA=true: the simulator's data is lost on every restart, and its accounts' passwords are public."
-    CSPACE_URL="$(sim_url)"   # CSPACE_URL in the settings is ignored
+    MUSEUMS="pahma=$(sim_url)"   # the simulator is PAHMA's; CSPACE_TENANTS, TENANT and CSPACE_URL are ignored
     [ "$ENV_LABEL" != "$conf_label" ] || ENV_LABEL="AWS · $ENV · simulated CollectionSpace"   # unless .local.conf sets one
+  else
+    read_museums
   fi
   export AWS_PAGER="" AWS_PROFILE AWS_REGION   # Terraform signs in with the same profile
   # Keys in the shell would win over the profile in Terraform (though not in "aws --profile"): never use them here.
@@ -71,6 +76,53 @@ load_env() {
 }
 
 aws_() { aws --profile "$AWS_PROFILE" --region "$AWS_REGION" "$@"; }
+
+# ---- the museums ----------------------------------------------------------------------------------------------------
+# MUSEUMS is "museum=server museum=server", each server without a trailing /: from CSPACE_TENANTS, or else TENANT and
+# CSPACE_URL. Each museum needs its configuration, backend/bmu/tenants/<museum>.yaml.
+read_museums() {
+  local list="$CSPACE_TENANTS" entry museum url seen=" "
+  if [ -n "$list" ]; then
+    [ -z "$TENANT$CSPACE_URL" ] ||
+      die "Set CSPACE_TENANTS, or TENANT and CSPACE_URL, not both ($CONF, $LOCAL): CSPACE_TENANTS lists every museum."
+  else
+    [ -n "$TENANT" ] && [ -n "$CSPACE_URL" ] ||
+      die "No museums: set CSPACE_TENANTS=\"pahma=https://... bampfa=https://...\" in $CONF or $LOCAL."
+    list="$TENANT=$CSPACE_URL"
+  fi
+  MUSEUMS=""
+  for entry in $list; do
+    museum="${entry%%=*}" url="${entry#*=}"
+    url="${url%/}"   # one spelling of the server, for check_museums
+    [ "$museum" != "$entry" ] && echo "$museum" | grep -Eq '^[a-z][a-z0-9]{1,19}$' ||
+      die "CSPACE_TENANTS: '$entry' isn't museum=server; a museum is 2 to 20 lowercase letters or digits, such as pahma."
+    echo "$url" | grep -Eq '^https?://[A-Za-z0-9.-]+(:[0-9]+)?$' ||
+      die "CSPACE_TENANTS: $museum's server '$url' must be an address alone, such as https://pahma.qa.collectionspace.org."
+    [ -f "backend/bmu/tenants/$museum.yaml" ] ||
+      die "The BMU has no configuration for the museum '$museum' (backend/bmu/tenants/$museum.yaml)."
+    case "$seen" in *" $museum "*) die "CSPACE_TENANTS lists $museum twice." ;; esac
+    seen="$seen$museum "
+    MUSEUMS="${MUSEUMS:+$MUSEUMS }$museum=$url"
+  done
+  [ -n "$MUSEUMS" ] || die "No museums: CSPACE_TENANTS is empty ($CONF, $LOCAL)."
+}
+
+museum_names() {  # museum_names [LIST]: the museums of a list (default MUSEUMS), one per line
+  local entry
+  for entry in ${1-$MUSEUMS}; do echo "${entry%%=*}"; done
+}
+
+server_of() {  # server_of MUSEUM [LIST]: the museum's server in a list (default MUSEUMS); fails if it isn't listed
+  local entry
+  for entry in ${2-$MUSEUMS}; do [ "${entry%%=*}" != "$1" ] || { echo "${entry#*=}"; return 0; }; done
+  return 1
+}
+
+tenants_var() {  # MUSEUMS as a Terraform map: {"pahma"="https://...","bampfa"="https://..."}
+  local entry out=""
+  for entry in $MUSEUMS; do out="${out:+$out,}\"${entry%%=*}\"=\"${entry#*=}\""; done
+  printf '{%s}' "$out"
+}
 
 # The simulated CollectionSpace's address in the VPC (Cloud Map). The same as local.fakecspace_url in
 # deploy/terraform/app/fakecspace.tf; Terraform refuses any other with simulated_cspace (variables.tf).
@@ -177,7 +229,7 @@ cidr_list() {  # "a/32,b/24" -> ["a/32","b/24"]
 app_vars() {  # app_vars IMAGE RUNNING [SIMULATOR-IMAGE]
   TF_VARS=(
     -var "account_id=$ACCOUNT_ID" -var "region=$AWS_REGION" -var "env_name=$BMU_ENV_NAME" -var "image_uri=$1" -var "running=$2"
-    -var "allowed_cidrs=$(cidr_list)" -var "cspace_url=$CSPACE_URL" -var "tenant=$TENANT"
+    -var "allowed_cidrs=$(cidr_list)" -var "tenants=$(tenants_var)"
     -var "env_label=$ENV_LABEL" -var "always_run_time=$ALWAYS_RUN_TIME" -var "protect_data=${PROTECT_DATA:-false}"
     -var "simulated_cspace=$SIMULATED_CSPACE" -var "fakecspace_image_uri=${3:-}"
   )
@@ -205,19 +257,55 @@ applied() {  # applied OUTPUT: a value the app was last applied with; empty if n
   echo "$v"
 }
 
-# One CollectionSpace server and tenant per environment. Its jobs, drafts, CSIDs, saved sign-ins and audit entries
-# belong to the server it was deployed for, and a queued job would run on whatever server it points at next: so a
-# deployed environment's server never changes. An environment applied before this check recorded nothing yet;
-# its next apply records the server.
-check_server() {  # after tf_init app
-  local url tenant
-  url="$(applied cspace_url)"; tenant="$(applied tenant)"
-  if { [ -n "$url" ] && [ "$url" != "$CSPACE_URL" ]; } || { [ -n "$tenant" ] && [ "$tenant" != "$TENANT" ]; }; then
-    echo "'$ENV' was deployed for $url (tenant ${tenant:-$TENANT}), but its settings now say $CSPACE_URL (tenant $TENANT)." >&2
-    echo "Its jobs, drafts and audit entries refer to records on the first, and a queued job would run on the new one." >&2
-    die "Stopped; nothing was changed. Put the setting back; or run ./bmu aws destroy first (it deletes the BMU's data);
-or deploy the new server as another environment: a different BMU_ENV_NAME in $LOCAL."
+# Each museum's jobs, drafts, CSIDs, saved sign-ins and audit entries belong to the CollectionSpace server it was
+# deployed for, and a queued job would run on whatever server it points at next: so a deployed museum's server never
+# changes. A museum can be added. One can be removed only when it has no unfinished jobs (anything but Completed:
+# drafts, queued or running jobs, and ones needing attention or failed, which can still be fixed and run again), and
+# when its name is typed: its staging key is deleted with it, and with the key, its staged and audit files become
+# unreadable. Never where data is protected. Runs after tf_init app; nothing is checked before the first deploy.
+check_museums() {  # check_museums ask|look: ask = this command applies (removing asks first); look = plan only
+  local applied museum url now removed="" n ok
+  applied="$(applied museums)"
+  if [ -z "$applied" ]; then
+    # Deployed before environments listed museums: one key and secret for the whole environment, which a deploy now
+    # would replace, losing its files and the secret's value. No migration (a prototype): destroy and deploy again.
+    [ -z "$(applied cspace_url)" ] ||
+      die "'$ENV' was deployed before environments listed their museums, and can't be updated in place: its staging
+key and read-only account's secret would be replaced, and its staged and audit files lost. Stopped; nothing was
+changed. Run ./bmu aws destroy, then ./bmu aws deploy."
+    return 0   # never deployed: nothing to check
   fi
+  for museum in $(museum_names "$applied"); do
+    url="$(server_of "$museum" "$applied")"
+    if now="$(server_of "$museum")"; then
+      [ "$now" = "$url" ] && continue
+      echo "'$ENV' was deployed with $museum on $url, but its settings now say $now." >&2
+      echo "$museum's jobs, drafts and audit entries refer to records on the first, and a queued job would run on the new one." >&2
+      die "Stopped; nothing was changed. Put the setting back; or run ./bmu aws destroy first (it deletes the BMU's data);
+or deploy the new server as another environment: a different BMU_ENV_NAME in $LOCAL."
+    fi
+    removed="$removed $museum"
+  done
+  for museum in $(museum_names); do
+    server_of "$museum" "$applied" >/dev/null || echo "Adding the museum $museum ($(server_of "$museum"))."
+  done
+  for museum in $removed; do
+    [ "${PROTECT_DATA:-false}" != true ] ||
+      die "Stopped; nothing was changed. '$ENV' protects its data (PROTECT_DATA=true), so $museum can't be removed: its key would go, and with it, its audit files."
+    n="$(aws_ dynamodb query --table-name "$NAME-jobs" --index-name tenant --select COUNT --query Count --output text \
+          --key-condition-expression "#t = :t" --filter-expression "#k = :meta AND #s <> :done" \
+          --expression-attribute-names '{"#t":"tenant","#k":"SK","#s":"status"}' \
+          --expression-attribute-values "{\":t\":{\"S\":\"$museum\"},\":meta\":{\"S\":\"META\"},\":done\":{\"S\":\"Completed\"}}")" ||
+      die "Stopped; nothing was changed. Couldn't count $museum's unfinished jobs in the table $NAME-jobs."
+    [ "$n" = 0 ] ||
+      die "Stopped; nothing was changed. $museum is no longer in the settings, but it has $n unfinished job(s) in '$ENV' (drafts, queued, running, needing attention or failed). Put it back in CSPACE_TENANTS, finish or delete its jobs, then try again."
+    echo "$museum is no longer in the settings. Removing it deletes its read-only account's secret and its staging key"
+    echo "(after 7 days), and with the key, its staged files and audit files become unreadable. Its jobs and audit"
+    echo "entries stay in the tables. Its users can no longer sign in."
+    [ "$1" = ask ] || { echo "(./bmu aws deploy asks before removing it.)"; continue; }
+    read -r -p "Type the museum's name ($museum) to remove it: " ok || ok=""
+    [ "$ok" = "$museum" ] || die "Stopped; nothing was changed."
+  done
 }
 
 # ---- commands -----------------------------------------------------------------------------------------------------
@@ -239,7 +327,7 @@ deploy() {
   command -v docker >/dev/null || die "Docker isn't installed or isn't on the PATH."
   docker info >/dev/null 2>&1 || die "Docker isn't running. Start Docker Desktop and try again."
   ensure_state_bucket
-  tf_init app; check_server   # before building anything
+  tf_init app; check_museums ask   # before building anything
   local tag repo registry image sim_image url code
   tag="$(git rev-parse --short HEAD 2>/dev/null || echo nogit)"
   [ -z "$(git status --porcelain 2>/dev/null)" ] || tag="$tag-dirty"
@@ -284,7 +372,8 @@ deploy() {
     echo "It uses the simulated CollectionSpace: sign in with the simulator's accounts (deploy/README.md). Its records"
     echo "are lost whenever it restarts (a pause, a deploy), while the BMU keeps its jobs."
   else
-    echo "Careful: jobs run here create real records in $CSPACE_URL, and they stay."
+    echo "Careful: jobs run here create real records in each museum's CollectionSpace, and they stay:"
+    for museum in $(museum_names); do echo "  $museum: $(server_of "$museum")"; done
   fi
 }
 
@@ -293,14 +382,14 @@ was_running() {  # true unless the environment is paused
 }
 
 plan() {
-  look; need_deployed; check_server
+  look; need_deployed; check_museums look
   app_vars "$IMAGE" "$(was_running)" "$(applied fakecspace_image_uri)"
   tf app plan -input=false "${TF_VARS[@]}"
 }
 
 # Apply again with the running image: for a changed setting (pause, resume, the allowlist).
 reapply() {  # reapply RUNNING
-  prepare; tf_init app; need_deployed; check_server
+  prepare; tf_init app; need_deployed; check_museums ask
   app_vars "$IMAGE" "$1" "$(applied fakecspace_image_uri)"
   # shellcheck disable=SC2046
   tf app apply -input=false $(approve) "${TF_VARS[@]}"
@@ -322,41 +411,63 @@ status() {
       --query "services[].[serviceName, join('', ['running ', to_string(runningCount), ' of ', to_string(desiredCount)])]" --output text 2>/dev/null || true; } |
   while IFS="$(printf '\t')" read -r name counts; do echo "  $name: $counts"; done
   echo "Allowed addresses: $ALLOWED_CIDRS"
-  [ "$SIMULATED_CSPACE" = false ] || echo "CollectionSpace: the simulated one, in the environment ($CSPACE_URL)"
-  case "$(reader_secret_field 'length(keys(VersionIdsToStages || `{}`))')" in
-    "") echo "Read-only account for interns' checks: no secret yet (the next ./bmu aws deploy creates it)" ;;
-    0)  echo "Read-only account for interns' checks: NOT SET (./bmu aws reader-secret)" ;;
-    *)  echo "Read-only account for interns' checks: set, last changed $(reader_secret_field LastChangedDate | cut -c1-10) (change it every 90 days)" ;;
-  esac
+  local deployed museum
+  deployed="$(applied museums)"   # what was deployed; the settings may have changed since
+  echo "Museums, each with its CollectionSpace and its read-only account for interns' checks:"
+  for museum in $(museum_names "${deployed:-$MUSEUMS}"); do
+    if [ "$SIMULATED_CSPACE" = true ]; then
+      echo "  $museum: the simulated CollectionSpace, in the environment ($(server_of "$museum" "${deployed:-$MUSEUMS}"))"
+    else
+      echo "  $museum: $(server_of "$museum" "${deployed:-$MUSEUMS}")"
+    fi
+    case "$(reader_secret_field "$museum" 'length(keys(VersionIdsToStages || `{}`))')" in
+      "") echo "    read-only account: no secret yet (the next ./bmu aws deploy creates it)" ;;
+      0)  echo "    read-only account: NOT SET (./bmu aws reader-secret $museum)" ;;
+      *)  echo "    read-only account: set, last changed $(reader_secret_field "$museum" LastChangedDate | cut -c1-10) (change it every 90 days)" ;;
+    esac
+  done
+  # Terraform lists the museums by name; the settings, in any order.
+  [ -z "$deployed" ] || [ "$(printf '%s\n' $deployed | sort)" = "$(printf '%s\n' $MUSEUMS | sort)" ] ||
+    echo "The settings list other museums or servers: ./bmu aws plan shows the change."
 }
 
 # ---- the read-only CollectionSpace account for interns' checks (design: Roles; backend/bmu/reader.py) ----------------
-reader_secret_field() {  # reader_secret_field QUERY: one fact about the secret; never reads its value
-  aws_ secretsmanager describe-secret --secret-id "$NAME/cspace-reader" --query "$1" --output text 2>/dev/null || true
+reader_secret_id() { echo "$NAME/cspace-reader/$1"; }  # reader_secret_id MUSEUM: one secret per museum (secrets.tf)
+
+reader_secret_field() {  # reader_secret_field MUSEUM QUERY: one fact about the museum's secret; never reads its value
+  aws_ secretsmanager describe-secret --secret-id "$(reader_secret_id "$1")" --query "$2" --output text 2>/dev/null || true
 }
 
 json_string() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }  # printf is a builtin: not in the process list
 
-# With the simulator, deploy sets the secret once to the simulator's read-only account (bmureader), whose password is
-# in backend/fakecspace/app.py like all its accounts'. Nothing else ever writes it: the server never changes.
+# With the simulator, deploy sets PAHMA's secret once to the simulator's read-only account (bmureader), whose password
+# is in backend/fakecspace/app.py like all its accounts'. Nothing else ever writes it: the server never changes.
 sim_reader_secret() {
-  [ "$(reader_secret_field 'length(keys(VersionIdsToStages || `{}`))')" = 0 ] || return 0
+  [ "$(reader_secret_field pahma 'length(keys(VersionIdsToStages || `{}`))')" = 0 ] || return 0
   local user=bmureader password
   password="$(sed -n "s/^ *\"$user\": (\"\([^\"]*\)\".*/\1/p" backend/fakecspace/app.py)"
   [ -n "$password" ] || die "Couldn't find the simulator's $user account in backend/fakecspace/app.py; interns' checks won't work."
   printf '{"username":"%s","password":"%s"}' "$user" "$(json_string "$password")" |
-    aws_ secretsmanager put-secret-value --secret-id "$NAME/cspace-reader" --secret-string file:///dev/stdin >/dev/null
+    aws_ secretsmanager put-secret-value --secret-id "$(reader_secret_id pahma)" --secret-string file:///dev/stdin >/dev/null
   echo "The read-only account for interns' checks is the simulator's $user."
 }
 
-reader_secret() {
-  load_env; check_account
+reader_secret() {  # reader_secret [MUSEUM]: needed when the environment serves several museums
+  load_env
   [ "$SIMULATED_CSPACE" = false ] ||
     die "'$ENV' uses the simulated CollectionSpace: ./bmu aws deploy has set the read-only account to the simulator's own."
-  local secret="$NAME/cspace-reader" user="" password="" again=""
+  local museum="${1:-}" secret user="" password="" again=""
+  if [ -z "$museum" ]; then
+    [ "$(museum_names | wc -l | tr -d ' ')" = 1 ] ||
+      die "Which museum's read-only account? ./bmu aws reader-secret <museum>, one of: $(museum_names | tr '\n' ' ')"
+    museum="$(museum_names)"
+  fi
+  server_of "$museum" >/dev/null || die "'$ENV' doesn't serve a museum '$museum'. Its museums: $(museum_names | tr '\n' ' ')"
+  check_account
+  secret="$(reader_secret_id "$museum")"
   aws_ secretsmanager describe-secret --secret-id "$secret" >/dev/null 2>&1 ||
     die "No secret $secret yet. ./bmu aws deploy creates it; then run this again."
-  echo "The read-only CollectionSpace account that checks interns' drafts (role BMU_Reader, nothing else)."
+  echo "$museum's read-only CollectionSpace account on $(server_of "$museum"), which checks interns' drafts (role BMU_Reader, nothing else)."
   echo "What you type goes to AWS Secrets Manager ($secret). It isn't shown, saved on this computer or logged."
   printf "Its user name: "; IFS= read -r user
   printf "Its password (not shown): "; IFS= read -rs password; echo
@@ -367,7 +478,7 @@ reader_secret() {
     aws_ secretsmanager put-secret-value --secret-id "$secret" --secret-string file:///dev/stdin >/dev/null
   password="" again=""
   echo "Saved. The BMU uses it within 5 minutes; no deploy or restart is needed."
-  echo "Check it: sign in to the BMU as an intern and open a draft. Its documents are checked against CollectionSpace."
+  echo "Check it: sign in to the BMU as one of $museum's interns and open a draft. Its documents are checked against CollectionSpace."
 }
 
 logs() {
@@ -390,6 +501,8 @@ destroy() {
   [ -n "$ALLOWED_CIDRS" ] || ALLOWED_CIDRS="127.0.0.1/32"   # the variable must be set, even to destroy
   sim_image="$(applied fakecspace_image_uri)"
   [ -n "$sim_image" ] || sim_image=none   # the variable must be set when SIMULATED_CSPACE is true, even to destroy
+  deployed="$(applied museums)"
+  [ -z "$deployed" ] || MUSEUMS="$deployed"   # the museums whose keys and secrets are in the state
   app_vars "$IMAGE" false "$sim_image"
   echo "Destroying the BMU (about 15-20 minutes: CloudFront is disabled first) ..."
   # CloudFront removes its VPC origin's network interfaces in the background, which can briefly hold the VPC.
@@ -426,8 +539,8 @@ case "$CMD" in
     case "$(deployed_image)" in ""|*"No outputs"*|*Warning*) echo "Saved; it applies at the first deploy." ;; *) reapply "$(was_running)" ;; esac ;;
   init) prepare; tf registry init -reconfigure -backend-config="bucket=$STATE_BUCKET" -backend-config="key=bmu/$BMU_ENV_NAME/registry.tfstate" -backend-config="region=$AWS_REGION" -backend-config="use_lockfile=true"
         tf app init -reconfigure -backend-config="bucket=$STATE_BUCKET" -backend-config="key=bmu/$BMU_ENV_NAME/app.tfstate" -backend-config="region=$AWS_REGION" -backend-config="use_lockfile=true" ;;
-  reader-secret) reader_secret ;;
+  reader-secret) reader_secret "${1:-}" ;;
   destroy) destroy ;;
-  help|-h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//' ;;
+  help|-h|--help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0" ;;
   *) die "Unknown command '$CMD'. ./bmu aws help lists them." ;;
 esac

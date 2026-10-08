@@ -38,26 +38,29 @@ variable "allowed_cidrs" {
   }
 }
 
-variable "cspace_url" {
-  description = "CollectionSpace server, without /cspace-services."
-  type        = string
-  default     = "https://pahma.qa.collectionspace.org"
+variable "tenants" {
+  description = "The museums (CollectionSpace tenants) this environment serves, each with its CollectionSpace server: {pahma = \"https://pahma.qa.collectionspace.org\"}. Each needs backend/bmu/tenants/<museum>.yaml (./bmu aws checks)."
+  type        = map(string)
 
   validation {
-    condition     = can(regex("^https?://[^/]+$", var.cspace_url))
-    error_message = "cspace_url must be the server's address alone, such as https://pahma.qa.collectionspace.org (no path, no trailing /)."
+    condition     = length(var.tenants) > 0
+    error_message = "tenants needs at least one museum."
   }
 
   validation {
-    condition     = !var.simulated_cspace || var.cspace_url == "http://fakecspace.bmu-${var.env_name}.internal:8180"
-    error_message = "With simulated_cspace, cspace_url must be the simulator's address in the VPC, http://fakecspace.bmu-<env_name>.internal:8180 (fakecspace.tf)."
+    condition     = alltrue([for m in keys(var.tenants) : can(regex("^[a-z][a-z0-9]{1,19}$", m))])
+    error_message = "Each museum's name in tenants is 2 to 20 lowercase letters or digits, starting with a letter (it is part of key aliases, secret names and S3 prefixes)."
   }
-}
 
-variable "tenant" {
-  description = "The BMU tenant configuration to load."
-  type        = string
-  default     = "pahma"
+  validation {
+    condition     = alltrue([for url in values(var.tenants) : can(regex("^https?://[A-Za-z0-9.-]+(:[0-9]+)?$", url))])
+    error_message = "Each server in tenants must be an address alone, such as https://pahma.qa.collectionspace.org (no path, no trailing /)."
+  }
+
+  validation {
+    condition     = !var.simulated_cspace || var.tenants == tomap({ pahma = "http://fakecspace.bmu-${var.env_name}.internal:8180" })
+    error_message = "With simulated_cspace, tenants must be the simulator's PAHMA alone: {pahma = \"http://fakecspace.bmu-<env_name>.internal:8180\"} (fakecspace.tf)."
+  }
 }
 
 variable "env_label" {
@@ -115,4 +118,29 @@ variable "fakecspace_image_uri" {
     condition     = !var.simulated_cspace || length(var.fakecspace_image_uri) > 0
     error_message = "simulated_cspace needs fakecspace_image_uri."
   }
+}
+
+# Task sizes (Fargate: each cpu value allows only some memory values; see the ECS documentation).
+variable "web_cpu" {
+  description = "The web app's task CPU units (256 = 0.25 vCPU)."
+  type        = number
+  default     = 256
+}
+
+variable "web_memory" {
+  description = "The web app's task memory in MiB."
+  type        = number
+  default     = 1024
+}
+
+variable "worker_cpu" {
+  description = "The worker's task CPU units (1024 = 1 vCPU): it runs one thread per museum (backend/bmu/worker.py)."
+  type        = number
+  default     = 1024
+}
+
+variable "worker_memory" {
+  description = "The worker's task memory in MiB. Files up to 2 GB are streamed through it."
+  type        = number
+  default     = 2048
 }

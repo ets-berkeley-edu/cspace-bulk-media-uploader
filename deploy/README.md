@@ -17,23 +17,44 @@ prototype: the image is built from this repository and runs on ECS Fargate. Demo
 | --- | --- |
 | `./bmu aws deploy` | Builds the image and pushes it, then shows Terraform's plan and, after you type `yes`, applies it and waits until the app is up. Prints the address and saves it for `./bmu open aws`. |
 | `./bmu aws plan` | Shows what a deploy of the running image would change, without changing anything. |
-| `./bmu aws status` | Shows the address, the running tasks, the deployed image and the allowed addresses. |
+| `./bmu aws status` | Shows the address, the running tasks, the deployed image, the allowed addresses, and each museum with its server and whether its read-only account is set. |
 | `./bmu aws url` | Prints the address. |
 | `./bmu aws logs web` / `worker` / `fakecspace` | Follows a service's logs, starting with the last 30 minutes. `fakecspace` only with the simulated CollectionSpace. |
 | `./bmu aws pause` / `resume` | Stops or starts both services to save money. The data stays. Terraform shows the change and asks first. |
 | `./bmu aws allow-my-ip` | Adds this computer's current address to the allowlist, and applies it. |
-| `./bmu aws reader-secret` | Sets or changes the sign-in of the read-only CollectionSpace account that checks interns' drafts. It asks for the user name and password; see below. |
+| `./bmu aws reader-secret [museum]` | Sets or changes the sign-in of a museum's read-only CollectionSpace account, which checks its interns' drafts. It asks for the user name and password; see below. The museum can be left out when the environment serves only one. |
 | `./bmu aws destroy` | Deletes everything in AWS for the environment, data included. It asks for the environment's name first. |
 
 **Picking the environment.** Add `--env NAME`, or set `BMU_AWS_ENV`. The default is `personal-dev`.
 
-**One CollectionSpace server per environment.** An environment's jobs, drafts, saved sign-ins and audit entries
-belong to the CollectionSpace server and tenant it was deployed for, and a queued job runs on whatever server the
-environment points at. So once an environment is deployed, `deploy`, `plan`, `pause`, `resume` and `allow-my-ip`
-refuse to change `CSPACE_URL` or `TENANT`, and change nothing. To use another server, either put the setting
-back and `./bmu aws destroy` first (the BMU's data goes with it), or deploy it as another environment, with a
-different `BMU_ENV_NAME` in your `.local.conf`. An environment deployed before this check records its server at
-its next deploy.
+**The museums.** One environment serves several museums (CollectionSpace tenants), and users choose theirs on the
+sign-in page (design: One deployment for several museums). The settings list them, each with its CollectionSpace
+server:
+
+```bash
+CSPACE_TENANTS="pahma=https://pahma.qa.collectionspace.org bampfa=https://bampfa.qa.collectionspace.org"
+```
+
+Each museum needs its configuration, `backend/bmu/tenants/<museum>.yaml`, and `./bmu aws` refuses one without it
+(so far only PAHMA has one: the BAMPFA entry is an example). `TENANT` and `CSPACE_URL` (one museum) still work,
+but not together with `CSPACE_TENANTS`: a `.local.conf` that changes the museums sets `CSPACE_TENANTS` too. With
+one museum the sign-in page asks nothing.
+
+**Once deployed, a museum's server never changes.** A museum's jobs, drafts, saved sign-ins and audit entries belong
+to the CollectionSpace server it was deployed for, and a queued job runs on whatever server it points at. So
+`deploy`, `plan`, `pause`, `resume` and `allow-my-ip` check the museums against the deployed ones, and stop before
+changing anything if a museum's server changed. To use another server, either put the setting back and
+`./bmu aws destroy` first (the BMU's data goes with it), or deploy it as another environment, with a different
+`BMU_ENV_NAME` in your `.local.conf`.
+- **Adding a museum** is allowed: the command says "Adding the museum <name>", and the deploy creates its key and secret.
+  Then set its read-only account (`./bmu aws reader-secret <museum>`).
+- **Removing a museum** is refused while it has unfinished jobs: anything but Completed, including drafts and jobs
+  that need attention or failed, which can still be fixed and run again. Without any, the command asks you to type
+  the museum's name. Its secret goes at once, and its staging key 7 days later: from then on its staged files and
+  audit files can't be read. Its jobs and audit entries stay in the tables, and its users can't sign in. Never where
+  data is protected (`PROTECT_DATA=true`). `plan` shows an allowed removal without asking.
+- **An environment deployed before museums were listed** (one staging key and secret for the whole environment)
+  can't be updated: `./bmu aws` stops and asks for `./bmu aws destroy`, then a new deploy. There is no migration.
 
 **Skipping the question.** `BMU_AWS_YES=1` applies without Terraform's `yes` prompt.
 
@@ -67,7 +88,7 @@ under ECS, Clusters, `bmu-dev`. To check the app itself, `curl -s https://<addre
 | ECS cluster | `bmu-dev`: resource names start with `bmu-` and `BMU_ENV_NAME` (`dev`), not with the file's name |
 | ECS services | `web` and `worker` |
 | Log groups | `/bmu/dev/web` and `/bmu/dev/worker` |
-| CollectionSpace | the PAHMA QA tenant. Jobs create real records there, and they stay. |
+| CollectionSpace | the PAHMA QA tenant (`CSPACE_TENANTS` in the settings file). Jobs create real records there, and they stay. |
 
 ## First deploy
 
@@ -100,8 +121,9 @@ under ECS, Clusters, `bmu-dev`. To check the app itself, `curl -s https://<addre
 **Signing in.** Sign in with your PAHMA QA account. Jobs create real records on the QA tenant, and they stay.
 With the simulated CollectionSpace (see "The simulated CollectionSpace"), sign in with the simulator's accounts instead.
 
-**Then set the read-only account's sign-in.** Run `./bmu aws reader-secret` (see the next section). A new
-environment's secret is always empty, and `./bmu aws status` says "NOT SET" until you do. Until then, staff work as
+**Then set the read-only account's sign-in**, for each museum. Run `./bmu aws reader-secret <museum>` (see the next
+section; the museum can be left out with only one). A new environment's secrets are always empty, and
+`./bmu aws status` says "NOT SET" until you do. Until then, staff work as
 usual, but an intern's drafts can't be checked: the languages list doesn't load ("Couldn't load the languages list:
 The BMU can't check this against CollectionSpace now: its secret can't be read.") and every check gives the same
 reason. The same applies after `./bmu aws destroy` and a new deploy: with `protect_data = false` (the default),
@@ -123,9 +145,9 @@ AWS Secrets Manager.
    password from a password manager. Nobody signs in with it by hand.
 
 **In AWS (you)**
-1. `./bmu aws deploy`, if this environment was deployed before the secret existed. Terraform creates the empty
-   secret `bmu-<env>/cspace-reader` and lets the web app, and nothing else, read it.
-2. `./bmu aws reader-secret`. It asks for the account's user name and its password twice. The password isn't
+1. `./bmu aws deploy` creates one empty secret per museum, `bmu-<env>/cspace-reader/<museum>`, and lets the web
+   app, and nothing else, read them.
+2. `./bmu aws reader-secret <museum>`. It asks for the account's user name and its password twice. The password isn't
    shown. It goes straight to Secrets Manager: it is not saved on this computer, not in the shell's history and
    not in Terraform's state.
 3. Check it: sign in to the BMU as an intern and open a draft; the languages list loads. A secret set for the first
@@ -134,7 +156,7 @@ AWS Secrets Manager.
 
 **Changing the password.** Every 90 days, and whenever a staff member who could read the secret leaves:
 1. Change the account's password in CollectionSpace.
-2. Run `./bmu aws reader-secret` again with the new one.
+2. Run `./bmu aws reader-secret <museum>` again with the new one.
 
 The BMU picks the new password up without a deploy or restart: at once if CollectionSpace refuses the old one, and
 otherwise within 5 minutes. In between, an intern's checks answer "The BMU can't check this against CollectionSpace
@@ -143,7 +165,7 @@ now" and nothing is lost.
 **Who can read the secret.** The web app's task role, and anyone with administrator access to the AWS account.
 CloudTrail records every read (`GetSecretValue`). The worker's role can't read it.
 
-**With the simulated CollectionSpace** the first deploy sets the secret to the simulator's own read-only account;
+**With the simulated CollectionSpace** the first deploy sets PAHMA's secret to the simulator's own read-only account;
 see "The simulated CollectionSpace".
 
 **If it isn't set.** Interns can still sign in and prepare drafts, but the languages list doesn't load and each
@@ -153,8 +175,8 @@ affected.
 ## The simulated CollectionSpace
 
 For trying the BMU in AWS without a CollectionSpace account: the environment runs its own copy of the simulated
-CollectionSpace (`backend/fakecspace`, the same one as `./bmu up sim`), and nothing reaches a real server. It is off
-by default. To use it, put this in the environment's `.local.conf` before its first deploy:
+CollectionSpace (`backend/fakecspace`, the same one as `./bmu up sim`), and nothing reaches a real server. It
+simulates PAHMA, so the environment serves PAHMA alone. It is off by default. To use it, put this in the environment's `.local.conf` before its first deploy:
 
 ```bash
 SIMULATED_CSPACE=true
@@ -170,9 +192,9 @@ ALWAYS_RUN_TIME=true   # optional: queued jobs start at once instead of at PAHMA
   with its sample data, while the BMU keeps its jobs. Finished jobs then point at records that are gone. That's
   fine for trying things out; never use it for anything that matters (it can't be combined with `PROTECT_DATA`).
 - **The label** reads "AWS · <env> · simulated CollectionSpace", unless `ENV_LABEL` is set in `.local.conf`.
-  `CSPACE_URL` is ignored.
+  `CSPACE_TENANTS`, `TENANT` and `CSPACE_URL` are ignored: the museums are PAHMA alone, on the simulator.
 - **No switching.** Turning it on or off in a deployed environment changes its CollectionSpace server, which
-  `./bmu aws` refuses (see "One CollectionSpace server per environment"). Destroy first, or use another
+  `./bmu aws` refuses (see "Once deployed, a museum's server never changes"). Destroy first, or use another
   `BMU_ENV_NAME`.
 - **How it runs.** One small task (`fakecspace`, 0.25 vCPU and 512 MB) from its own image
   (`deploy/fakecspace.Dockerfile`) and repository: the BMU's image never contains the simulator. The web app and the
@@ -194,17 +216,19 @@ ALWAYS_RUN_TIME=true   # optional: queued jobs start at once instead of at PAHMA
 | Load balancer | Internal; health check `/api/health`. |
 | ECS Fargate | Cluster `bmu-<env>` with two services. Both run on ARM. The tasks are replaced one by one on deploy and rolled back automatically if they don't start. |
 | DynamoDB | `bmu-<env>-jobs`, `-sessions`, `-credentials` and `-audit`: the same keys, index and TTL as the local tables (a test checks this). Point-in-time recovery is on for jobs and audit, and off for the two tables that hold encrypted passwords. |
-| S3 | Staging bucket `bmu-<env>-staging-<account>-<region>`: SSE-KMS with its own key, versioning, all public access blocked, TLS only, KMS-encrypted uploads only, and CORS for the BMU's address only. The BMU deletes every version of a staged file; a rule removes any version left behind after a day. Audit files (`audit/`) keep their versions for a year. Access logs go to `bmu-<env>-s3-logs-…`, kept 90 days. |
-| Secrets Manager | `bmu-<env>/cspace-reader`: the read-only CollectionSpace account's sign-in. Terraform creates it empty; `./bmu aws reader-secret` sets the value. Only the web role may read it. With `protect_data = false` it is deleted at once on `destroy`; with `true`, AWS keeps it for 30 days. |
-| KMS | Three keys: session, job and staging. Rotation is on. See the key policies below. |
+| S3 | Staging bucket `bmu-<env>-staging-<account>-<region>`: each museum's files under `staging/<museum>/` and `audit/<museum>/`, SSE-KMS with that museum's key (the bucket policy refuses any other key, and any other prefix), S3 Bucket Keys off, versioning, all public access blocked, TLS only, KMS-encrypted uploads only, and CORS for the BMU's address only. The BMU deletes every version of a staged file; a rule removes any version left behind after a day. Audit files (`audit/`) keep their versions for a year. Access logs go to `bmu-<env>-s3-logs-…`, kept 90 days. |
+| Secrets Manager | `bmu-<env>/cspace-reader/<museum>`, one per museum: its read-only CollectionSpace account's sign-in. Terraform creates them empty; `./bmu aws reader-secret <museum>` sets the value. Only the web role may read them. With `protect_data = false` they are deleted at once on `destroy`; with `true`, AWS keeps them for 30 days. |
+| KMS | A session key, a job key, and a staging key per museum (`alias/bmu-<env>-staging-<museum>`). Rotation is on. See the key policies below. |
 | IAM | Separate roles for the web app and the worker, each with only what its code uses. The web app can save and delete a job's sign-in but not read it; the worker can read and delete it. Only the web app adds staged files; both can read and delete them (the web app makes the TIFF thumbnails). Both can add audit entries and audit files, and neither can read, change or delete them. The worker role has no access to the session key and can only decrypt with the job key. |
 | CloudWatch Logs | `/bmu/<env>/web` and `/bmu/<env>/worker` (and `/bmu/<env>/fakecspace`), kept 30 days. |
 | Simulated CollectionSpace | Only with `SIMULATED_CSPACE=true` (`fakecspace.tf`): the `fakecspace` service, a private DNS namespace `bmu-<env>.internal`, its own security group (port 8180, from the web app's and the worker's groups only) and log group. No task role: it calls no AWS service. |
 
 **The two services**
 - **`web`**: 0.25 vCPU and 1 GB. Runs uvicorn on port 8000 and serves the built Vue app with the API.
-- **`worker`**: 0.5 vCPU and 2 GB. Runs `python -m bmu.worker`. One at a time: the old task stops before the
-  new one starts.
+- **`worker`**: 1 vCPU and 2 GB. Runs `python -m bmu.worker`, one thread per museum. One at a time: the old task
+  stops before the new one starts.
+- The sizes are Terraform variables (`web_cpu`, `web_memory`, `worker_cpu`, `worker_memory` in
+  `app/variables.tf`); Fargate allows only some memory sizes for each CPU size.
 - **`fakecspace`** (only with the simulated CollectionSpace): 0.25 vCPU and 512 MB. Runs the simulator on port
   8180. One at a time, like the worker.
 
@@ -215,6 +239,10 @@ ALWAYS_RUN_TIME=true   # optional: queued jobs start at once instead of at PAHMA
 - The account can manage these two keys and delete them, but can't use them or grant their use.
   An administrator can't decrypt a saved password without first changing the key policy, which CloudTrail
   records.
+- Each museum's staging key: used only through S3, and only for objects under that museum's `staging/<museum>/`
+  and `audit/<museum>/` (its policy refuses any other encryption context, `aws:s3:arn`). The roles' own policies
+  allow every museum's key: both roles serve every museum, so nothing in IAM separates museums (design: One
+  deployment for several museums). With Bucket Keys off, CloudTrail records each file's use of its key.
 
 **Tags.** Every resource is tagged `project=bmu` and `environment=<env>`, so Cost Explorer can show the BMU's
 costs.
@@ -244,7 +272,7 @@ These are rough us-west-2 prices.
 
 | State | Cost | Main items |
 | --- | --- | --- |
-| Running | About **$1.75 a day** (about $50 a month) | The load balancer (about $16 a month), the worker (about $17), the web app (about $9), two public IPv4 addresses (about $7) and the KMS keys ($3). CloudFront, DynamoDB, S3 and the logs cost cents at test volumes. |
+| Running | About **$2.10 a day** (about $62 a month) | The load balancer (about $16 a month), the worker (about $29), the web app (about $9), two public IPv4 addresses (about $7) and the KMS keys ($1 a month each: two, plus one per museum). CloudFront, DynamoDB, S3, KMS requests (one per file, with Bucket Keys off) and the logs cost cents at test volumes. |
 | Paused | About **$0.65 a day** | The load balancer and the KMS keys still bill. |
 | Destroyed | Nothing | — |
 
@@ -263,8 +291,8 @@ Nothing in the Terraform code names an account.
 2. **Settings.** Check the region and the label in `ucb-dev.conf`.
 3. **Deploy.** Run `./bmu aws deploy --env ucb-dev`. Everything is created fresh there: its own state bucket,
    new keys, new tables and a new address. No state is moved between accounts.
-4. **The read-only account.** Run `./bmu aws reader-secret --env ucb-dev`. The new environment's secret starts
-   empty.
+4. **The read-only accounts.** Run `./bmu aws reader-secret <museum> --env ucb-dev` for each museum. The new
+   environment's secrets start empty.
 
 The personal environment is unaffected; `./bmu aws destroy --env personal-dev` removes it when you're done with
 it.
@@ -281,7 +309,7 @@ to `main`, with the Terraform version pinned there. None of them needs an AWS si
   aren't formatted; without `-check` it fixes them.
 - **`terraform validate`.** It checks every resource and argument against the provider.
 - **`terraform test`.** In `deploy/terraform/app`. It plans against a simulated AWS provider and checks names,
-  the paused state, the allowlist, data protection and that bad input is refused
+  the paused state, the allowlist, data protection, each museum's key and secret, and that bad input is refused
   (`tests/app.tftest.hcl`).
 
 To run `validate` and `test` on your computer, use a separate, empty Terraform folder (`TF_DATA_DIR`). A folder
@@ -327,10 +355,14 @@ still try to read it (and fail with a 403 when you aren't signed in):
   - CloudFront can also refuse new distributions until AWS has verified a new account. AWS Support resolves
     that.
 - **403 "open only to listed addresses".** Your address changed: run `./bmu aws allow-my-ip`.
-- **"'<env>' was deployed for <server> (tenant <tenant>), but its settings now say …".** `CSPACE_URL` or `TENANT`
-  changed in the settings files after the environment was deployed (see "One CollectionSpace server per
-  environment" above). Nothing was changed. Put the setting back, or follow that section to move to another
-  server.
+- **"'<env>' was deployed with <museum> on <server>, but its settings now say …".** A museum's server changed in
+  the settings files after the environment was deployed (see "Once deployed, a museum's server never changes"
+  above). Nothing was changed. Put the setting back, or follow that section to move to another server.
+- **"<museum> is no longer in the settings, but it has <n> unfinished job(s)".** A museum was taken out of
+  `CSPACE_TENANTS` while it still has jobs that aren't Completed. Nothing was changed. Put it back; to remove it,
+  first finish or delete its jobs.
+- **"Set CSPACE_TENANTS, or TENANT and CSPACE_URL, not both".** A `.local.conf` still sets `TENANT` or `CSPACE_URL`
+  while the settings file lists `CSPACE_TENANTS`. Move them into a `CSPACE_TENANTS` line in the `.local.conf`.
 - **"This account already has a BMU environment named '<name>'".** The first use of an environment on this
   computer found Terraform state for that name in the account. If you deployed it, from another computer, another
   clone or before a `destroy`, answer yes. Otherwise answer no and set `BMU_ENV_NAME` in your `.local.conf`.
@@ -343,13 +375,13 @@ still try to read it (and fail with a 403 when you aren't signed in):
 - **An intern sees "The BMU can't check this against CollectionSpace now"**, for example "Couldn't load the
   languages list". The read-only account can't be used; the rest of the message says why. Staff are not affected.
   - "its secret can't be read": usually the secret was never set. This is normal after a first deploy, and after
-    `destroy` and a new deploy. `./bmu aws status` then says "NOT SET": run `./bmu aws reader-secret`, then reload
+    `destroy` and a new deploy. `./bmu aws status` then says "NOT SET" for that museum: run `./bmu aws reader-secret <museum>`, then reload
     the draft. If `status` says it is set, the web app's log says why it can't use it (the name of the error, never the
     secret): `./bmu aws logs web` and look for "the reader account's secret can't be used".
     `ResourceNotFoundException` means no value; `AccessDeniedException` means the web role isn't allowed to read
     it (a fault in `deploy/terraform/app/iam.tf`); `KeyError` or `JSONDecodeError` means the value isn't the
-    user name and password `reader-secret` writes (for example, set in the console): run `./bmu aws reader-secret`.
-  - "its secret has no user name or password yet": run `./bmu aws reader-secret`.
+    user name and password `reader-secret` writes (for example, set in the console): run `./bmu aws reader-secret <museum>`.
+  - "its secret has no user name or password yet": run `./bmu aws reader-secret <museum>`.
   - "CollectionSpace refused its sign-in": the password was changed in CollectionSpace or the account lost its
     role; set the secret again or ask the CollectionSpace administrator.
 - **With the simulated CollectionSpace, records and finished jobs don't match.** The simulator lost its records when
