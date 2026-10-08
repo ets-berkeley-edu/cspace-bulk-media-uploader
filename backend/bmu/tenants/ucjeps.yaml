@@ -1,0 +1,112 @@
+# UCJEPS (University and Jepson Herbaria) tenant configuration, carried over from the legacy BMU
+# (cspace-deployment/cspace-webapps-ucb/ucjeps/config/uploadmedia.cfg, and getNumber.py and uploadMedia.py in
+# cspace-webapps-common/uploadmedia) and UCJEPS's UI profile (cspace-deployment/cspace-ui-plugin-profile-ucjeps.js,
+# version 4.1.1: the Media and Object fields and option lists). See the design doc, "UCJEPS" under Handling options,
+# and the gaps listed in its Status entry for this file (born-digital, Source, Folder).
+key: ucjeps
+name: UCJEPS
+domain: ucjeps.cspace.berkeley.edu
+media_extension: media_ucjeps
+primary_display: false        # UCJEPS's Media extension has no primaryDisplay (the legacy BMU sent it anyway)
+
+# The legacy options (bmuoptions), less born-digital, which waits for the BMU's DP numbers (design: Born-digital
+# identification numbers). Legacy UCJEPS set identificationNumber to the object number for every option, slides and
+# media only included. Slide's presets are the legacy bmuconstants.
+handling:
+  - id: link
+    label: Link to existing object
+    legacy: media+accession
+    object: existing
+    id_rule: object
+    presets: {}
+  - id: create
+    label: Create new object + link
+    legacy: media+create+accession
+    object: create            # a skeletal Object record with only its number, as the legacy BMU creates
+    id_rule: object
+    presets: {}
+  - id: mediaonly
+    label: Media only (no object)
+    legacy: mediaonly
+    object: none
+    id_rule: object
+    presets: {}
+  - id: slide
+    label: Slide (no object)
+    legacy: slide
+    object: none
+    id_rule: object
+    presets:
+      type: ["Slide (Photograph)"]
+      copyright: "Material may be protected by copyright (Title 17, U.S. Code)."
+      contributor: "urn:cspace:ucjeps.cspace.berkeley.edu:orgauthorities:name(institution):item:name(UniversityandJepsonHerbariaImageCollection1445039176532)'University and Jepson Herbaria Image Collection'"
+
+# media_ucjeps/postToPublic, an option list (yesNoValues) defaulting to yes. Shown as Restricted, its inverse, like
+# PAHMA's: Restricted sends no. The values are quoted: YAML reads a bare yes or no as true or false.
+publish:
+  field: postToPublic
+  header: Restricted
+  invert: true
+  default: false              # not restricted: postToPublic = yes, as UCJEPS's UI defaults it
+  values: ["yes", "no"]
+
+# Legacy getNumber.py: the object number is the name up to its first "." or "_" (UC1107670.JPG,
+# UC1107670_a_nice_pic.JPG). The extension is removed before matching, so the pattern sees UC1107670_a_nice_pic.
+filename:
+  hint: "Object number, optionally followed by _ or . and anything else, e.g. UC1107670.jpg or UC1107670_a_nice_pic.jpg"
+  pattern: '^(?P<obj>[A-Za-z0-9][A-Za-z0-9-]*)(?:[._](?P<suffix>[A-Za-z0-9._-]+))?$'
+
+# UCJEPS's mediaTypes: core's values plus its own, with the labels its UI shows.
+media_types:
+  - dataset
+  - { value: Digital Image, label: digital image }
+  - document
+  - { value: Illustration, label: illustration }
+  - { value: moving_image, label: moving image }
+  - { value: Scanned Photograph, label: scanned photograph }
+  - { value: Slide (Photograph), label: slide (photograph) }
+  - { value: still_image, label: still image }
+  - sound
+
+# The legacy BMU sent English for every UCJEPS record.
+language:
+  default: "urn:cspace:ucjeps.cspace.berkeley.edu:vocabularies:name(languages):item:name(eng)'English'"
+
+# UCJEPS's Media fields search local persons, local organizations and its "institution" organization vocabulary
+# (person/local,organization/local,organization/institution); no autocomplete timing of its own (cspace-ui's
+# defaults: 500 ms, 3 characters). VERIFY with scripts/check_cspace.py --vocabularies against UCJEPS QA.
+authorities:
+  person: { service: personauthorities, vocabulary: person }
+  organization: { service: orgauthorities, vocabulary: organization }
+  institution: { service: orgauthorities, vocabulary: institution }
+authority_fields:
+  creator: [person, organization, institution]
+  contributor: [person, organization, institution]
+  rightsHolder: [person, organization, institution]
+
+roles:
+  staff: [BMU_Staff]
+  intern: [BMU_Intern]
+
+staff_permissions:
+  media: CRU
+  relations: C
+  collectionobjects: R
+  personauthorities: R
+  orgauthorities: R
+  vocabularies: R
+  structureddates: R
+
+# Design (Protected files): at UCJEPS one yes/no field, postToPublic, works at both levels. A specimen (Object)
+# with postToPublic = no makes its documents protected files, which then default to Restricted. Proposed in the
+# design; VERIFY with UCJEPS that this is what they want, and on QA that the element is collectionobjects_ucjeps
+# postToPublic (`python scripts/check_cspace.py --object <number> --show-object`).
+sensitivity:
+  summary: "At UCJEPS, a specimen not posted to public makes its images protected files; Restricted controls each image."
+  explain:
+    - "Specimens. An Object with Post to public = no makes the documents linked to it protected files automatically."
+    - "Each image. Restricted keeps the image off the public portal (it sends Post to public = no). Protected files default to Restricted."
+  protect:
+    - reason: "specimen not posted to public"
+      all:
+        - { element: postToPublic, equals: "no" }

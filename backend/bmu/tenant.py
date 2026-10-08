@@ -88,6 +88,8 @@ class Tenant:
     # What a staff account must be allowed to do in CollectionSpace to sign in: resource -> action letters
     # (C)reate (R)ead (U)pdate, as accounts/0/accountperms reports them.
     staff_permissions: dict[str, str] = field(default_factory=dict)
+    # Whether the tenant's Media extension has primaryDisplay, which the BMU sets to false (UCJEPS's has none).
+    primary_display: bool = True
 
     @property
     def media_type_values(self) -> set[str]:
@@ -165,7 +167,11 @@ def parse_tenant(raw: dict[str, Any], key: str) -> Tenant:
         staff_roles=tuple((raw.get("roles") or {}).get("staff") or ()),
         intern_roles=tuple((raw.get("roles") or {}).get("intern") or ()),
         staff_permissions={str(k): str(v).upper() for k, v in (raw.get("staff_permissions") or {}).items()},
+        primary_display=bool(raw.get("primary_display", True)),
     )
+    values = tenant.publish.get("values")
+    if values is not None and not (isinstance(values, list) and len(values) == 2 and all(isinstance(v, str) and v for v in values)):
+        raise ValueError(f"{key}.yaml: publish.values must be two words, for public and not public, such as ['yes', 'no'] (quoted: YAML reads a bare yes or no as true or false)")
     for h in tenant.handling:
         problems = preset_problems(tenant, h)
         if problems:

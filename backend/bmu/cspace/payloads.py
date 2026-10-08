@@ -71,12 +71,23 @@ def media_xml(tenant: Tenant, row: dict) -> bytes:
     _add(common, "copyrightStatement", row.get("copyright"))
 
     local = _part(doc, tenant.media_extension, f"{NS_MEDIA}/local/{tenant.key}")
+    # The tenant's one publish field (design: Protected files): approvedForWeb true/false at PAHMA, postToPublic
+    # yes/no at UCJEPS. The UI shows it as Restricted, its inverse.
     pub = tenant.publish
-    if pub.get("field") == "approvedForWeb":
+    if pub.get("field"):
         approved = not row.get("restricted", pub.get("default", False)) if pub.get("invert") else bool(row.get("publish", True))
-        _add(local, "approvedForWeb", "true" if approved else "false")
-    _add(local, "primaryDisplay", "false")
+        yes, no = publish_values(tenant)
+        _add(local, pub["field"], yes if approved else no)
+    if tenant.primary_display:  # not in every tenant's Media extension (UCJEPS's has none)
+        _add(local, "primaryDisplay", "false")
     return _xml(doc)
+
+
+def publish_values(tenant: Tenant) -> tuple[str, str]:
+    """What the publish field holds for "may go public" and for "may not": true/false unless the tenant's
+    configuration names others (publish.values, for example [yes, no] for an option list such as yesNoValues)."""
+    values = tenant.publish.get("values") or ["true", "false"]
+    return str(values[0]), str(values[1])
 
 
 def object_xml(object_number: str) -> bytes:
