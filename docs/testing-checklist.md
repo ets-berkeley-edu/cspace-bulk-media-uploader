@@ -373,6 +373,14 @@ Branch `feature/multi-museum-backend` (PR B of the multi-museum work; design: On
 - [ ] `./bmu logs sim worker`: it says "worker … started for tenant pahma", from the thread `worker-pahma`.
 - [ ] `./bmu up qa` (optional): sign in with your PAHMA QA account as before.
 
+## 9. One deployment for several museums: the sign-in page (10 minutes)
+
+Branch `feature/museum-sign-in` (PR C of the multi-museum work). The sign-in page lists the museums when the BMU serves more than one, asks for one before anything is sent, signs in there, and remembers the choice in the browser; with one museum nothing changes on the page. The UI mockup's sign-in has the same Museum list. Claude ran the frontend lint, type check, all Vitest tests (three new ones for the museum list) and the production build. Only PAHMA has a configuration, so the list can't appear in `./bmu up sim` yet: the tests cover it with two museums.
+
+- [ ] CI on the pull request passes.
+- [ ] `./bmu down all`, then `./bmu up sim`. The sign-in page looks as before (no Museum list); sign in as `admin` / `admin`; the app bar shows PAHMA.
+- [ ] Open the UI mockup (`./bmu open mockup`): the sign-in card starts with a Museum list of the mockup's museums, above the username. Choose one and sign in: the mockup shows that museum. The dashed "Mockup only" box no longer has a Tenant list.
+
 ## Not tests, but still open
 
 - The design doc's "For Richard to address" list (from the October 3 comparison of the doc with the prototype).

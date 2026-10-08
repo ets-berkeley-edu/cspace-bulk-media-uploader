@@ -25,6 +25,25 @@
                 Sign in with your CollectionSpace account. Your password is used only for your uploads and is deleted when they finish.
               </p>
               <v-form @submit.prevent="signIn">
+                <template v-if="museums.length > 1">
+                  <label class="font-weight-medium text-body-2" for="museum">Museum</label>
+                  <select
+                    id="museum"
+                    v-model="museum"
+                    class="d-block mb-4 mt-1 museum-select native-select w-100"
+                    :disabled="isSigningIn"
+                  >
+                    <option disabled value="">Choose your museum</option>
+                    <option
+                      v-for="m in museums"
+                      :id="`museum-${m.key}`"
+                      :key="m.key"
+                      :value="m.key"
+                    >
+                      {{ m.name }}
+                    </option>
+                  </select>
+                </template>
                 <label class="font-weight-medium text-body-2" for="username">CollectionSpace username</label>
                 <v-text-field
                   id="username"
@@ -84,8 +103,14 @@ import {alertScreenReader, putFocusNextTick} from '@/lib/utils'
 import {logIn} from '@/api/auth'
 import {useContextStore} from '@/stores/context'
 
+const MUSEUM_KEY = 'bmu-museum'
+
 const contextStore = useContextStore()
 const error = ref('')
+// The museums this BMU serves (design: One deployment for several museums). With one, there's nothing to choose
+// and the list isn't shown; the server signs in at that museum.
+const museums = computed(() => contextStore.config.tenants || [])
+const museum = ref(rememberedMuseum())
 const isSigningIn = ref(false)
 const password = ref('')
 const route = useRoute()
@@ -99,8 +124,32 @@ onMounted(() => {
   contextStore.loadingComplete('Sign in', message.value || 'Bulk Media Uploader. Please sign in.', 'username')
 })
 
+/** The museum chosen at the last sign-in in this browser, if the BMU still serves it. */
+function rememberedMuseum(): string {
+  try {
+    const key = window.localStorage.getItem(MUSEUM_KEY) || ''
+    return (useContextStore().config.tenants || []).some(m => m.key === key) ? key : ''
+  } catch {
+    return ''
+  }
+}
+
+function rememberMuseum(key: string) {
+  try {
+    window.localStorage.setItem(MUSEUM_KEY, key)
+  } catch {
+    // a browser that keeps nothing: the list just starts unchosen next time
+  }
+}
+
 const signIn = () => {
   const name = username.value.trim()
+  const several = museums.value.length > 1
+  if (several && !museum.value) {
+    error.value = 'Choose your museum.'
+    putFocusNextTick('museum')
+    return
+  }
   if (!name || !password.value) {
     error.value = 'Enter your CollectionSpace username and password.'
     putFocusNextTick(name ? 'password' : 'username')
@@ -108,8 +157,11 @@ const signIn = () => {
   }
   isSigningIn.value = true
   error.value = ''
-  logIn(name, password.value).then(
+  logIn(name, password.value, several ? museum.value : undefined).then(
     currentUser => {
+      if (several) {
+        rememberMuseum(museum.value)
+      }
       contextStore.setCurrentUser(currentUser)
       alertScreenReader('Signed in')
       router.push(redirectAfterLogin(route.query.redirect))
@@ -129,5 +181,8 @@ const signIn = () => {
 <style scoped>
 .login-column {
   max-width: 420px;
+}
+.museum-select {
+  min-height: 48px;
 }
 </style>
