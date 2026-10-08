@@ -16,7 +16,7 @@ export interface TenantInfo {
   key: string;
   name: string;
   handling: Handling[];
-  publish: { field: string; header: string; invert?: boolean; default?: boolean };
+  publish: { field: string; header: string; invert?: boolean; default?: boolean; values?: [string, string] };
   filenameHint: string;
   filenamePattern: string; // Python regular expression with named parts (obj)
   mediaTypes: Option[];

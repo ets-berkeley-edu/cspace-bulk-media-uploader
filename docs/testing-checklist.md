@@ -406,6 +406,11 @@ Branch `feature/museum-deploy` (PR D of the multi-museum work; design: One deplo
 
 **A second museum (temporary)**
 
+Since October 8 (Richard's decision): the second museum is UCJEPS, once section 11's local checks pass, and it stays in personal-dev; the removal test uses a throwaway `pahma2` instead.
+- Adding, the reader secret, signing in and the key check: skip the `sed` step, list `ucjeps=https://ucjeps.qa.collectionspace.org` in `CSPACE_TENANTS`, read `ucjeps` wherever these steps say `pahma2`, and sign in to UCJEPS with your UCJEPS QA account. The image is clean, not `-dirty`.
+- The server-change step: change UCJEPS's address, as written for `pahma2`, then put it back.
+- The removal steps: run the `sed` step to make `pahma2`, add `pahma2=https://pahma.qa.collectionspace.org` to `CSPACE_TENANTS` (three museums), deploy, give it a draft, then follow the removal steps for `pahma2`. UCJEPS and PAHMA stay.
+
 - [ ] Make the temporary museum (don't commit it): `sed -e 's/^key: pahma$/key: pahma2/' -e 's/^name: PAHMA$/name: PAHMA copy/' backend/bmu/tenants/pahma.yaml > backend/bmu/tenants/pahma2.yaml`. In `personal-dev.local.conf`: `CSPACE_TENANTS="pahma=https://pahma.qa.collectionspace.org pahma2=https://pahma.qa.collectionspace.org"`.
 - [ ] `./bmu aws plan`: "Adding the museum pahma2 (https://pahma.qa.collectionspace.org)". The plan adds pahma2's key, alias and secret, and changes the bucket policy, the roles' policies and both task definitions. Nothing of pahma's is replaced.
 - [ ] `./bmu aws deploy` (the image tag ends in `-dirty`). The sign-in page now starts with a Museum list: PAHMA and PAHMA copy.
@@ -421,6 +426,34 @@ Branch `feature/museum-deploy` (PR D of the multi-museum work; design: One deplo
 
 - [ ] Section 7 (the simulated CollectionSpace), as amended above.
 - [ ] `./bmu aws pause` when you're done.
+
+## 11. UCJEPS (60 minutes)
+
+Branch `feature/ucjeps-tenant`. UCJEPS's configuration (`backend/bmu/tenants/ucjeps.yaml`) comes from the legacy BMU and UCJEPS's UI profile; parts of it can only be confirmed on UCJEPS QA (`https://ucjeps.qa.collectionspace.org`). Claude ran the backend suite (with `tests/test_ucjeps.py`) and the frontend type check and lint; Claude could not reach UCJEPS QA. These checks create real records on UCJEPS QA.
+
+**Before starting, on UCJEPS QA**
+
+- [ ] Create them first (none existed on October 8): the roles BMU_Staff, BMU_Intern and BMU_Reader (BMU_Reader with read permission only: Objects, Media, the Person and Organization authorities, vocabularies and the date parser; see deploy/README.md), BMU_Staff on your account, an intern account with BMU_Intern, and a read-only account with only BMU_Reader.
+
+**The configuration against UCJEPS QA** (`scripts/check_cspace.py`). First, in the shell you'll use, so the password isn't shown, saved in a file or kept in the shell's history: `export CSPACE_URL=https://ucjeps.qa.collectionspace.org CSPACE_USER=<you>; read -rs -p "Password: " CSPACE_PASSWORD; export CSPACE_PASSWORD`. Run `unset CSPACE_PASSWORD` when done.
+
+- [ ] `python scripts/check_cspace.py --tenant ucjeps --roles`: your BMU role is staff, with nothing missing.
+- [ ] `... --tenant ucjeps --vocabularies`: the Person vocabulary `person`, and the Organization vocabularies `organization` and `institution`, exist.
+- [ ] `... --tenant ucjeps --terms "urn:cspace:ucjeps.cspace.berkeley.edu:orgauthorities:name(institution):item:name(UniversityandJepsonHerbariaImageCollection1445039176532)'University and Jepson Herbaria Image Collection'"`: the Slide contributor exists.
+- [ ] `... --tenant ucjeps --object <a specimen number, e.g. UC1107670> --show-object`: the Object record has `postToPublic` in `collectionobjects_ucjeps` (the sensitivity rule reads it).
+- [ ] Optional, creates records: `... --tenant ucjeps --object <number> --create`: the Media record is created and linked, with Post to public = yes in UCJEPS's UI.
+
+**Locally against UCJEPS QA**
+
+- [ ] `./bmu down qa`, then `BMU_QA_TENANT=ucjeps BMU_ALWAYS_RUN_TIME=true ./bmu up qa`. The label reads "Local · UCJEPS QA"; sign in with your UCJEPS QA account; the header shows UCJEPS.
+- [ ] Add files named after real specimens (`UC1107670.jpg`, `UC1107670_detail.jpg`): the object number is `UC1107670` for both. A name with a space shows "Fix filename".
+- [ ] Handling offers Link to existing object, Create new object + link, Media only (no object) and Slide (no object). Slide fills the type Slide (Photograph), the copyright statement and the contributor University and Jepson Herbaria Image Collection, all marked as presets. The media type list is UCJEPS's (digital image, illustration, scanned photograph, slide (photograph) among them).
+- [ ] Mark one document Restricted, then submit and let the job run. In UCJEPS's UI, the Media records have Post to public = yes, except the restricted one (no); each is linked to its specimen (Link) or has none (Slide); nothing is reported as an error.
+- [ ] A document linked to a specimen with Post to public = no becomes a protected file (if QA has one): "specimen not posted to public", Restricted by default.
+- [ ] As the intern: a draft open to interns checks its documents; the languages list loads.
+- [ ] `./bmu down qa` when done (the next `./bmu up qa` without `BMU_QA_TENANT` is PAHMA again).
+
+**Then** section 10's second museum in AWS, with UCJEPS.
 
 ## Not tests, but still open
 

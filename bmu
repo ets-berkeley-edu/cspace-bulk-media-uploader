@@ -2,7 +2,7 @@
 # ./bmu — start, stop and open the BMU's environments, side by side.
 #
 #   ./bmu up sim        local stack with the simulated CollectionSpace and Demo tools  → http://localhost:5173
-#   ./bmu up qa         local stack against the PAHMA QA tenant (real records!)        → http://localhost:5273
+#   ./bmu up qa         local stack against a QA tenant, PAHMA's unless BMU_QA_TENANT (real records!) → http://localhost:5273
 #   ./bmu down sim|qa|all
 #   ./bmu status        which environments are running, and their addresses
 #   ./bmu logs sim|qa [service]     follow the logs (services: web, worker, frontend, fakecspace, s3, dynamodb)
@@ -18,7 +18,10 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 # ---- the environments ------------------------------------------------------------------------------------------
-QA_CSPACE_URL="${BMU_QA_CSPACE_URL:-https://pahma.qa.collectionspace.org}"
+# The QA tenant for ./bmu up qa: PAHMA unless BMU_QA_TENANT names another museum with a configuration
+# (backend/bmu/tenants/<museum>.yaml), such as ucjeps; its server is https://<museum>.qa.collectionspace.org.
+QA_TENANT="${BMU_QA_TENANT:-pahma}"
+QA_CSPACE_URL="${BMU_QA_CSPACE_URL:-https://$QA_TENANT.qa.collectionspace.org}"
 # The AWS environment's address: saved by ./bmu aws deploy (BMU_AWS_ENV picks the environment; BMU_AWS_DEV_URL overrides)
 AWS_ENV="${BMU_AWS_ENV:-personal-dev}"
 AWS_DEV_URL="${BMU_AWS_DEV_URL:-$(cat "deploy/environments/$AWS_ENV.url" 2>/dev/null || true)}"
@@ -29,14 +32,16 @@ env_settings() {
   case "$1" in
     sim)
       export BMU_UI_PORT=5173 BMU_API_PORT=8000 BMU_S3_PORT=9000 BMU_DYNAMODB_PORT=8001 BMU_SIM_PORT=8180
-      export BMU_CSPACE_URL="http://fakecspace:8180" BMU_DEMO=true BMU_COOKIE_NAME=bmu_session
+      export BMU_CSPACE_URL="http://fakecspace:8180" BMU_TENANT=pahma BMU_DEMO=true BMU_COOKIE_NAME=bmu_session
       export BMU_ENV_LABEL="Local · simulated CollectionSpace"
       export BMU_READER_USER=bmureader BMU_READER_PASSWORD=bmureader   # the simulator's read-only account, for interns' checks
       export BMU_ALWAYS_RUN_TIME="${BMU_ALWAYS_RUN_TIME:-false}" ;;
     qa)
       export BMU_UI_PORT=5273 BMU_API_PORT=8100 BMU_S3_PORT=9100 BMU_DYNAMODB_PORT=8101 BMU_SIM_PORT=8280
-      export BMU_CSPACE_URL="$QA_CSPACE_URL" BMU_DEMO=false BMU_COOKIE_NAME=bmu_session_qa
-      export BMU_ENV_LABEL="Local · PAHMA QA"
+      [ -f "backend/bmu/tenants/$QA_TENANT.yaml" ] ||
+        { echo "BMU_QA_TENANT=$QA_TENANT: the BMU has no configuration for it (backend/bmu/tenants/$QA_TENANT.yaml)." >&2; exit 2; }
+      export BMU_CSPACE_URL="$QA_CSPACE_URL" BMU_TENANT="$QA_TENANT" BMU_DEMO=false BMU_COOKIE_NAME=bmu_session_qa
+      BMU_ENV_LABEL="Local · $(echo "$QA_TENANT" | tr '[:lower:]' '[:upper:]') QA"; export BMU_ENV_LABEL
       # QA's read-only account for interns' checks, if you have one: set both in your shell, never in a file here.
       # Without them an intern's documents are checked with the intern's own sign-in.
       export BMU_READER_USER="${BMU_QA_READER_USER:-}" BMU_READER_PASSWORD="${BMU_QA_READER_PASSWORD:-}"
@@ -103,7 +108,7 @@ case "$cmd" in
   urls)
     echo "UI mockup:              $PWD/$MOCKUP_FILE"
     echo "Local · simulator:      http://localhost:5173   (./bmu up sim)"
-    echo "Local · PAHMA QA:       http://localhost:5273   (./bmu up qa)"
+    echo "Local · QA ($QA_TENANT):   http://localhost:5273   (./bmu up qa)"
     printf "%-24s%s\n" "AWS ($AWS_ENV):" "${AWS_DEV_URL:-not deployed yet (./bmu aws deploy)}"
     echo "Start page:             $PWD/docs/start.html   (./bmu open home)" ;;
   aws)
