@@ -342,7 +342,7 @@ deploy() {
   image="$repo:$tag"
 
   echo "== 2/3 Image $image (linux/arm64)"
-  docker build --platform linux/arm64 -f deploy/Dockerfile -t "$image" .
+  docker build --pull --platform linux/arm64 -f deploy/Dockerfile -t "$image" .
   # The registry's short-lived token goes straight from the AWS CLI to Docker; it is never shown or saved here.
   aws_ ecr get-login-password | docker login --username AWS --password-stdin "$registry" >/dev/null
   docker push "$image"
@@ -350,7 +350,7 @@ deploy() {
   if [ "$SIMULATED_CSPACE" = true ]; then
     sim_image="$(tf registry output -raw fakecspace_repository_url):$tag"
     echo "== 2/3 Simulated CollectionSpace image $sim_image (linux/arm64)"
-    docker build --platform linux/arm64 -f deploy/fakecspace.Dockerfile -t "$sim_image" .
+    docker build --pull --platform linux/arm64 -f deploy/fakecspace.Dockerfile -t "$sim_image" .
     docker push "$sim_image"
   fi
 

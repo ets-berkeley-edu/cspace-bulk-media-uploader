@@ -1,4 +1,9 @@
-FROM python:3.11-slim
+FROM python:3.11-slim-trixie
+# eMudhra CA compromise (Oct 2026): take Debian's fixed ca-certificates even if the base image predates it;
+# the build fails if the installed version is older than the fix.
+RUN apt-get update && apt-get install -y --no-install-recommends --only-upgrade ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" ge 20250419+deb13u1
 WORKDIR /app
 # The pinned dependencies first, checked against their hashes, so a change to the code alone reuses this layer.
 COPY requirements.txt ./

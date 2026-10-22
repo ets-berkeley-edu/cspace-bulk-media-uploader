@@ -3,7 +3,12 @@
 # (./bmu aws deploy does this):
 #   docker build --platform linux/arm64 -f deploy/fakecspace.Dockerfile -t fakecspace .
 # It isn't CollectionSpace: its accounts' passwords are public (backend/fakecspace/app.py) and its data is in memory.
-FROM public.ecr.aws/docker/library/python:3.11-slim
+FROM public.ecr.aws/docker/library/python:3.11-slim-trixie
+# eMudhra CA compromise (Oct 2026): take Debian's fixed ca-certificates even if the base image predates it;
+# the build fails if the installed version is older than the fix.
+RUN apt-get update && apt-get install -y --no-install-recommends --only-upgrade ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" ge 20250419+deb13u1
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/app
 WORKDIR /app
 # The same pinned dependencies as the BMU, checked against their hashes (it needs FastAPI, uvicorn, python-multipart
