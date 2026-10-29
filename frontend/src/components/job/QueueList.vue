@@ -604,7 +604,7 @@ import JobActions from '@/components/job/JobActions.vue'
 import JobDetails from '@/components/job/JobDetails.vue'
 import QueueSchedule from '@/components/job/QueueSchedule.vue'
 import SortableColumnHeader from '@/components/util/SortableColumnHeader.vue'
-import {formatTime} from '@/lib/files'
+import {CHECKS_AT_ONCE, formatTime, mapLimit} from '@/lib/files'
 import {absLabel, parsePtInput, ptInputValue, runsAt} from '@/lib/schedule'
 import {checksColor, checksText, runName, runNumber} from '@/lib/status'
 import {tableState, tableView} from '@/lib/table'
@@ -731,6 +731,7 @@ const expandAll = (on: boolean) => {
 }
 
 const refresh = async (runChecks = false) => {
+  const background = !runChecks
   try {
     const [r, s] = await Promise.all([api.jobs(!runChecks), api.getSchedule(!runChecks)])
     jobs.value = r.jobs.filter(j => j.status === 'Running' || j.status === 'Queued')
@@ -754,12 +755,11 @@ const refresh = async (runChecks = false) => {
   }
   if (runChecks) {
     // Design: checks are re-run against CollectionSpace each time the queue is shown, and when its order changes.
-    for (const job of queued.value) {
-      api.check(job.id).then(r => {
-        checks.set(job.id, r.counts)
-        docs.set(job.id, r.rows)
-      }).catch(() => undefined)
-    }
+    // A check started by the timer (the order changed) is a background refresh: it doesn't keep the sign-in alive
+    void mapLimit(queued.value, CHECKS_AT_ONCE, job => api.check(job.id, undefined, background).then(r => {
+      checks.set(job.id, r.counts)
+      docs.set(job.id, r.rows)
+    }).catch(() => undefined))
     api.queueCollisions(true).then(p => {
       plan.value = Array.isArray(p?.problems) ? p : null
       if (!plan.value?.changes) {
@@ -845,7 +845,7 @@ const hold = (job: Job, on: boolean) => change(
   on ? 'Hold anyway' : 'Release anyway'
 )
 const nowInput = () => ptInputValue(Date.now() / 1000)
-const untilOf = (job: Job) => job.credentialExpires ?? Date.now() / 1000 + 72 * 3600
+const untilOf = (job: Job) => job.credentialExpires ?? Date.now() / 1000 + 96 * 3600
 
 const openRunAt = (job: Job) => {
   runAtEdit.value = {id: job.id, value: job.runAt ? ptInputValue(job.runAt) : '', error: ''}

@@ -230,7 +230,7 @@ import type {CheckCounts, Job, Row, TenantInfo} from '@/types'
 import JobActions from '@/components/job/JobActions.vue'
 import JobDetails from '@/components/job/JobDetails.vue'
 import SortableColumnHeader from '@/components/util/SortableColumnHeader.vue'
-import {formatTime} from '@/lib/files'
+import {CHECKS_AT_ONCE, formatTime, mapLimit} from '@/lib/files'
 import {accessLabel, reviewLabel} from '@/lib/roles'
 import {checksColor, checksText} from '@/lib/status'
 import {tableState, tableView} from '@/lib/table'
@@ -359,13 +359,11 @@ const refresh = async (runChecks = false) => {
     error.value = (e as Error).message
   }
   if (runChecks) {
-    for (const draft of drafts.value) {
-      checks.set(draft.id, 'checking')
-      api.check(draft.id).then(r => {
-        checks.set(draft.id, r.counts)
-        docs.set(draft.id, r.rows)
-      }).catch(() => checks.delete(draft.id))
-    }
+    drafts.value.forEach(draft => checks.set(draft.id, 'checking'))
+    void mapLimit(drafts.value, CHECKS_AT_ONCE, draft => api.check(draft.id).then(r => {
+      checks.set(draft.id, r.counts)
+      docs.set(draft.id, r.rows)
+    }).catch(() => checks.delete(draft.id)))
   }
 }
 

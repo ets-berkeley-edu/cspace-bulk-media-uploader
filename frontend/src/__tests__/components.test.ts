@@ -43,6 +43,25 @@ describe('AuthorityInput', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
+  it('ignores the answer to an earlier search once the text changed (review 6.3)', async () => {
+    vi.useFakeTimers()
+    let answerFirst: (r: Response) => void = () => undefined
+    const json = (terms: unknown[]) => new Response(JSON.stringify({terms}), {status: 200, headers: {'content-type': 'application/json'}})
+    const fetchMock = vi.fn()
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { answerFirst = resolve }))
+      .mockResolvedValue(json([]))
+    vi.stubGlobal('fetch', fetchMock)
+    const w = mount(AuthorityInput, {props: {id: 'creator', modelValue: '', field: 'creator', label: 'Creator'}})
+    await w.find('input').setValue('freu')
+    await vi.advanceTimersByTimeAsync(600)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await w.find('input').setValue('freun') // typed on before the first answer arrived
+    answerFirst(json([{refName: REF, displayName: 'Leslie Freund', source: 'person'}]))
+    await flushPromises()
+    expect(w.findAll('.ac-item')).toHaveLength(0)
+    expect(w.text()).not.toContain('Leslie Freund')
+  })
+
   it('shows only the display name of the stored refName, and never saves free text', async () => {
     vi.useFakeTimers()
     const w = mount(AuthorityInput, {props: {id: 'creator', modelValue: REF, field: 'creator', label: 'Creator'}})

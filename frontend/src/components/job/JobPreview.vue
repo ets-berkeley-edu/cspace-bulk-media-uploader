@@ -403,13 +403,19 @@ const check = async () => {
   }
 }
 
+// Left while the first load was still on its way: no timer is started then (it would poll for the rest of the session)
+let unmounted = false
 onMounted(async () => {
   if (await load()) {
     await check()
   }
+  if (unmounted) return
   timer = setInterval(() => void load(true), isRunning.value ? 3000 : 5000)
 })
-onBeforeUnmount(() => clearInterval(timer))
+onBeforeUnmount(() => {
+  unmounted = true
+  clearInterval(timer)
+})
 
 /** After an action here: a deleted job goes back to the list; otherwise show the job as it is now. */
 const done = async () => {

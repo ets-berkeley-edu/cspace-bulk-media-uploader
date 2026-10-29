@@ -51,7 +51,11 @@ class Settings(BaseSettings):
     completed_days: int = 30  # a Completed job is removed this long after it finished
     protected_draft_days: int = 7  # a draft with a protected file expires this long after it was last saved
     protected_staged_days: int = 7  # a protected file's staged upload is removed this long after its job stopped
-    credential_hours: float = 72.0
+    # Design (Login and session): failed sign-ins allowed per username and museum in a window, as CollectionSpace has no
+    # lockout of its own
+    login_failures_allowed: int = 10
+    login_failure_window_seconds: float = 900.0
+    credential_hours: float = 96.0  # 4 days: the longest run-day gap (3 days, 73 hours over the fall DST change) plus the wait behind other jobs
     cookie_secure: bool = True
     # The session cookie's name. Environments that share a host name (two local stacks on different ports) need
     # different names: browsers send a host's cookies to every port, so one would otherwise sign the other out.
@@ -83,6 +87,9 @@ class Settings(BaseSettings):
     worker_lock_seconds: int = 120
     heartbeat_seconds: float = 30.0  # a running job's heartbeat is renewed this often
     heartbeat_stale_seconds: float = 300.0  # a Running job whose heartbeat is older stops as "worker_stopped"
+    # after SIGTERM, a step still running this long (a long upload) is cut off, so the run ends before ECS's
+    # stopTimeout (120 s, deploy/terraform/app/ecs.tf) sends SIGKILL
+    worker_stop_grace_seconds: float = 90.0
     static_dir: str | None = None  # serve the built Vue app from here, if set
 
     def museums(self) -> dict[str, str]:

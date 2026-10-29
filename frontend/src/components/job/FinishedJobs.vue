@@ -233,7 +233,7 @@ import FinishedJobActions from '@/components/job/FinishedJobActions.vue'
 import JobDocumentsTable from '@/components/job/JobDocumentsTable.vue'
 import JobResults from '@/components/job/JobResults.vue'
 import SortableColumnHeader from '@/components/util/SortableColumnHeader.vue'
-import {formatTime} from '@/lib/files'
+import {CHECKS_AT_ONCE, formatTime, mapLimit} from '@/lib/files'
 import {OUTCOME, countsText, failureOf, loadFailures, needsFix} from '@/lib/results'
 import {chipColor} from '@/lib/status'
 import {tableState, tableView} from '@/lib/table'
@@ -341,10 +341,9 @@ const refresh = async (runChecks = false) => {
   if (runChecks) {
     // Design: the button reads Fix and reschedule when a document fails a blocking check now, so the jobs that
     // can be rerun are checked against CollectionSpace as it is now; their results decide the label.
-    for (const job of jobs.value.filter(j => j.status !== 'Completed')) {
-      ensureLoaded(job)
-      api.check(job.id).then(r => blocking.set(job.id, r.counts.block)).catch(() => undefined)
-    }
+    const rerunnable = jobs.value.filter(j => j.status !== 'Completed')
+    rerunnable.forEach(j => ensureLoaded(j))
+    void mapLimit(rerunnable, CHECKS_AT_ONCE, job => api.check(job.id).then(r => blocking.set(job.id, r.counts.block)).catch(() => undefined))
   }
 }
 

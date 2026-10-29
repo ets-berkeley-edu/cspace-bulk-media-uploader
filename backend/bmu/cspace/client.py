@@ -220,6 +220,28 @@ class CSpaceClient:
         r = self._request("GET", "media", params={"as": q, "wf_deleted": "false", "pgSz": "10"})
         return [csid for csid, num in _list_items(r.content, "identificationNumber") if num == identification_number]
 
+    def find_media_like(self, identification_number: str, title: str) -> list[str]:
+        """CSIDs of non-deleted Media records with this identification number (or, without one, this title) whose
+        record has both exactly: what an earlier create of the same document would have made (design: Job
+        execution, a create whose answer was lost). Each candidate is read, so the match doesn't depend on which
+        fields the search list returns."""
+        field, value = ("identificationNumber", identification_number) if identification_number else ("title", title)
+        q = f'media_common:{field} = "{_quote(value)}"'
+        r = self._request("GET", "media", params={"as": q, "wf_deleted": "false", "pgSz": "10"})
+        out = []
+        for csid, _ in _list_items(r.content, field):
+            root = SafeET.fromstring(self._request("GET", f"media/{csid}").content)
+            if _text(root, "identificationNumber") == identification_number and _text(root, "title") == title:
+                out.append(csid)
+        return out
+
+    def find_groups(self, title: str) -> list[str]:
+        """CSIDs of non-deleted Group records whose title equals title exactly. VERIFY on QA: groups_common:title
+        in an advanced search."""
+        q = f'groups_common:title = "{_quote(title)}"'
+        r = self._request("GET", "groups", params={"as": q, "wf_deleted": "false", "pgSz": "10"})
+        return [csid for csid, t in _list_items(r.content, "title") if t == title]
+
     def search_terms(self, service: str, vocabulary: str, text: str, limit: int = 20) -> list[dict[str, str]]:
         """Authority terms whose display name matches `text` (partial term search)."""
         return self.search_terms_page(service, vocabulary, text, limit)[0]

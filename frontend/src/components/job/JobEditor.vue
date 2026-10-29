@@ -722,6 +722,8 @@ const localFiles = new Map<number, File>()
 const uploadingHere = reactive(new Set<number>())
 /** The uploads this page is sending, so deleting a document can stop its upload at once (design: Deleting a row). */
 const inFlight = new Map<number, AbortController>()
+/** Set when the editor is left, so nothing more is sent or polled from it. */
+let unmounted = false
 /** Stop the uploads of deleted documents; ones still waiting their turn are skipped because their rows are gone. */
 function stopUploads(ns: number[] | 'all') {
   for (const [n, c] of inFlight) if (ns === 'all' || ns.includes(n)) c.abort()
@@ -839,6 +841,7 @@ const groupProblem = computed(() => {
 })
 
 async function load(id: string | null) {
+  if (id !== job.value?.id) stopUploads('all')
   previews.forEach((u) => URL.revokeObjectURL(u))
   previews.clear()
   expanded.clear()
@@ -866,7 +869,7 @@ async function load(id: string | null) {
 let runTimer: ReturnType<typeof setInterval> | undefined
 function watchRun() {
   clearInterval(runTimer)
-  if (job.value?.status !== 'Running') return
+  if (unmounted || job.value?.status !== 'Running') return
   runTimer = setInterval(async () => {
     if (!job.value) return
     const r = await api.job(job.value.id, true).catch(() => null)
@@ -876,7 +879,16 @@ function watchRun() {
     if (r.job.status !== 'Running') clearInterval(runTimer)
   }, 3000)
 }
-onBeforeUnmount(() => clearInterval(runTimer))
+// Leaving the editor (or opening another job, or losing the draft to a take-over) stops this page's uploads: they
+// would fail the server's editing check and mark their documents failed, and a later Retry could send a file twice.
+onBeforeUnmount(() => {
+  unmounted = true
+  clearInterval(runTimer)
+  stopUploads('all')
+})
+watch(() => job.value?.editingByYou, (mine, was) => {
+  if (was && !mine) stopUploads('all')
+})
 
 /** Become this draft's editor (or take over); if someone else is editing it, the page stays a preview. */
 async function openForEditing(takeOverSince?: number) {
@@ -1054,8 +1066,8 @@ function tooLargeFor(file: File): boolean {
 
 /** Send one document's file. signedAt: when its upload form was received (now, unless it waited its turn). */
 async function uploadOne(jobId: string, row: Row, file: File, signedAt = Date.now()) {
-  // A document deleted while its upload waited for its turn: nothing is sent
-  if (job.value?.id !== jobId || !rows.value.some((r) => r.n === row.n)) return
+  // A document deleted while its upload waited for its turn, or an editor left meanwhile: nothing is sent
+  if (unmounted || job.value?.id !== jobId || !job.value?.editingByYou || !rows.value.some((r) => r.n === row.n)) return
   const stop = new AbortController()
   inFlight.set(row.n, stop)
   uploadingHere.add(row.n)

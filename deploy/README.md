@@ -338,8 +338,10 @@ still try to read it (and fail with a 403 when you aren't signed in):
 - **60-second requests.** CloudFront waits at most 60 seconds for an answer (more needs a quota increase). A
   request that waits longer on CollectionSpace, such as a sign-in while the QA server is slow, shows an error,
   though the app finishes it.
-- **No graceful worker stop.** A deploy or pause stops the worker immediately. A job that was running is ended
-  by the periodic check as "worker stopped" and can be fixed and rescheduled. Deploy between runs.
+- **A deploy stops a running job.** On a deploy or pause the worker gets SIGTERM: a running job ends after the
+  step in progress (a step still running after 90 seconds, such as a long upload, is cut off), as "worker stopped",
+  with its saved sign-in deleted at once. Reschedule it to finish; the rerun checks what an unconfirmed step saved.
+  Deploy between runs when you can.
 
 ## If something goes wrong
 

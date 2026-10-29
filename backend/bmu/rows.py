@@ -17,6 +17,12 @@ EDITABLE = {"handling", "obj", "idnum", "date", "restricted", "type", "language"
 # language refNames from the languages vocabulary.
 REPEATING = {"type", "language"}
 AUTHORITY_FIELDS = {"creator", "contributor", "rightsHolder"}
+BOOL_FIELDS = {"restricted", "include", "skipLink", "group"}
+# The longest value each text field takes (characters), so one row stays far below DynamoDB's 400 KB item limit
+MAX_LENGTH = {"description": 10000, "copyright": 2000}
+MAX_TEXT = 500  # every other text field: object and identification numbers, date, handling, file name
+MAX_REF = 1000  # a refName
+MAX_REPEATS = 50  # values in a repeating field
 
 ROW_STATES = ("Not started", "In progress", "Done", "Partial", "Failed")
 
@@ -228,6 +234,7 @@ def apply_edit(tenant: Tenant, row: dict, changes: dict[str, Any], other_names: 
     problem = edit_problem(row, changes)
     if problem:
         raise ValueError(PROBLEM_TEXT[problem])
+    check_types(changes)
     if "handling" in changes and changes["handling"] != row.get("handling") and media_created(row):
         target = tenant.handling_by_id(changes["handling"])
         if not target or target.object not in RELINK_OBJECT:
@@ -279,6 +286,36 @@ def apply_edit(tenant: Tenant, row: dict, changes: dict[str, Any], other_names: 
     return row
 
 
+def check_types(changes: dict[str, Any]) -> None:
+    """Every changed value of the right type and size for its field (ValueError otherwise): JSON can send anything,
+    and a list where text belongs would break every later check of the draft."""
+    for k, v in changes.items():
+        if k in EDITABLE:
+            _check_type(k, v)
+
+
+def _check_type(k: str, v: Any) -> None:
+    if k in BOOL_FIELDS:
+        if not isinstance(v, bool):
+            raise ValueError(f"{k} must be true or false")
+    elif k in REPEATING:
+        if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
+            raise ValueError(f"{k} must be a list of values")
+        if len(v) > MAX_REPEATS or any(len(x) > MAX_REF for x in v):
+            raise ValueError(f"{k} has too many or too long values")
+    elif not isinstance(v, str):
+        raise ValueError(f"{k} must be text")
+    elif len(v) > (MAX_REF if k in AUTHORITY_FIELDS else MAX_LENGTH.get(k, MAX_TEXT)):
+        raise ValueError(f"{k} is too long (at most {MAX_REF if k in AUTHORITY_FIELDS else MAX_LENGTH.get(k, MAX_TEXT):,} characters)")
+
+
+def object_step_unsure(tenant: Tenant, row: dict) -> bool:
+    """The row's Object step sent a create that CollectionSpace didn't confirm (worker.uncertain)."""
+    h = tenant.handling_by_id(row["handling"])
+    st = _steps(row).get(h.object_step or "") or {}
+    return st.get("s") == "sending" or bool(st.get("maybeSent"))
+
+
 def object_step_ran(row: dict) -> bool:
     """A Failed row whose object step already ran keeps its object, so its handling can't change."""
     return any((_steps(row).get(k) or {}).get("s") == "done" for k in OBJ_STEPS)
@@ -290,6 +327,9 @@ def is_locked(row: dict) -> bool:
     create may have reached CollectionSpace before it was recorded."""
     res = row.get("result") or {}
     if res.get("state") == "In progress" or res.get("interrupted"):
+        return True
+    # a create that was sent but not confirmed (worker.uncertain): CollectionSpace may have saved it
+    if any(st.get("s") == "sending" or st.get("maybeSent") for st in (res.get("steps") or {}).values()):
         return True
     return any(st.get("csid") and not st.get("found") and not st.get("sameAs")
                for name, st in (res.get("steps") or {}).items() if name != "findObject")
@@ -551,7 +591,7 @@ def check_rows(tenant: Tenant, rows: list[dict], client: CSpaceClient, perms: di
                     out.append({"level": "warn", "text": f"Couldn't check object {num} in CollectionSpace ({e.code})."})
                 if found is not None:
                     obj_csid = found[0] if len(found) == 1 and h.object != "create" else ""
-                    out += object_checks(tenant, h.object, num, found, perms)
+                    out += object_checks(tenant, h.object, num, found, perms, unsure=object_step_unsure(tenant, r))
         if obj_csid is not None:
             try:
                 sens = sensitivity(r, obj_csid)
@@ -749,12 +789,17 @@ def _labels(tenant: Tenant, behaviors: tuple[str, ...]) -> str:
 
 
 def object_checks(tenant: Tenant, behavior: str, num: str, found: list[str], perms: dict[str, bool],
-                  rerun: bool = False) -> list[dict]:
+                  rerun: bool = False, unsure: bool = False) -> list[dict]:
     """Design (Validation while editing): what the object lookup means for each handling's object behavior.
     Find (existing): exactly one object. Create: none may exist yet. Find or create (either): at most one, and
     creating it needs create on objects. rerun: the row's Media record exists (Partial), so its handling is
-    fixed, except after object_exists, and "stop linking" is the other way out."""
+    fixed, except after object_exists, and "stop linking" is the other way out. unsure: an earlier run's create of
+    the Object may have been saved without its answer arriving (object_step_unsure); the one Object found is then
+    taken as that one by the rerun, not refused as already existing."""
     stop = ", or stop linking this document" if rerun else ""
+    if unsure and behavior in ("create", "either") and len(found) == 1:
+        return [{"level": "info", "text": f"Object {num} may be the one an earlier run created without CollectionSpace "
+                                          "confirming it; the rerun links to it instead of creating another."}]
     if behavior == "create" and found:
         return [{"level": "block", "text": f"Object {num} already exists in CollectionSpace, and “Create new object + link” "
                                            f"only creates a new object. To link to it, choose {_labels(tenant, RELINK_OBJECT)}; "
@@ -882,7 +927,7 @@ def _rerun_checks(tenant: Tenant, r: dict, perms: dict[str, bool], lookup, clien
             found = None
             out.append({"level": "warn", "text": f"Couldn't check object {num} in CollectionSpace ({e.code})."})
         if found is not None:
-            out += object_checks(tenant, h.object, num, found, perms, rerun=True)
+            out += object_checks(tenant, h.object, num, found, perms, rerun=True, unsure=object_step_unsure(tenant, r))
     return out
 
 

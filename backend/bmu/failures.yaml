@@ -106,6 +106,27 @@ group_failed:
   explain: CollectionSpace refused the job's group, so no documents were added to a group. Everything else in each document still ran.
   fix: Check the group title and that you may create groups, then choose Fix and reschedule. Only the group steps run again.
 
+group_server_error:
+  title: CollectionSpace didn't answer when the group was created
+  level: job
+  needs_fix: false
+  explain: CollectionSpace returned an error (or didn't answer in time) when the BMU created the job's group, so no documents were added to a group in this run. Everything else in each document still ran. The group may have been saved anyway; the rerun looks for it before creating one.
+  fix: Reschedule the job. Only the group steps run again, and a group the earlier attempt saved is used, not duplicated.
+
+not_staff:
+  title: The account that submitted the job is no longer staff
+  level: job
+  needs_fix: false
+  explain: Only staff (the BMU_Staff role) can run jobs, and when this job was about to run, the account that submitted it no longer had that role in CollectionSpace. Nothing was created in this run.
+  fix: A staff member can reschedule the job; it then runs with their sign-in. If the role was removed by mistake, ask a CollectionSpace administrator to restore it.
+
+create_uncertain:
+  title: An earlier attempt may have created this record
+  level: row
+  needs_fix: false
+  explain: CollectionSpace didn't confirm an earlier create for this document (an error or no answer in time), and when the BMU looked for the record that attempt might have saved, it found more than one candidate, so it couldn't tell which one is this document's. Nothing more was created.
+  fix: Look at the records named in the technical details in CollectionSpace and have the extra ones deleted, so only one remains, then reschedule. The rerun links to the one that is left.
+
 auth:
   title: Sign-in failed
   level: job

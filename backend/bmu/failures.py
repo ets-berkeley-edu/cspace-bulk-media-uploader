@@ -11,7 +11,7 @@ from pathlib import Path
 
 import yaml
 
-from .cspace import CSpaceError
+from .cspace import CSpaceError, CSpaceUnavailable
 
 # Failures that stop the whole job at once (a wrong password retried on every row could lock the account).
 JOB_LEVEL = {"auth", "account_inactive"}
@@ -36,6 +36,15 @@ def known(code: str) -> str:
     return code if code in catalog() else "unknown"
 
 
+def maybe_sent(e: CSpaceError) -> bool:
+    """True when a failed request may still have been carried out by CollectionSpace: a 5xx, or no answer (a
+    timeout or a dropped connection). A create that failed this way is looked for before it is sent again. A
+    request the client refused to send (CSpaceUnavailable) never reached CollectionSpace."""
+    if isinstance(e, CSpaceUnavailable):
+        return False
+    return e.code == "unavailable" or (e.status is not None and e.status >= 500)
+
+
 def classify(step: str, e: CSpaceError) -> tuple[str, str]:
     """(catalog code, technical detail) for a failed CollectionSpace call made by a row step."""
     status = e.status
@@ -55,7 +64,9 @@ def classify(step: str, e: CSpaceError) -> tuple[str, str]:
     if step in ("createObject", "findOrCreateObject") and status == 400:
         return "object_rejected", detail
     if step == "group":
-        return "group_failed", detail  # any other failure creating the job's Group
-    if e.code == "unavailable" or (status is not None and status >= 500):
+        # a 5xx or no answer needs only another run (the rerun looks for a Group the request saved); anything else
+        # the group's title or the account has to change first
+        return ("group_server_error" if maybe_sent(e) else "group_failed"), detail
+    if maybe_sent(e):
         return "server_error", detail  # one 5xx or timeout; five in a row stop the job as "unavailable"
     return "unknown", f"{detail} (step {step})"
