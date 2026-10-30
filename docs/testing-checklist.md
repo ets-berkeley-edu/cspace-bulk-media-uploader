@@ -529,6 +529,22 @@ Branch `ci/bmut`. Claude checked the workflow with actionlint and ran `./bmu tes
 - [ ] Break a test on a scratch branch (change an expected text in `bmut/tests/test_tabs.py`), push it: the job fails, the log ends with each service's last lines in folded groups, and the run's artifacts hold `bmut-failures` with the screenshot. Delete the branch.
 - [ ] After a few weeks of pull requests with no flaky `bmut` failure, make `bmut` a required check (Settings → Branches → the rule for `main`), and say so in `bmut/README.md`, the `ci.yml` comment and this item.
 
+## 18. The Selenium tests: roles and the list tabs (29 October 2026; 15 minutes)
+
+Branch `test/bmut-roles-and-lists`. Tests only: no change to the app. 31 more checks in `bmut/` (`bmut/README.md` lists them), automating most of sections 2c, 2i, 2j, 2k, 2l and 2m; those steps can be ticked by a passing run. Each file signs in once per user (`admin`, `limited`, `intern`), in a browser of its own, and works through its drafts as those people would; the queue tests pause the queue so their jobs wait in it.
+
+Claude ran `./bmu test` on fresh stacks until three runs in a row passed: 46 tests, 3 to 3½ minutes of tests per run after the stack's start-up. Two things were found and fixed in the tests on the way. Every test as `intern` failed at first: Chrome's password manager knows `intern` / `intern` as a leaked password, and its "Change your password" bubble took the keys and clicks the test sent; the tests' browsers now run without the password manager. And one run in six failed the existing `test_name_a_job_and_add_files`: after a reload it read the job name before the page had filled it in; it now waits for it.
+
+Still by hand, because the tests don't cover them: 2c's schedule settings, dragging, the "Sorted view" note, a running job's progress and Cancel run, deleting 20 documents at once, and dark mode; 2i's Demo tools "Sign in as" box; 2j step 6 (an intern losing access while editing); 2k's thumbnail, the Creator search, Language list and date preview as an intern, the `reader:` log lines and `bmureader` at sign-in; 2l's Show list counts and step 7, and the purple in dark mode; 2m's audit log.
+
+Two things the tests showed, neither changed here:
+
+- Take over: the first person's editor turns read-only at their next change (a refused save), not on its own; the test makes a change. Section 2c's step reads as if it happened at once. Say whether it should.
+- An intern's "Submit for review…" tooltip in the editor reads "Fix or exclude the documents marked Needs fixing first" for one document too; the same button on a Drafts row counts them ("the document", "the 2 documents").
+
+- [ ] On the pull request, the `bmut` job passes. Note how much longer it took than on earlier pull requests.
+- [ ] `./bmu test -k roles --headed`: watch the intern's and admin's browsers work side by side.
+
 ## Not tests, but still open
 
 - The design doc's "For Richard to address" list (from the October 3 comparison of the doc with the prototype).

@@ -54,7 +54,7 @@ def test_name_a_job_and_add_files(editor: EditorPage, driver: WebDriver) -> None
     assert "nothing to fix" in editor.text_of(editor.COUNTS)
     driver.refresh()  # section 2b, step 1: the same draft after a reload
     editor.wait_for_url(f"/job/{made['id']}")
-    assert editor.value_of(editor.JOB_NAME) == NAME
+    editor.wait_until(lambda d: editor.value_of(editor.JOB_NAME) == NAME)  # filled in once the draft has loaded
     editor.wait_for_text(editor.COUNTS, f"{len(FILES)} documents")
 
 
@@ -69,7 +69,7 @@ def test_the_draft_in_drafts_and_back(editor: EditorPage, base_url: str) -> None
     jobs.wait_for_text(jobs.name(made["id"]), NAME)
     layout.click(layout.tab("job"))
     editor.wait_for_url(f"/job/{made['id']}")
-    assert editor.value_of(editor.JOB_NAME) == NAME
+    editor.wait_until(lambda d: editor.value_of(editor.JOB_NAME) == NAME)  # filled in once the draft has loaded
     editor.wait_for_text(editor.COUNTS, f"{len(FILES)} documents")
 
 
@@ -83,13 +83,5 @@ def test_submit_and_the_run(editor: EditorPage, base_url: str) -> None:
     editor.click(editor.SUBMIT)
     layout.wait_for_url("/queue")
     assert f"“{NAME}” was submitted" in layout.text_of(layout.NOTICE)
-
-    def finished(driver: WebDriver) -> bool:
-        # Finished jobs reads the list when it opens; open it again until the run has ended.
-        jobs.open("finished")
-        layout.wait_for_page("Finished jobs")
-        return bool(driver.find_elements(*jobs.outcome(made["id"])))
-
-    jobs.wait_until(finished, timeout=120)
-    assert jobs.text_of(jobs.outcome(made["id"])) == "Completed"
+    assert jobs.wait_for_outcome(made["id"]) == "Completed"
     assert jobs.text_of(jobs.counts(made["id"])) == f"{len(FILES)} done"
