@@ -1,4 +1,4 @@
-FROM python:3.11-slim-trixie
+FROM python:3.11-slim-trixie@sha256:673719e071ecf27434fd2635bbd8d00f49f4fdd81f243143438a42ced8bedf60
 # eMudhra CA compromise (Oct 2026): take Debian's fixed ca-certificates even if the base image predates it;
 # the build fails if the installed version is older than the fix.
 RUN apt-get update && apt-get install -y --no-install-recommends --only-upgrade ca-certificates \

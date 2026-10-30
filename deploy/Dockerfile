@@ -3,9 +3,11 @@
 #   docker build --platform linux/arm64 -f deploy/Dockerfile -t bmu .
 # The local Docker Compose stack doesn't use this image (it runs backend/Dockerfile and the Vue dev server).
 # Base images come from Amazon ECR Public's copies of the Docker official images (no Docker Hub rate limits).
+# Each is pinned by digest as well as tag (review 5.7), so a tag moved upstream changes nothing until Dependabot
+# proposes the new digest. ECR Public mirrors the official images unchanged, so the digests match Docker Hub's.
 
 # ---- the Vue app: a production build, so the Demo tools pane is left out of the bundle ----------------------------
-FROM public.ecr.aws/docker/library/node:22.23.4-alpine AS frontend
+FROM public.ecr.aws/docker/library/node:22.23.4-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914 AS frontend
 # eMudhra CA compromise (Oct 2026): Node 22.23.4 refuses the compromised CAs itself, but Alpine's system bundle
 # (curl, wget, OpenSSL) needs ca-certificates 20261020-r0; the build fails if the bundle still holds the emSign root.
 RUN apk add --no-cache --upgrade ca-certificates-bundle \
@@ -17,7 +19,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # ---- the Python app ---------------------------------------------------------------------------------------------
-FROM public.ecr.aws/docker/library/python:3.11-slim-trixie
+FROM public.ecr.aws/docker/library/python:3.11-slim-trixie@sha256:673719e071ecf27434fd2635bbd8d00f49f4fdd81f243143438a42ced8bedf60
 # eMudhra CA compromise (Oct 2026): take Debian's fixed ca-certificates even if the base image predates it;
 # the build fails if the installed version is older than the fix.
 RUN apt-get update && apt-get install -y --no-install-recommends --only-upgrade ca-certificates \
