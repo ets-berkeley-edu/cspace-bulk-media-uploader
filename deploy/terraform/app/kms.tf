@@ -10,6 +10,9 @@ locals {
     "kms:ScheduleKeyDeletion", "kms:CancelKeyDeletion", "kms:RotateKeyOnDemand",
   ]
   account_root = "arn:${local.partition}:iam::${local.account_id}:root"
+  # A key scheduled for deletion can be recovered (CancelKeyDeletion) until the window ends: the longest AWS allows when
+  # the data matters (review 5.5), since a deleted staging key makes that museum's audit files unreadable.
+  key_deletion_days = var.protect_data ? 30 : 7
 }
 
 data "aws_iam_policy_document" "session_key" {
@@ -45,7 +48,7 @@ data "aws_iam_policy_document" "session_key" {
 resource "aws_kms_key" "session" {
   description             = "BMU ${var.env_name} - encrypts passwords in sign-in sessions"
   enable_key_rotation     = true
-  deletion_window_in_days = 7
+  deletion_window_in_days = local.key_deletion_days
   policy                  = data.aws_iam_policy_document.session_key.json
 }
 
@@ -104,7 +107,7 @@ data "aws_iam_policy_document" "job_key" {
 resource "aws_kms_key" "job" {
   description             = "BMU ${var.env_name} - encrypts each queued job's saved sign-in"
   enable_key_rotation     = true
-  deletion_window_in_days = 7
+  deletion_window_in_days = local.key_deletion_days
   policy                  = data.aws_iam_policy_document.job_key.json
 }
 
@@ -132,14 +135,35 @@ locals {
 data "aws_iam_policy_document" "staging_key" {
   for_each = var.tenants
 
+  # As for the session and job keys: the account manages the key but can't use it (review 5.3; design: Other security
+  # notes, "access limited to the web and worker task roles"). Before, kms:* for the account let any administrator
+  # decrypt staged, possibly protected, files.
   statement {
-    sid       = "AccountPoliciesControlUse"
-    actions   = ["kms:*"]
+    sid       = "AccountManagesTheKeyButCannotUseIt"
+    actions   = local.key_admin_actions
     resources = ["*"]
 
     principals {
       type        = "AWS"
       identifiers = [local.account_root]
+    }
+  }
+
+  # Only the two task roles, and only through S3 (their own policies in iam.tf grant the same).
+  statement {
+    sid       = "TaskRolesUseItThroughS3"
+    actions   = ["kms:GenerateDataKey", "kms:Decrypt"]
+    resources = ["*"]
+
+    principals {
+      type        = "AWS"
+      identifiers = [aws_iam_role.web.arn, aws_iam_role.worker.arn]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["s3.${var.region}.amazonaws.com"]
     }
   }
 
@@ -167,7 +191,7 @@ resource "aws_kms_key" "staging" {
   for_each                = var.tenants
   description             = "BMU ${var.env_name} - encrypts ${each.key}'s staged files and audit files in S3"
   enable_key_rotation     = true
-  deletion_window_in_days = 7
+  deletion_window_in_days = local.key_deletion_days
   policy                  = data.aws_iam_policy_document.staging_key[each.key].json
 }
 

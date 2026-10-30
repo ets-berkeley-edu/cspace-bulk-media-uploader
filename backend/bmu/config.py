@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from typing import Literal
+from urllib.parse import urlparse
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -93,8 +94,14 @@ class Settings(BaseSettings):
     static_dir: str | None = None  # serve the built Vue app from here, if set
 
     def museums(self) -> dict[str, str]:
-        """{museum: its CollectionSpace server}, in the order configured: `tenants`, or else `tenant` on `cspace_url`."""
-        return {k: v.rstrip("/") for k, v in (self.tenants or {self.tenant: self.cspace_url}).items()}
+        """{museum: its CollectionSpace server}, in the order configured: `tenants`, or else `tenant` on `cspace_url`.
+        Design (Other security notes): Basic Auth is never sent in the clear, so a server must be https://, except the
+        simulated CollectionSpace (its host names, or cspace_simulated in AWS). ValueError otherwise."""
+        out = {k: v.rstrip("/") for k, v in (self.tenants or {self.tenant: self.cspace_url}).items()}
+        for museum, url in out.items():
+            if not url.startswith("https://") and not self.cspace_simulated and (urlparse(url).hostname or "") not in SIMULATOR_HOSTS:
+                raise ValueError(f"{museum}'s CollectionSpace server must be an https:// address, not {url}")
+        return out
 
     def kms_key_for(self, tenant: str) -> str | None:
         """The SSE-KMS key for one museum's staged files, thumbnails and audit files; None locally."""
@@ -108,6 +115,10 @@ class Settings(BaseSettings):
         """A draft's expiry period: 7 days if any of its documents is a protected file (excluded ones too), 30
         otherwise (design: Drafts, Expiry)."""
         return self.protected_draft_days if (job or {}).get("protectedCount") else self.draft_days
+
+
+# The simulated CollectionSpace's host names (backend/fakecspace): locally, in Docker and in the tests.
+SIMULATOR_HOSTS = {"localhost", "127.0.0.1", "fakecspace", "fake"}
 
 
 @lru_cache

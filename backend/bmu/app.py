@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 from . import demo
 from . import logsafe
 from . import schedule as sched
-from .config import Settings, get_settings
+from .config import SIMULATOR_HOSTS, Settings, get_settings
 from .crypto import Crypto, job_context, make_crypto
 from .cspace import CSpaceClient, CSpaceError, Permissions
 from .failures import catalog
@@ -490,7 +490,7 @@ def _after_rows_deleted(s: "Services", sess: "Session", job: dict, rows: list[di
     return {"others": _recheck(s, sess, job_id, targets=set())["changed"]}
 
 
-SIMULATORS = {"localhost", "127.0.0.1", "fakecspace", "fake"}
+SIMULATORS = SIMULATOR_HOSTS
 
 
 def real_cspace(url: str, simulated: bool = False) -> bool:

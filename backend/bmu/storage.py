@@ -393,7 +393,7 @@ class Storage:
         item = _dyn({**run_item, "PK": f"JOB#{job_id}", "SK": f"RUN#{int(run_item['run']):05d}", "auditKey": entry["SK"]})
         self.dynamodb.meta.client.transact_write_items(TransactItems=[
             {"Put": {"TableName": self.jobs.name, "Item": item}},
-            {"Put": {"TableName": self.audit_table.name, "Item": entry}}])
+            {"Put": {"TableName": self.audit_table.name, "Item": entry, "ConditionExpression": "attribute_not_exists(PK)"}}])
         return entry["SK"]
 
     def get_runs(self, job_id: str) -> list[dict]:
@@ -803,7 +803,10 @@ class Storage:
 
     def audit(self, tenant: str, type_: str, user: str, job_id: str, detail: str, csids: list[dict] | None = None,
               **extra: Any) -> None:
-        self.audit_table.put_item(Item=self._audit_item(tenant, type_, user, job_id, detail, csids, **extra))
+        # Add-only (design: Retention and audit): PutItem would replace an existing item, so every audit write is
+        # conditional on the item not existing. The task roles may only put, so an entry can't be changed.
+        self.audit_table.put_item(Item=self._audit_item(tenant, type_, user, job_id, detail, csids, **extra),
+                                  ConditionExpression="attribute_not_exists(PK)")
 
     def audit_once(self, tenant: str, job_id: str, status: str, flag: str, type_: str, user: str, detail: str,
                    csids: list[dict] | None = None, **extra: Any) -> bool:
@@ -811,7 +814,7 @@ class Storage:
         before the job is deleted: one transaction writes the entry and sets the job's flag, only if the job is
         still in that status and the flag isn't set. So an interrupted deletion that the sweep redoes, or the sweep
         and the web app overlapping, never writes it twice. False if it was written already."""
-        put = {"Put": {"TableName": self.audit_table.name,
+        put = {"Put": {"TableName": self.audit_table.name, "ConditionExpression": "attribute_not_exists(PK)",
                        "Item": self._audit_item(tenant, type_, user, job_id, detail, csids, **extra)}}
         mark = self._job_update(job_id, {flag: True}, "#c_status = :c_st AND attribute_not_exists(#c_flag)",
                                 {":c_st": status}, {"#c_status": "status", "#c_flag": flag})
@@ -831,9 +834,16 @@ class Storage:
     # ---- the CSID index (design: Job data model, CSID index entry; Reading the audit log) ------------
     def index_csid(self, tenant: str, csid: str, **entry: Any) -> None:
         """One item per record the BMU creates, written when it is created: which job, run, row and step made
-        it. Answers "which BMU job created this record?" with one lookup, also after the job is deleted."""
-        self.audit_table.put_item(Item=_dyn({"PK": f"CSID#{csid}", "SK": "CSID", "tenant": tenant, "at": now(),
-                                             "expires": int(now() + 365 * 86400), **entry}))
+        it. Answers "which BMU job created this record?" with one lookup, also after the job is deleted. Add-only:
+        an entry already there for the CSID stands (the first record of who created it)."""
+        try:
+            self.audit_table.put_item(Item=_dyn({"PK": f"CSID#{csid}", "SK": "CSID", "tenant": tenant, "at": now(),
+                                                 "expires": int(now() + 365 * 86400), **entry}),
+                                      ConditionExpression="attribute_not_exists(PK)")
+        except ClientError as e:
+            if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
+                raise
+            log.warning("the CSID index already has %s; the first entry stands", csid)
 
     def find_csid(self, csid: str) -> dict | None:
         item = self.audit_table.get_item(Key={"PK": f"CSID#{csid}", "SK": "CSID"}).get("Item")

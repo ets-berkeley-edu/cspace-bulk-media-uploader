@@ -25,29 +25,31 @@ x-bmu-env: &bmu-env
   AWS_SECRET_ACCESS_KEY: local
   AWS_DEFAULT_REGION: us-west-2
 
+# Every port is published on 127.0.0.1 only (review 5.6): on a shared network (campus Wi-Fi) nobody else can reach the
+# local services, which hold staged media (with ./bmu up qa, real files) and accept any credentials.
 services:
   dynamodb:
     image: amazon/dynamodb-local:latest
     command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"]
-    ports: ["${BMU_DYNAMODB_PORT:-8001}:8000"]
+    ports: ["127.0.0.1:${BMU_DYNAMODB_PORT:-8001}:8000"]
 
   # S3 stand-in (moto, the same library the tests use). MinIO's images are no longer on Docker Hub.
   # In-memory; the browser uploads here with presigned POSTs. See its state at http://localhost:9000/moto-api/
   s3:
     image: motoserver/moto:latest
     command: ["-p", "9000"]
-    ports: ["${BMU_S3_PORT:-9000}:9000"]
+    ports: ["127.0.0.1:${BMU_S3_PORT:-9000}:9000"]
 
   fakecspace:
     build: ./backend
     command: ["uvicorn", "fakecspace.app:app", "--host", "0.0.0.0", "--port", "8180"]
-    ports: ["${BMU_SIM_PORT:-8180}:8180"]
+    ports: ["127.0.0.1:${BMU_SIM_PORT:-8180}:8180"]
 
   web:
     build: ./backend
     environment: *bmu-env
     depends_on: [dynamodb, s3, fakecspace]
-    ports: ["${BMU_API_PORT:-8000}:8000"]
+    ports: ["127.0.0.1:${BMU_API_PORT:-8000}:8000"]
 
   worker:
     build: ./backend
@@ -63,5 +65,5 @@ services:
     environment:
       VITE_API_TARGET: http://web:8000
     volumes: ["./frontend:/app", "/app/node_modules"]
-    ports: ["${BMU_UI_PORT:-5173}:5173"]
+    ports: ["127.0.0.1:${BMU_UI_PORT:-5173}:5173"]
     depends_on: [web]

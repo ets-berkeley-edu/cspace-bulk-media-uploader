@@ -129,7 +129,7 @@ resource "aws_ecs_service" "web" {
     target_group_arn = aws_lb_target_group.web.arn
   }
 
-  depends_on = [aws_lb_listener.http, aws_iam_role_policy.web, aws_route_table_association.public]
+  depends_on = [aws_lb_listener.http, aws_lb_listener.https, aws_iam_role_policy.web, aws_route_table_association.public]
 }
 
 resource "aws_ecs_service" "worker" {

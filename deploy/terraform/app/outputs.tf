@@ -59,3 +59,8 @@ output "reader_secrets" {
   description = "Each museum's secret holding its read-only CollectionSpace account's sign-in; set with ./bmu aws reader-secret <museum>."
   value       = { for m, secret in aws_secretsmanager_secret.reader : m => secret.name }
 }
+
+output "alb_dns_name" {
+  description = "The internal load balancer's DNS name: the target of origin_domain's CNAME (HTTPS to the load balancer)."
+  value       = aws_lb.main.dns_name
+}

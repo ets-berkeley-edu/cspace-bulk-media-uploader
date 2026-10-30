@@ -53,6 +53,7 @@ load_env() {
   URL_FILE="$ENV_DIR/$ENV.url"
   [ -f "$CONF" ] || die "No settings for environment '$ENV' ($CONF). Environments: $(ls "$ENV_DIR" | sed -n 's/\.conf$//p' | grep -v '\.local$' | tr '\n' ' ')"
   ACCOUNT_ID="" ALLOWED_CIDRS="" SIMULATED_CSPACE="" ENV_LABEL="" CSPACE_TENANTS="" TENANT="" CSPACE_URL=""
+  WAF_ENABLED="" ORIGIN_DOMAIN="" ORIGIN_CERTIFICATE_ARN=""
   # shellcheck disable=SC1090
   . "$CONF"
   local conf_label="$ENV_LABEL"
@@ -69,6 +70,11 @@ load_env() {
   else
     read_museums
   fi
+  # The WAF (deploy/terraform/app/waf.tf) comes with protected data unless the settings say otherwise.
+  case "${WAF_ENABLED:=${PROTECT_DATA:-false}}" in true|false) ;; *) die "WAF_ENABLED must be true or false ($CONF, $LOCAL)." ;; esac
+  # HTTPS from CloudFront to the load balancer: both settings, or neither (variables.tf, origin_domain).
+  [ -z "$ORIGIN_DOMAIN" ] && [ -z "$ORIGIN_CERTIFICATE_ARN" ] || { [ -n "$ORIGIN_DOMAIN" ] && [ -n "$ORIGIN_CERTIFICATE_ARN" ]; } ||
+    die "Set ORIGIN_DOMAIN and ORIGIN_CERTIFICATE_ARN together, or neither ($CONF, $LOCAL)."
   export AWS_PAGER="" AWS_PROFILE AWS_REGION   # Terraform signs in with the same profile
   # Keys in the shell would win over the profile in Terraform (though not in "aws --profile"): never use them here.
   unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
@@ -98,6 +104,8 @@ read_museums() {
       die "CSPACE_TENANTS: '$entry' isn't museum=server; a museum is 2 to 20 lowercase letters or digits, such as pahma."
     echo "$url" | grep -Eq '^https?://[A-Za-z0-9.-]+(:[0-9]+)?$' ||
       die "CSPACE_TENANTS: $museum's server '$url' must be an address alone, such as https://pahma.qa.collectionspace.org."
+    case "$url" in https://*) ;; *)   # the BMU sends each user's password to it: never in the clear
+      die "CSPACE_TENANTS: $museum's server '$url' must be https://, such as https://pahma.qa.collectionspace.org." ;; esac
     [ -f "backend/bmu/tenants/$museum.yaml" ] ||
       die "The BMU has no configuration for the museum '$museum' (backend/bmu/tenants/$museum.yaml)."
     case "$seen" in *" $museum "*) die "CSPACE_TENANTS lists $museum twice." ;; esac
@@ -232,6 +240,7 @@ app_vars() {  # app_vars IMAGE RUNNING [SIMULATOR-IMAGE]
     -var "allowed_cidrs=$(cidr_list)" -var "tenants=$(tenants_var)"
     -var "env_label=$ENV_LABEL" -var "always_run_time=$ALWAYS_RUN_TIME" -var "protect_data=${PROTECT_DATA:-false}"
     -var "simulated_cspace=$SIMULATED_CSPACE" -var "fakecspace_image_uri=${3:-}"
+    -var "waf_enabled=$WAF_ENABLED" -var "origin_domain=$ORIGIN_DOMAIN" -var "origin_certificate_arn=$ORIGIN_CERTIFICATE_ARN"
   )
 }
 
@@ -490,9 +499,14 @@ logs() {
 }
 
 destroy() {
+  load_env
+  # Review 5.5: an environment whose data matters is never destroyed by the script; its tables and buckets refuse it
+  # anyway, but the destroy would get as far as scheduling its KMS keys (with them, the audit files) for deletion.
+  [ "${PROTECT_DATA:-false}" != true ] ||
+    die "'$ENV' protects its data (PROTECT_DATA=true), so it can't be destroyed. To destroy it on purpose, set PROTECT_DATA=false in the settings ($CONF or $LOCAL) and deploy first (that turns off the tables' deletion protection), then destroy."
   prepare
   echo "This deletes the '$ENV' BMU in AWS account $ACCOUNT_ID: its jobs, staged files, audit entries, logs and images."
-  echo "Records it created in CollectionSpace stay. The KMS keys are deleted after a 7-day waiting period."
+  echo "Records it created in CollectionSpace stay. The KMS keys are deleted after a 7-day waiting period (aws kms cancel-key-deletion stops it)."
   read -r -p "Type the environment's name ($ENV) to go ahead: " ok
   [ "$ok" = "$ENV" ] || die "Stopped; nothing was deleted."
   tf_init app

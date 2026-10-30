@@ -57,6 +57,12 @@ variable "tenants" {
     error_message = "Each server in tenants must be an address alone, such as https://pahma.qa.collectionspace.org (no path, no trailing /)."
   }
 
+  # Basic Auth is never sent in the clear (design: Other security notes): only the simulator may be http://.
+  validation {
+    condition     = var.simulated_cspace || alltrue([for url in values(var.tenants) : startswith(url, "https://")])
+    error_message = "Each server in tenants must be https:// (the BMU sends each user's password to it); only the simulated CollectionSpace is http://."
+  }
+
   validation {
     condition     = !var.simulated_cspace || var.tenants == tomap({ pahma = "http://fakecspace.bmu-${var.env_name}.internal:8180" })
     error_message = "With simulated_cspace, tenants must be the simulator's PAHMA alone: {pahma = \"http://fakecspace.bmu-<env_name>.internal:8180\"} (fakecspace.tf)."
@@ -143,4 +149,64 @@ variable "worker_memory" {
   description = "The worker's task memory in MiB. Files up to 2 GB are streamed through it."
   type        = number
   default     = 2048
+}
+
+# HTTPS from CloudFront to the load balancer (review 5.2). The VPC origin keeps that hop inside AWS's network, but it
+# is plain HTTP until the load balancer has a certificate, which needs a domain name the team controls (the load
+# balancer's own *.elb.amazonaws.com name can't get one). Set both to turn it on: then the load balancer listens on
+# 443 only, with that certificate, and CloudFront connects with HTTPS only and checks the certificate against
+# origin_domain. origin_domain needs a DNS record (CNAME) pointing to the load balancer (output alb_dns_name).
+variable "origin_domain" {
+  description = "The load balancer's own domain name, matching origin_certificate_arn, e.g. bmu-dev-origin.example.berkeley.edu. Empty: CloudFront reaches the load balancer with HTTP inside AWS's network."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.origin_domain == "" || can(regex("^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$", var.origin_domain))
+    error_message = "origin_domain must be a domain name alone, in lowercase, such as bmu-dev-origin.example.berkeley.edu."
+  }
+}
+
+variable "origin_certificate_arn" {
+  description = "An ACM certificate in the environment's region for origin_domain (DNS-validated). Set with origin_domain, or leave both empty."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = (var.origin_certificate_arn == "") == (var.origin_domain == "")
+    error_message = "Set origin_domain and origin_certificate_arn together, or neither."
+  }
+
+  validation {
+    condition     = var.origin_certificate_arn == "" || can(regex("^arn:aws[a-z-]*:acm:[a-z0-9-]+:[0-9]{12}:certificate/", var.origin_certificate_arn))
+    error_message = "origin_certificate_arn must be an ACM certificate's ARN."
+  }
+}
+
+variable "waf_enabled" {
+  description = "true puts an AWS WAF in front of CloudFront: a rate limit on sign-in (/api/login) and on all requests, per address (waf.tf; about $6 a month plus $0.60 per million requests). ./bmu aws turns it on with PROTECT_DATA unless WAF_ENABLED says otherwise."
+  type        = bool
+  default     = false
+}
+
+variable "waf_login_limit" {
+  description = "Sign-in requests one address may make in 5 minutes before the WAF blocks it (AWS's minimum is 10)."
+  type        = number
+  default     = 20
+
+  validation {
+    condition     = var.waf_login_limit >= 10
+    error_message = "waf_login_limit must be at least 10 (AWS's minimum for a rate rule)."
+  }
+}
+
+variable "waf_request_limit" {
+  description = "Requests of any kind one address may make in 5 minutes before the WAF blocks it. The editor polls and checks, so keep it generous."
+  type        = number
+  default     = 3000
+
+  validation {
+    condition     = var.waf_request_limit >= 100
+    error_message = "waf_request_limit must be at least 100: the editor alone makes many requests."
+  }
 }

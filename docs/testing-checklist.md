@@ -480,6 +480,17 @@ Branch `fix/review-2026-10-29`. Claude ran both full suites (backend with the ne
 - [ ] Deploy while a job runs: the worker log shows "stopping after the steps in progress", the job ends as worker stopped within 2 minutes, and `./bmu aws logs worker` has no AccessDenied.
 - [ ] Sign in and use the editor for a few minutes as staff: no AccessDenied in `./bmu aws logs web` (the row writes are now DynamoDB transactions, and failed sign-ins are counted in the sessions table).
 
+## 13. Review fixes, infrastructure (30 October 2026; 30 minutes in AWS)
+
+Branch `fix/review-infra-2026-10-30`. Claude ran `terraform fmt`, `validate` and `test` (Terraform 1.16.5) and the backend suite; nothing was applied to AWS.
+
+- [ ] `./bmu down all`, then `./bmu up sim`: the app opens at http://localhost:5173 and uploads work (the ports are now published on 127.0.0.1 only). From another computer on the same network, `http://<your Mac's address>:8000/api/health` doesn't answer.
+- [ ] `./bmu aws plan`: the changes are the staging keys' policies, the load balancer's security group rule (unchanged port 80), and nothing is replaced.
+- [ ] `./bmu aws deploy`: sign in, upload a JPEG and a TIFF (its thumbnail appears), submit, let the job run: no AccessDenied in `./bmu aws logs web` or `./bmu aws logs worker` (the staging keys now allow only the two roles, through S3).
+- [ ] With your administrator sign-in, `aws s3 cp s3://<staging bucket>/staging/pahma/<a staged key> -` is refused (AccessDenied from KMS).
+- [ ] Optional, with `WAF_ENABLED=true`: deploy, then 25 wrong sign-ins from one address within 5 minutes: after about 20 the page gets a 403 from CloudFront. It lifts within minutes.
+- [ ] Optional, once there is a domain: set `ORIGIN_DOMAIN` and `ORIGIN_CERTIFICATE_ARN` (deploy/README.md, HTTPS to the load balancer), deploy, and check the app still opens.
+
 ## Not tests, but still open
 
 - The design doc's "For Richard to address" list (from the October 3 comparison of the doc with the prototype).
