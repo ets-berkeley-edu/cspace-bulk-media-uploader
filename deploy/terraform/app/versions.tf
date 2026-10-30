@@ -33,6 +33,20 @@ provider "aws" {
   }
 }
 
+# CloudFront's WAF (waf.tf) must be created in us-east-1, whatever the environment's region.
+provider "aws" {
+  alias               = "us_east_1"
+  region              = "us-east-1"
+  allowed_account_ids = [var.account_id]
+
+  default_tags {
+    tags = {
+      project     = "bmu"
+      environment = var.env_name
+    }
+  }
+}
+
 data "aws_caller_identity" "current" {}
 data "aws_partition" "current" {}
 

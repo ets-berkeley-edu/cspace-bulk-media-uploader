@@ -19,7 +19,7 @@ resource "aws_cloudfront_vpc_origin" "alb" {
     arn                    = aws_lb.main.arn
     http_port              = 80
     https_port             = 443
-    origin_protocol_policy = "http-only"
+    origin_protocol_policy = local.origin_tls ? "https-only" : "http-only"
 
     origin_ssl_protocols {
       items    = ["TLSv1.2"]
@@ -45,10 +45,12 @@ resource "aws_cloudfront_distribution" "main" {
   http_version    = "http2and3"
   is_ipv6_enabled = false
   price_class     = "PriceClass_100"
+  web_acl_id      = var.waf_enabled ? aws_wafv2_web_acl.main[0].arn : null
 
   origin {
-    origin_id   = "web"
-    domain_name = aws_lb.main.dns_name
+    origin_id = "web"
+    # With HTTPS to the load balancer, CloudFront checks its certificate against this name.
+    domain_name = local.origin_tls ? var.origin_domain : aws_lb.main.dns_name
 
     vpc_origin_config {
       vpc_origin_id            = aws_cloudfront_vpc_origin.alb.id

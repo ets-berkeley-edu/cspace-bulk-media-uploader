@@ -426,3 +426,40 @@ def test_status_lists_each_deployed_museum_and_its_read_only_account(tree):
     r = run(tree, "status", museums=f"pahma={QA}", secret_versions=1)
     assert "set, last changed 2026-10-07" in r.stdout and "  bampfa:" not in r.stdout  # what is deployed, not the settings
     assert "./bmu aws plan shows the change" in r.stdout
+
+
+# ---- review 29 October 2026, section 5 -------------------------------------------------------------------------------
+
+def test_a_real_collectionspace_must_be_https(tree):
+    write_env(tree, museums="pahma=http://pahma.qa.collectionspace.org")
+    r = run(tree, "plan")
+    assert r.returncode == 1 and "must be https://" in r.stderr, r.stderr
+    assert not (tree / "log" / "terraform-plan-app").exists()
+
+
+def test_an_environment_whose_data_is_protected_is_never_destroyed(tree):
+    write_env(tree, museums=f"pahma={QA}", local_extra="PROTECT_DATA=true\n")
+    r = run(tree, "destroy", answers="t\n")
+    assert r.returncode == 1 and "can't be destroyed" in r.stderr, r.stderr
+    assert not (tree / "log" / "terraform-destroy-app").exists()
+
+
+@pytest.mark.parametrize("extra, waf", [("", "false"), ("PROTECT_DATA=true\n", "true"),
+                                        ("PROTECT_DATA=true\nWAF_ENABLED=false\n", "false"), ("WAF_ENABLED=true\n", "true")])
+def test_the_waf_comes_with_protected_data_unless_the_settings_say_otherwise(tree, extra, waf):
+    write_env(tree, museums=f"pahma={QA}", local_extra=extra)
+    r = run(tree, "plan", museums=f"pahma={QA}")
+    assert r.returncode == 0, r.stderr
+    assert tf_args(tree, "plan-app")["waf_enabled"] == waf
+
+
+def test_https_to_the_load_balancer_needs_both_settings(tree):
+    write_env(tree, museums=f"pahma={QA}", local_extra="ORIGIN_DOMAIN=bmu-dev-origin.example.berkeley.edu\n")
+    r = run(tree, "plan")
+    assert r.returncode == 1 and "ORIGIN_DOMAIN and ORIGIN_CERTIFICATE_ARN together" in r.stderr
+    arn = "arn:aws:acm:us-west-2:111122223333:certificate/abc"
+    write_env(tree, museums=f"pahma={QA}", local_extra=f"ORIGIN_DOMAIN=bmu-dev-origin.example.berkeley.edu\nORIGIN_CERTIFICATE_ARN={arn}\n")
+    r = run(tree, "plan", museums=f"pahma={QA}")
+    assert r.returncode == 0, r.stderr
+    args = tf_args(tree, "plan-app")
+    assert args["origin_domain"] == "bmu-dev-origin.example.berkeley.edu" and args["origin_certificate_arn"] == arn

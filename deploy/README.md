@@ -213,7 +213,8 @@ ALWAYS_RUN_TIME=true   # optional: queued jobs start at once instead of at PAHMA
 | --- | --- |
 | Network | A VPC with two public subnets (the tasks) and two private subnets (the load balancer). No NAT gateway: the tasks have public IPs for outbound HTTPS to CollectionSpace and AWS, and nothing can connect in. S3 and DynamoDB traffic stays inside AWS through free gateway endpoints. |
 | CloudFront | The HTTPS address (`*.cloudfront.net`). It forwards to an **internal** load balancer through a VPC origin, so the hop to the load balancer never crosses the internet. A CloudFront Function lets in only the allowed IPv4 addresses. Error answers are never cached. Built app files under `/assets/` are cached. |
-| Load balancer | Internal; health check `/api/health`. |
+| Load balancer | Internal; health check `/api/health`. CloudFront reaches it with HTTP on port 80, inside AWS's network, unless the environment sets `ORIGIN_DOMAIN` and `ORIGIN_CERTIFICATE_ARN` (see HTTPS to the load balancer below): then HTTPS on 443 only. |
+| WAF | Only with `WAF_ENABLED=true`, which is the default when `PROTECT_DATA=true` (`waf.tf`, in us-east-1 as CloudFront requires): per address, at most 20 sign-in requests (`/api/login`) and 3,000 requests of any kind in 5 minutes; an address over a limit is blocked until it is under again. About $6 a month plus $0.60 per million requests. |
 | ECS Fargate | Cluster `bmu-<env>` with two services. Both run on ARM. The tasks are replaced one by one on deploy and rolled back automatically if they don't start. |
 | DynamoDB | `bmu-<env>-jobs`, `-sessions`, `-credentials` and `-audit`: the same keys, index and TTL as the local tables (a test checks this). Point-in-time recovery is on for jobs and audit, and off for the two tables that hold encrypted passwords. |
 | S3 | Staging bucket `bmu-<env>-staging-<account>-<region>`: each museum's files under `staging/<museum>/` and `audit/<museum>/`, SSE-KMS with that museum's key (the bucket policy refuses any other key, and any other prefix), S3 Bucket Keys off, versioning, all public access blocked, TLS only, KMS-encrypted uploads only, and CORS for the BMU's address only. The BMU deletes every version of a staged file; a rule removes any version left behind after a day. Audit files (`audit/`) keep their versions for a year. Access logs go to `bmu-<env>-s3-logs-…`, kept 90 days. |
@@ -239,8 +240,10 @@ ALWAYS_RUN_TIME=true   # optional: queued jobs start at once instead of at PAHMA
 - The account can manage these two keys and delete them, but can't use them or grant their use.
   An administrator can't decrypt a saved password without first changing the key policy, which CloudTrail
   records.
-- Each museum's staging key: used only through S3, and only for objects under that museum's `staging/<museum>/`
-  and `audit/<museum>/` (its policy refuses any other encryption context, `aws:s3:arn`). The roles' own policies
+- Each museum's staging key: used only by the web and worker roles, only through S3, and only for objects under
+  that museum's `staging/<museum>/` and `audit/<museum>/` (its policy refuses any other encryption context,
+  `aws:s3:arn`). As with the other two keys, the account can manage it but not use it, so an administrator can't
+  read staged files (which may be protected) or audit files without first changing the key policy. The roles' own policies
   allow every museum's key: both roles serve every museum, so nothing in IAM separates museums (design: One
   deployment for several museums). With Bucket Keys off, CloudTrail records each file's use of its key.
 
@@ -261,7 +264,11 @@ costs.
   any other. `./bmu aws` also ignores access keys left in the shell, so only the profile's sign-in is used.
 - **Settings.** `./bmu aws` passes the environment's settings (`deploy/environments/`) as variables;
   `app/variables.tf` lists them. `protect_data = true` (set `PROTECT_DATA=true` in the settings file) is for an
-  environment whose data matters: tables can't be deleted, and `destroy` won't empty the buckets.
+  environment whose data matters: tables can't be deleted, `destroy` won't empty the buckets, the KMS keys wait 30
+  days (not 7) before they are deleted, the WAF is on unless `WAF_ENABLED=false`, and `./bmu aws destroy` refuses
+  to start. To destroy such an environment on purpose, set `PROTECT_DATA=false`, deploy, then destroy.
+- **CollectionSpace servers must be HTTPS.** Each user's password is sent to them with every request, so
+  `./bmu aws`, Terraform and the app all refuse an `http://` server; only the simulated CollectionSpace is HTTP.
 - **Running Terraform yourself.** `./bmu aws init` initializes both folders against the environment's state.
   After that, `terraform -chdir=deploy/terraform/app state list` and other read-only commands work as usual,
   with `AWS_PROFILE` set. For changes, use `./bmu aws deploy`, which supplies the variables.
@@ -331,7 +338,14 @@ still try to read it (and fail with a 403 when you aren't signed in):
 - **No SQS.** The worker polls DynamoDB, as it does locally.
 - **No thumbnail Lambda.** The web app makes TIFF thumbnails, as in the prototype, so its role can read staged
   files.
-- **No custom domain.** No custom domain or certificate.
+- **No custom domain.** No custom domain for the BMU's address, which stays `*.cloudfront.net`.
+- **HTTPS to the load balancer is optional.** The hop from CloudFront to the internal load balancer is plain HTTP
+  inside AWS's network until the environment has a domain for it. To turn HTTPS on: choose a name (such as
+  `bmu-dev-origin.<a domain you control>`), request a DNS-validated ACM certificate for it in the environment's
+  region, add a CNAME from that name to the load balancer's DNS name (the `alb_dns_name` output:
+  `terraform -chdir=deploy/terraform/app output -raw alb_dns_name` after `./bmu aws init`), set `ORIGIN_DOMAIN` and `ORIGIN_CERTIFICATE_ARN` in the
+  settings, and deploy. The load balancer then listens on 443 only and CloudFront checks the certificate. The hop
+  from the load balancer to the web app stays HTTP inside the VPC.
 - **No Object Lock or CloudTrail for the audit files.** The roles can't delete them, and their versions are kept
   for a year, but an administrator still can. Object Lock and CloudTrail data events come with the UC Berkeley
   account: Object Lock would stop `./bmu aws destroy` from emptying a test account's bucket.

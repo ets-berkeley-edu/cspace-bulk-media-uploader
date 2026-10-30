@@ -1,5 +1,6 @@
 """Running several environments (local with the simulator, local against PAHMA QA, AWS): each one says which it
 is, and two on one host keep separate sign-ins."""
+import pytest
 
 
 def test_the_environment_label_and_whether_collectionspace_is_real_need_no_sign_in(api, services):
@@ -16,8 +17,9 @@ def test_the_simulator_in_aws_is_not_a_real_collectionspace(api, services):
     aws_simulator = "http://fakecspace.bmu-dev.internal:8180"  # SIMULATED_CSPACE=true (deploy/terraform/app/fakecspace.tf)
     assert real_cspace(aws_simulator) and not real_cspace(aws_simulator, simulated=True)
     services.settings.cspace_url = aws_simulator
-    assert api.get("/api/env").json()["realCollectionSpace"] is True  # the host name alone can't tell
-    services.settings.cspace_simulated = True
+    with pytest.raises(ValueError, match="https"):  # the host name alone can't tell, so http:// is refused...
+        services.settings.museums()
+    services.settings.cspace_simulated = True  # ...unless the deployment says it is the simulator
     assert api.get("/api/env").json()["realCollectionSpace"] is False
 
 

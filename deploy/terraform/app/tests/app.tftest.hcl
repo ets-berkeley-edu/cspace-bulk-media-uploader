@@ -27,6 +27,10 @@ mock_provider "aws" {
   }
 }
 
+mock_provider "aws" {
+  alias = "us_east_1"
+}
+
 variables {
   account_id    = "123456789012"
   region        = "us-west-2"
@@ -361,4 +365,122 @@ run "the_simulator_is_pahma_alone" {
   }
 
   expect_failures = [var.tenants]
+}
+
+# ---- review 29 October 2026, section 5 -------------------------------------------------------------------------------
+
+run "a_real_collectionspace_must_be_https" {
+  command = plan
+
+  variables {
+    tenants = { pahma = "http://pahma.qa.collectionspace.org" }
+  }
+
+  expect_failures = [var.tenants]
+}
+
+run "without_an_origin_domain_cloudfront_reaches_the_load_balancer_with_http" {
+  command = plan
+
+  assert {
+    condition     = length(aws_lb_listener.http) == 1 && length(aws_lb_listener.https) == 0
+    error_message = "Without origin_domain the load balancer listens on 80 only."
+  }
+
+  assert {
+    condition     = aws_cloudfront_vpc_origin.alb.vpc_origin_endpoint_config[0].origin_protocol_policy == "http-only"
+    error_message = "Without origin_domain CloudFront uses HTTP to the load balancer."
+  }
+
+  assert {
+    condition     = aws_vpc_security_group_ingress_rule.alb_from_cloudfront.from_port == 80
+    error_message = "Without origin_domain the load balancer admits CloudFront on 80."
+  }
+}
+
+run "with_an_origin_domain_the_hop_to_the_load_balancer_is_https_only" {
+  command = plan
+
+  variables {
+    origin_domain          = "bmu-dev-origin.example.berkeley.edu"
+    origin_certificate_arn = "arn:aws:acm:us-west-2:123456789012:certificate/0f1e2d3c-4b5a-6978-8091-a2b3c4d5e6f7"
+  }
+
+  assert {
+    condition     = length(aws_lb_listener.http) == 0 && length(aws_lb_listener.https) == 1
+    error_message = "With origin_domain the load balancer listens on 443 only."
+  }
+
+  assert {
+    condition     = aws_lb_listener.https[0].certificate_arn == var.origin_certificate_arn && startswith(aws_lb_listener.https[0].ssl_policy, "ELBSecurityPolicy-TLS13")
+    error_message = "The HTTPS listener uses the certificate and a TLS 1.2+ policy."
+  }
+
+  assert {
+    condition     = aws_cloudfront_vpc_origin.alb.vpc_origin_endpoint_config[0].origin_protocol_policy == "https-only"
+    error_message = "With origin_domain CloudFront uses HTTPS only to the load balancer."
+  }
+
+  assert {
+    condition     = one([for o in aws_cloudfront_distribution.main.origin : o.domain_name]) == "bmu-dev-origin.example.berkeley.edu"
+    error_message = "CloudFront checks the certificate against origin_domain."
+  }
+
+  assert {
+    condition     = aws_vpc_security_group_ingress_rule.alb_from_cloudfront.from_port == 443 && aws_vpc_security_group_ingress_rule.alb_from_cloudfront.to_port == 443
+    error_message = "The load balancer admits CloudFront on 443 only (one rule: the prefix list fills the group)."
+  }
+}
+
+run "an_origin_domain_needs_its_certificate" {
+  command = plan
+
+  variables {
+    origin_domain = "bmu-dev-origin.example.berkeley.edu"
+  }
+
+  expect_failures = [var.origin_certificate_arn]
+}
+
+run "no_waf_by_default" {
+  command = plan
+
+  assert {
+    condition     = length(aws_wafv2_web_acl.main) == 0 && aws_cloudfront_distribution.main.web_acl_id == null
+    error_message = "The WAF is off unless waf_enabled."
+  }
+}
+
+run "the_waf_limits_sign_ins_and_requests_per_address" {
+  command = plan
+
+  variables {
+    waf_enabled = true
+  }
+
+  assert {
+    condition     = aws_wafv2_web_acl.main[0].scope == "CLOUDFRONT"
+    error_message = "CloudFront's WAF has scope CLOUDFRONT (in us-east-1)."
+  }
+
+  assert {
+    condition = (
+      [for r in aws_wafv2_web_acl.main[0].rule : r.statement[0].rate_based_statement[0].limit if r.name == "sign-in-rate"] == [20] &&
+      [for r in aws_wafv2_web_acl.main[0].rule : r.statement[0].rate_based_statement[0].limit if r.name == "request-rate"] == [3000]
+    )
+    error_message = "Sign-in is limited to 20 and all requests to 3,000 per address in 5 minutes."
+  }
+}
+
+run "keys_wait_30_days_before_deletion_where_data_is_protected" {
+  command = plan
+
+  variables {
+    protect_data = true
+  }
+
+  assert {
+    condition     = aws_kms_key.session.deletion_window_in_days == 30 && aws_kms_key.job.deletion_window_in_days == 30 && alltrue([for k in aws_kms_key.staging : k.deletion_window_in_days == 30])
+    error_message = "With protect_data every key has the longest deletion window, 30 days."
+  }
 }
