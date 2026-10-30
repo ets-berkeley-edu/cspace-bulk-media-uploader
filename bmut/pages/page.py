@@ -38,7 +38,8 @@ class Page:
         return WebDriverWait(self.driver, timeout, ignored_exceptions=(StaleElementReferenceException,)).until(check)
 
     def wait_until_gone(self, locator: Locator, timeout: float = TIMEOUT) -> None:
-        WebDriverWait(self.driver, timeout).until(ec.invisibility_of_element_located(locator))
+        WebDriverWait(self.driver, timeout, ignored_exceptions=(StaleElementReferenceException,)).until(
+            ec.invisibility_of_element_located(locator))
 
     def click(self, locator: Locator) -> None:
         """Clicks the element once it can take the click: just after a page opens its layout is still settling, and
@@ -88,6 +89,21 @@ class Page:
 
     def text_of(self, locator: Locator) -> str:
         return self.wait_for(locator).text
+
+    def title_of(self, locator: Locator) -> str:
+        """The element's tooltip: a switched-off control's says why it is off (lib/roles.ts)."""
+        return str(self.wait_for(locator).get_attribute("title") or "")
+
+    def is_shown(self, locator: Locator) -> bool:
+        """Whether the element is on the page and visible now, without waiting for it."""
+        return any(e.is_displayed() for e in self.driver.find_elements(*locator))
+
+    def is_enabled(self, locator: Locator) -> bool:
+        return self.wait_for(locator).is_enabled()
+
+    def wait_until_enabled(self, locator: Locator, enabled: bool = True, timeout: float = TIMEOUT) -> None:
+        """Waits until the control is on (or off): many wait for checks against CollectionSpace."""
+        self.wait_until(lambda d: d.find_element(*locator).is_enabled() == enabled, timeout)
 
     def value_of(self, locator: Locator) -> str:
         return str(self.wait_for(locator).get_attribute("value"))

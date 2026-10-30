@@ -34,9 +34,12 @@ plus the tests.
 
 ## How the tests are ordered
 
-- **Each test has its own browser**, so a sign-in or a dark-mode choice ends with the test.
+- **Each test has its own browser**, so a sign-in or a dark-mode choice ends with the test. A file that works
+  through drafts as people would keeps one browser per user for all its tests instead (`admin`, `intern`, `limited`;
+  `conftest.signed_in_browser`): a second sign-in as the same user is a session of its own, and finds a draft the
+  first has open held by it. A failed test saves a screenshot of each browser it used.
 - **The files run in `conftest.py`'s `FILE_ORDER`**: what only looks first (sign-in, then the tabs), then what changes
-  the stack's data (the job flow). Each file's tests run in file order, never in parallel or shuffled. A new file goes
+  the stack's data (the job flow, then roles, three kinds of result, Submit for review, and Drafts and Job queue). Each file's tests run in file order, never in parallel or shuffled. A new file goes
   where its changes belong.
 - **A test that builds on an earlier one** says so with `@pytest.mark.after("test_name")`: if that test didn't pass,
   it's skipped rather than failing for the same reason.
@@ -50,9 +53,19 @@ plus the tests.
 | `tests/test_sign_in.py` | Sign-in and sign-out (section 2): returning to the page asked for, a wrong password, empty fields (no request sent), the environment label, accounts refused at sign-in (`newstaff`, `reader`; section 2i), signing out, a session that ended |
 | `tests/test_tabs.py` | Tabs as pages (section 2): a reload keeps the tab, Back goes through the tabs, the browser tab's title, Page not found, dark mode |
 | `tests/test_job_flow.py` | One job from start to finish (sections 2, 2a, 2b): naming a job gives the address its id, two files upload and are found in CollectionSpace, a reload keeps the draft, Drafts and back, Submit lands on Job queue, and the run ends Completed in Finished jobs |
+| `tests/test_roles.py` | Roles (sections 2i, 2j, 2k), as `admin` and `intern`: the Intern chip and the Job queue's controls, "Staff only" and "Open to interns" drafts, what an intern can't edit and why, Open to interns from Drafts and from the editor, Submit… from Drafts (and off when a document needs fixing), an intern's checks through the read-only account (a missing Object, a protected file and an access note, without the reasons staff see) |
+| `tests/test_three_kinds_of_result.py` | Three kinds of result (section 2l), as `limited`, `admin` and `intern`: "Needs an Object creator" in the document, the job's purple line and the bar, Submit job off until the document is deleted, the Drafts chip for each user, `admin` submitting it to Completed, the group problem that stops only Submit |
+| `tests/test_submit_for_review.py` | Submit for review (section 2m), as `intern` and `admin`: off while a document needs fixing, then sent from the editor and from Drafts; the "Needs review" mark, first in Drafts and staff only; the mark kept through a staff edit, cleared by Open to interns, and gone after Submit… and Move to Drafts |
+| `tests/test_drafts_and_queue.py` | Drafts and Job queue (sections 2c, 2i, 2j): a draft's line, details and full preview, Expand and Collapse all, sorting, Take over… from a second session, deleting a draft; with the queue paused, two queued jobs, Run now, Hold, Set run time, the arrows, what an intern sees, Move to Drafts…, and Edit on a queued job |
 
-The files are named for the simulator's sample Objects (`backend/fakecspace/app.py`, `SAMPLE_OBJECTS`), and the
-image is a 20-pixel JPEG from the frontend's fixtures (`files.py`).
+The files are named for the simulator's sample Objects (`backend/fakecspace/app.py`, `SAMPLE_OBJECTS` and
+`SENSITIVE_OBJECTS`), or for object numbers it doesn't have (20-0777, 20-0990 and up) where a test needs a missing
+Object, and the image is a 20-pixel JPEG from the frontend's fixtures (`files.py`). Every moment is a run time on the
+test stack, so a test that needs jobs to wait in the Job queue pauses the queue first and resumes it afterwards
+(`QueuePage.pause`).
+
+Chrome's password manager is off in the tests' browsers: after signing in as `intern` / `intern`, a password on
+Chrome's list of leaked ones, its "Change your password" bubble took every key and click the test sent.
 
 ## Packages
 

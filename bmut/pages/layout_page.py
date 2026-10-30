@@ -16,6 +16,7 @@ class LayoutPage(Page):
     TITLE = by_id("page-title")
     TENANT = by_id("tenant-name")
     ENVIRONMENT = by_id("environment-label")
+    ROLE = by_id("user-role")  # the "Intern" chip; staff have none
     MENU = by_id("btn-main-menu")
     DARK_MODE = by_id("menu-item-dark-mode")
     SIGN_OUT = by_id("menu-item-sign-out")

@@ -11,6 +11,10 @@ from pathlib import Path
 
 import pytest
 from selenium import webdriver
+from selenium.webdriver.remote.webdriver import WebDriver
+
+from bmut.pages.layout_page import LayoutPage
+from bmut.pages.sign_in_page import SignInPage
 
 BASE_URL = os.environ.get("BMUT_BASE_URL", "http://localhost:5573/")
 # Set only by ./bmu test: the tests change the stack's data, so they never run against a tester's ./bmu up sim.
@@ -23,7 +27,8 @@ _outcomes: dict[str, str] = {}
 
 # The test files in the order they run (the rest after them, alphabetically): what only looks first, then what
 # changes the stack's data (README: The order the tests run in).
-FILE_ORDER = ["test_sign_in.py", "test_tabs.py", "test_job_flow.py"]
+FILE_ORDER = ["test_sign_in.py", "test_tabs.py", "test_job_flow.py", "test_roles.py", "test_three_kinds_of_result.py",
+              "test_submit_for_review.py", "test_drafts_and_queue.py"]
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -59,13 +64,15 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[None]) ->
         _outcomes[item.name] = report.outcome
     elif report.outcome != "passed":
         _outcomes[item.name] = "skipped" if report.skipped else "failed"
-    driver = getattr(item, "funcargs", {}).get("driver")
-    if report.when == "call" and report.failed and driver is not None:
+    # Every browser the test used: "driver", or one per user ("admin", "intern") in the files that need several.
+    browsers = {arg: value for arg, value in getattr(item, "funcargs", {}).items() if isinstance(value, WebDriver)}
+    if report.when == "call" and report.failed and browsers:
         FAILURES.mkdir(parents=True, exist_ok=True)
-        name = re.sub(r"[^A-Za-z0-9_.-]", "_", item.name)
-        driver.save_screenshot(str(FAILURES / f"{name}.png"))
-        (FAILURES / f"{name}.html").write_text(driver.page_source)
-        report.sections.append(("bmut", f"Screenshot and page HTML in {FAILURES}/{name}.*"))
+        for arg, browser in browsers.items():
+            name = re.sub(r"[^A-Za-z0-9_.-]", "_", item.name if arg == "driver" else f"{item.name}-{arg}")
+            browser.save_screenshot(str(FAILURES / f"{name}.png"))
+            (FAILURES / f"{name}.html").write_text(browser.page_source)
+            report.sections.append(("bmut", f"Screenshot and page HTML in {FAILURES}/{name}.*"))
     return report
 
 
@@ -90,6 +97,20 @@ def new_browser(config: pytest.Config) -> webdriver.Chrome:
     if not (config.getoption("--headed") or os.environ.get("BMUT_HEADED") == "1"):
         options.add_argument("--headless=new")
     options.add_argument("--window-size=1400,1000")
+    # No password manager: after a sign-in whose password is on a list of leaked ones (the simulator's intern / intern),
+    # Chrome opens its "Change your password" bubble, and the page then gets none of the test's keys or clicks.
+    options.add_experimental_option("prefs", {"credentials_enable_service": False,
+                                              "profile.password_manager_enabled": False,
+                                              "profile.password_manager_leak_detection": False})
     browser = webdriver.Chrome(options=options)
     browser.implicitly_wait(0)
+    return browser
+
+
+def signed_in_browser(config: pytest.Config, base_url: str, account: tuple[str, str]) -> webdriver.Chrome:
+    """A browser signed in as the account, on Create / edit job: for a file that works through drafts as several
+    users at once, each in a browser of their own (a second sign-in as the same user would find its drafts held)."""
+    browser = new_browser(config)
+    SignInPage(browser, base_url).sign_in(*account)
+    LayoutPage(browser, base_url).wait_for(LayoutPage.TENANT)
     return browser
