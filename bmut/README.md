@@ -13,7 +13,7 @@ sign in with the simulator's synthetic accounts and create jobs.
 ./bmu test-down                 # stops the test stack
 ```
 
-Needs Docker, Python 3.11 and Chrome. The first run makes `bmut/.venv`; Selenium Manager (part of Selenium) finds
+Needs Docker, Python 3.11 (or `BMUT_PYTHON` naming one) and Chrome. The first run makes `bmut/.venv`; Selenium Manager (part of Selenium) finds
 the matching chromedriver. A run takes the stack's start-up (a few minutes the first time, while the images build)
 plus the tests.
 
@@ -26,6 +26,11 @@ plus the tests.
 - **When a test fails,** its screenshot and the page's HTML are saved in `bmut/.run/failures/`, and the test's report
   says so.
 - The suite refuses to run unless `./bmu test` started it (`BMUT_STACK=test`) on a localhost address.
+- **CI runs it too**: the `bmut` job in `.github/workflows/ci.yml`, on every pull request and push to `main` that
+  changes more than documentation, on GitHub's Linux runners (Docker and Chrome come with them; `BMUT_PYTHON` points
+  `./bmu test` at setup-python's Python). When it fails, the run's artifacts hold `bmut-failures` (the screenshots
+  and page HTML), and the log ends with each service's last 200 lines. It isn't a required check yet (testing
+  checklist section 17). Still run `./bmu test` yourself before pushing a UI change: it's quicker than waiting for CI.
 
 ## How the tests are ordered
 

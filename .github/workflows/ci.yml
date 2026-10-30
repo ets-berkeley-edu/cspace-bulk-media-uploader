@@ -7,7 +7,7 @@ on:
 # The workflow's token can only read the repository: no job here writes to GitHub.
 permissions:
   contents: read
-# A pull request that changes only documentation skips backend, frontend and terraform. They are skipped with
+# A pull request that changes only documentation skips backend, frontend, bmut and terraform. They are skipped with
 # `if:`, not left out with paths-ignore, so each still reports (as skipped, which counts as passing) and a required
 # check never waits on "Expected". The `dependencies` job and everything in security.yml run on every pull request
 # and every push, whatever changed: README and docs files are where a secret or personal data most often leaks.
@@ -107,6 +107,42 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+  bmut:
+    # The Selenium tests (bmut/README.md): ./bmu test starts the bmu-test stack (the simulated CollectionSpace, moto,
+    # DynamoDB Local) in Docker with throwaway keys, and runs the suite in the runner's Chrome. No secrets: the
+    # accounts are the simulator's synthetic ones. Not a required check until it has run a while without a flaky
+    # failure (testing checklist section 17).
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        id: python
+        with: { python-version-file: .python-version }
+      - name: ./bmu test
+        env:
+          BMUT_PYTHON: ${{ steps.python.outputs.python-path }}
+        run: ./bmu test -v
+      # What a failed test saw: its screenshot and page HTML, and the end of each service's log (synthetic data only;
+      # the app's logs leave out passwords and keys).
+      - name: The services' logs
+        if: failure()
+        run: |
+          for c in $(docker ps -aq --filter label=com.docker.compose.project=bmu-test); do
+            echo "::group::$(docker inspect --format '{{.Name}}' "$c")"
+            docker logs --tail 200 "$c" 2>&1
+            echo "::endgroup::"
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: bmut-failures
+          path: bmut/.run/failures/
+          if-no-files-found: ignore
+          retention-days: 14
   terraform:
     # deploy/terraform: formatting, validation against the provider, and terraform test (a simulated AWS provider).
     # Nothing here signs in to AWS or reads Terraform state.

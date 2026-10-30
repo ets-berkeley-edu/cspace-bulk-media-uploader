@@ -64,10 +64,17 @@ class Page:
                                                                  StaleElementReferenceException)).until(clicked)
 
     def type(self, locator: Locator, text: str) -> None:
-        """Replaces what the field holds with the text."""
-        element = self.wait_for(locator)
-        self._empty(element)
-        element.send_keys(text)
+        """Replaces what the field holds with the text. A page moves focus itself half a second after it loads
+        (lib/utils.ts: putFocusNextTick, to its heading or first field), and keys typed after that go where the focus
+        went: so the field is checked, and typed in again if it didn't get them all."""
+        def typed(driver: WebDriver) -> bool:
+            element = self.wait_for(locator)
+            self._empty(element)
+            element.send_keys(text)
+            return element.get_attribute("value") == text
+
+        WebDriverWait(self.driver, TIMEOUT, poll_frequency=0.6,
+                      ignored_exceptions=(StaleElementReferenceException,)).until(typed)
 
     def _empty(self, element: WebElement) -> None:
         """Empties a field so the page sees it: Selenium's clear() changes the value without the input event Vue's
@@ -87,6 +94,11 @@ class Page:
 
     def wait_for_url(self, ending: str, timeout: float = TIMEOUT) -> None:
         WebDriverWait(self.driver, timeout).until(lambda d: d.current_url.endswith(ending))
+
+    def wait_for_focus(self, element_id: str) -> None:
+        """Waits until the element has the focus (where a page puts it once it has loaded)."""
+        WebDriverWait(self.driver, TIMEOUT).until(
+            lambda d: d.switch_to.active_element.get_attribute("id") == element_id)
 
     def wait_for_title(self, title: str) -> None:
         """Waits for the browser tab's title (the page sets it once its data has loaded)."""

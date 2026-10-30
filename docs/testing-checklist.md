@@ -520,6 +520,15 @@ Claude ran `./bmu test` with `./bmu up sim` running alongside: 15 passed, and th
 - [ ] Make a test fail on purpose (change an expected text in `bmut/tests/test_tabs.py`), run it: the report names a screenshot and the page's HTML in `bmut/.run/failures/`. Put the text back.
 - [ ] `./bmu test-down` stops the test stack; `./bmu status` still shows sim running.
 
+## 17. The Selenium tests in CI (29 October 2026; 10 minutes, then a few weeks)
+
+Branch `ci/bmut`. Claude checked the workflow with actionlint and ran `./bmu test` on the Mac as CI will (`BMUT_PYTHON`), but couldn't run the CI job itself: it runs once the branch is pushed. On the way, about one run in five failed a sign-in on a fresh stack: a page moves the focus itself half a second after it loads (`putFocusNextTick`), and keys the test typed after that went into the wrong field. The tests now wait for that focus and check what they typed; three runs on fresh stacks and eight cold starts of the failing step then passed.
+
+- [ ] On the pull request, the `bmut` job runs and passes. Note how long it took (the stack's build and start-up are most of it).
+- [ ] A pull request that changes only a `.md` file shows `bmut` as skipped.
+- [ ] Break a test on a scratch branch (change an expected text in `bmut/tests/test_tabs.py`), push it: the job fails, the log ends with each service's last lines in folded groups, and the run's artifacts hold `bmut-failures` with the screenshot. Delete the branch.
+- [ ] After a few weeks of pull requests with no flaky `bmut` failure, make `bmut` a required check (Settings → Branches → the rule for `main`), and say so in `bmut/README.md`, the `ci.yml` comment and this item.
+
 ## Not tests, but still open
 
 - The design doc's "For Richard to address" list (from the October 3 comparison of the doc with the prototype).
