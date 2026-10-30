@@ -218,6 +218,30 @@ def test_move_to_drafts(admin: WebDriver, base_url: str, paused: None) -> None:
     assert not drafts.is_shown(drafts.editing(made["two"]))
 
 
+@pytest.mark.after("test_move_to_drafts")
+def test_no_preview_button_on_the_rows(admin: WebDriver, base_url: str, paused: None) -> None:
+    """Section 2n, steps 1 to 3: no Preview button on a draft's row or a queued job's; expanded, "Open full preview"
+    is the job's first line, above its facts. It opens the full preview with the job's buttons, and "Back to Drafts"
+    (or "Back to Job queue") returns. Finished jobs' View results (step 4) is in test_finished_jobs.py."""
+    for page, job_id, back in ((DraftsPage(admin, base_url), made["two"], "Back to Drafts"),
+                               (QueuePage(admin, base_url), made["one"], "Back to Job queue")):
+        page.open_tab()
+        toggle = page.button(job_id, "toggle")
+        page.wait_for(toggle)
+        row = admin.find_element(By.CSS_SELECTOR, f"#job-{job_id} tr.job-row")
+        assert "Preview" not in [b.text.strip() for b in row.find_elements(By.TAG_NAME, "button")]
+        assert not page.is_shown(page.button(job_id, "preview"))
+        page.click(toggle)
+        first = page.wait_for(page.details(job_id)).find_element(By.TAG_NAME, "button")
+        assert first.get_attribute("id") == f"job-{job_id}-full-preview-btn"
+        page.click(page.button(job_id, "full-preview"))
+        page.wait_for(page.PREVIEW_TITLE)
+        assert page.is_shown(page.button(job_id, "edit"))
+        assert page.text_of(page.PREVIEW_BACK).endswith(back)
+        page.click(page.PREVIEW_BACK)
+        page.wait_for(page.name(job_id))
+
+
 @pytest.mark.after("test_submitted_jobs_wait_in_a_paused_queue")
 def test_edit_a_queued_job(admin: WebDriver, base_url: str, paused: None) -> None:
     """Section 2c, Job queue, step 5: Edit on a queued job warns first; Edit anyway moves it to Drafts and opens
