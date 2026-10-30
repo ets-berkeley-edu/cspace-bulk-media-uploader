@@ -258,12 +258,12 @@ def test_sign_in_is_refused_when_the_roles_cannot_be_read(api, fake):
 def test_the_roles_are_read_again_for_every_schedule_change(api, login, fake):
     login()
     assert api.put("/api/schedule", json={"days": [1, 2, 3, 4, 5, 6, 7], "start": "18:00"}).status_code == 200
-    fake.role_overrides["admin"] = ["ROLE_15_TENANT_ADMINISTRATOR"]  # the role was removed after signing in
+    fake.role_overrides["admin"] = ["ROLE_14_TENANT_ADMINISTRATOR"]  # the role was removed after signing in
     r = api.put("/api/schedule", json={"days": [1, 2, 3, 4, 5, 6, 7], "start": "20:00"})
     assert r.status_code == 403 and r.json()["detail"] == REFUSED
     assert api.get("/api/me").json()["role"] == "staff"  # the session keeps its role; each staff action asks again
     assert api.get("/api/schedule").json()["start"] == "18:00"
-    fake.role_overrides["admin"] = ["ROLE_15_Bmu_Staff"]  # given back (any case)
+    fake.role_overrides["admin"] = ["ROLE_14_Bmu_Staff"]  # given back (any case)
     assert api.post("/api/schedule/pause", json={"reason": "x"}).status_code == 200
     assert api.get("/api/me").json()["role"] == "staff"
 
@@ -412,7 +412,7 @@ def test_cancel_run_is_for_staff(api, login, add_uploaded, services, fake):
     services.storage.update_job(job, {"status": "Running"})  # as if the worker started it
     r = _second_user(services, "intern").post(f"/api/jobs/{job}/cancel")
     assert r.status_code == 403 and r.json()["detail"] == REFUSED
-    fake.role_overrides["admin"] = ["ROLE_15_TENANT_READER"]  # the submitter lost the role: no longer theirs to cancel
+    fake.role_overrides["admin"] = ["ROLE_14_TENANT_READER"]  # the submitter lost the role: no longer theirs to cancel
     assert api.post(f"/api/jobs/{job}/cancel").status_code == 403
     j = _second_user(services, "limited").post(f"/api/jobs/{job}/cancel").json()  # any staff member, any job
     assert j["cancelRequested"]["by"] == "limited" and j["plan"]["kind"] == "running"

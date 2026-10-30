@@ -118,7 +118,7 @@ def test_a_queued_job_whose_submitter_lost_the_staff_role_does_not_run(api, logi
     job = new_job(api)
     add_uploaded(job, ["15-1234_1.jpg"])
     assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
-    fake.role_overrides["admin"] = ["ROLE_15_BMU_INTERN"]
+    fake.role_overrides["admin"] = ["ROLE_14_BMU_INTERN"]
     media_before = len(fake.media)
     worker.tick()
     j = services.storage.get_job(job)

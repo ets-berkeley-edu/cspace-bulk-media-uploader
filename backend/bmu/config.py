@@ -117,7 +117,7 @@ class Settings(BaseSettings):
         return self.protected_draft_days if (job or {}).get("protectedCount") else self.draft_days
 
 
-# The simulated CollectionSpace's host names (backend/fakecspace): locally, in Docker and in the tests.
+# The simulated CollectionSpace's host names (the fakecspace package): locally, in Docker and in the tests.
 SIMULATOR_HOSTS = {"localhost", "127.0.0.1", "fakecspace", "fake"}
 
 

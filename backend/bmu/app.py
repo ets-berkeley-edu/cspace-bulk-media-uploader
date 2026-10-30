@@ -515,7 +515,7 @@ SIMULATORS = SIMULATOR_HOSTS
 
 
 def real_cspace(url: str, simulated: bool = False) -> bool:
-    """Whether the BMU talks to a real CollectionSpace server, not the simulator (backend/fakecspace): locally the
+    """Whether the BMU talks to a real CollectionSpace server, not the simulator (the fakecspace package): locally the
     simulator is known by its host name; in AWS the setting cspace_simulated says so."""
     from urllib.parse import urlparse
     return not simulated and (urlparse(url).hostname or "") not in SIMULATORS

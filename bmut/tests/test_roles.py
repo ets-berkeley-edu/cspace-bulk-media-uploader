@@ -3,7 +3,7 @@ the read-only account for interns' checks), with the simulator's admin (staff) a
 browser of its own signed in once (conftest.signed_in_browser). The tests run in order and build on each other's
 drafts, as two people would work. Move to Drafts is in test_drafts_and_queue.py, which holds jobs in the queue.
 
-The files are named for the simulator's Objects (backend/fakecspace/app.py): 15-1240 and 15-1234 exist, 20-0777
+The files are named for the simulator's Objects (the fakecspace package's BMU set): 15-1240 and 15-1234 exist, 20-0777
 doesn't, 12-2001 is sensitive and 12-2003 has a soft access note. The test stack's web app has the simulator's
 read-only account (bmureader), so an intern's checks find what exists."""
 from __future__ import annotations

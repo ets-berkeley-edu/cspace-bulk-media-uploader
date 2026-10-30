@@ -105,7 +105,7 @@ variable "protect_data" {
 }
 
 variable "simulated_cspace" {
-  description = "true runs the simulated CollectionSpace (backend/fakecspace) in the environment, and the BMU uses it (fakecspace.tf). For trying the BMU without a CollectionSpace account; never for data that matters."
+  description = "true runs the simulated CollectionSpace (the fakecspace package) in the environment, and the BMU uses it (fakecspace.tf). For trying the BMU without a CollectionSpace account; never for data that matters."
   type        = bool
   default     = false
 

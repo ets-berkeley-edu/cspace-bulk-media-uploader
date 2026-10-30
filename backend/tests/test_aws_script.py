@@ -82,8 +82,6 @@ def tree(tmp_path):
     """A copy of deploy/aws.sh in its own tree, with stand-in aws and terraform first on the PATH."""
     (tmp_path / "deploy" / "environments").mkdir(parents=True)
     shutil.copy(SCRIPT, tmp_path / "deploy" / "aws.sh")
-    (tmp_path / "backend" / "fakecspace").mkdir(parents=True)  # where deploy reads the simulator's reader account
-    shutil.copy(SCRIPT.parents[1] / "backend" / "fakecspace" / "app.py", tmp_path / "backend" / "fakecspace" / "app.py")
     (tmp_path / "backend" / "bmu" / "tenants").mkdir(parents=True)  # each museum needs its configuration
     for museum in ("pahma", "bampfa"):  # bampfa: a test-only museum
         (tmp_path / "backend" / "bmu" / "tenants" / f"{museum}.yaml").write_text("")

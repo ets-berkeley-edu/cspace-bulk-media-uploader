@@ -3,7 +3,7 @@ Exclude, deleting a document, "Change selected documents", sorting, paging and t
 upload and Retry, and the locked banner with Take over. As the simulator's admin, with a second admin session (a
 browser of its own) for a draft someone else is editing. The tests run in order; each makes its own draft.
 
-The files are named for the simulator's sample Objects (backend/fakecspace/app.py), so their documents are found
+The files are named for the simulator's sample Objects (the fakecspace package's BMU set), so their documents are found
 and link; 20-0994 is an object number it doesn't have. Replace file, the other half of 2a's failed-upload step, needs
 a run that failed: test_finished_jobs.py has it."""
 from __future__ import annotations

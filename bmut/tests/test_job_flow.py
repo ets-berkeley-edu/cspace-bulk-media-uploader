@@ -3,7 +3,7 @@ tabs): name a job, add files, see them checked, find it in Drafts, submit it, an
 Finished jobs.
 
 The test stack has every moment a run time (BMU_ALWAYS_RUN_TIME in ./bmu), so a submitted job runs at once. The files
-are named for the simulator's sample Objects (backend/fakecspace/app.py, SAMPLE_OBJECTS), so each document links to
+are named for the simulator's sample Objects (the fakecspace package's BMU set, seeds.py), so each document links to
 an Object that exists and nothing needs fixing. The tests run in order, each building on the one before, in one
 browser signed in once, as one person would work: a second sign-in would find the draft held by the first."""
 from __future__ import annotations

@@ -4,7 +4,7 @@ intern for a second browser watching the Job queue (2g asks for limited, a user 
 roles part 1 made staff: an intern is now the one without the Reorder button). The tests run in order and build on
 each other's jobs.
 
-20-0995 and 20-0996 are object numbers the simulator doesn't have (backend/fakecspace/app.py), so "Create new
+20-0995 and 20-0996 are object numbers the simulator doesn't have (the fakecspace package's BMU set), so "Create new
 object + link" and "Link to object (create if missing)" both create them. The queue is paused from the first test
 (every moment is a run time on the test stack) and resumed by the last, which lets the jobs run."""
 from __future__ import annotations

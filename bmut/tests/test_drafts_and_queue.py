@@ -5,7 +5,7 @@ in once. The tests run in order and build on each other's jobs.
 
 Every moment is a run time on the test stack, so the queue tests pause the queue first (the paused fixture) and
 resume it at the end; their jobs then run. Each job's files are named for different sample Objects
-(backend/fakecspace/app.py), so no two queued jobs share an Object and nothing asks before a move."""
+(the fakecspace package's BMU set), so no two queued jobs share an Object and nothing asks before a move."""
 from __future__ import annotations
 
 from collections.abc import Iterator

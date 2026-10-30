@@ -107,7 +107,7 @@ deployment is built (`deploy/README.md`); what it leaves for later is listed the
 | `backend/bmu/` | FastAPI app (`app.py`), worker (`worker.py`), row checks (`rows.py`), job scheduling (`schedule.py`), CollectionSpace client and payloads (`cspace/`), storage (DynamoDB, S3), credential encryption |
 | `backend/bmu/tenants/pahma.yaml` | PAHMA configuration: handling options, filename rule, field lists, sensitivity rules, the two BMU roles and what staff must be permitted |
 | `backend/bmu/failures.yaml` | The failure catalog: every failure code with its title, explanation and what to do |
-| `backend/fakecspace/` | A simulated CollectionSpace API for development and tests (not CollectionSpace) |
+| `backend/requirements-sim.in` | The simulated CollectionSpace for development and tests: the `fakecspace` package ([cspace-fakecspace](https://github.com/ets-berkeley-edu/cspace-fakecspace), shared with Serena), pinned; not CollectionSpace. Its image is `deploy/fakecspace.Dockerfile` |
 | `backend/tests/` | pytest: unit tests and the full run path with moto (AWS) and the simulated CollectionSpace |
 | `bmut/` | Selenium tests of the app in Chrome, on a test stack of their own (`./bmu test`); see [bmut/README.md](bmut/README.md) |
 | `frontend/` | Vue 3 + TypeScript app (Vuetify, Pinia, vue-router, axios; Vite, Vitest), built like BOA: see Frontend, below |
@@ -188,7 +188,16 @@ Zachary Williams; the sample Organizations are the Phoebe A. Hearst Museum of An
 California at Berkeley Regents. The languages are English, Spanish, French, German, Chinese, Japanese, Hawaiian
 and Navajo (codes `eng`, `spa`, `fre`, `ger`, `chi`, `jpn`, `haw`, `nav`).
 
-The simulator's state is at http://localhost:8180/_fake/state; reset it with `curl -X POST localhost:8180/_fake/reset`.
+The simulator is the `fakecspace` package ([cspace-fakecspace](https://github.com/ets-berkeley-edu/cspace-fakecspace),
+shared with Serena; its README lists every `/_fake` control), pinned in `backend/requirements-sim.in` and run from its
+own image (`deploy/fakecspace.Dockerfile`), which seeds the BMU's samples above at every start. A change to the
+simulator is a new release of the package, then a new pin here. Its state is at http://localhost:8180/_fake/state. A
+reset empties it, so seed the samples again after one (Demo tools' reset does both):
+
+```sh
+curl -X POST localhost:8180/_fake/reset
+curl -X POST localhost:8180/_fake/seed -H 'Content-Type: application/json' -d '{"set": "bmu"}'
+```
 
 ### Demo tools (demo builds only)
 
@@ -240,28 +249,30 @@ A draft shows a deleted term as "Must fix" and takes a renamed one's current nam
 too; when the job runs, a document with a deleted value fails before anything is created (`value_missing`), and
 one with a renamed term is sent with the current name (notice `term_renamed`).
 
-To see how the BMU reports failures, make the simulated CollectionSpace fail on purpose. Rules apply only to
-job runs (not to the editor's checks) and are used up after one matching request unless you pass `count=0`:
+To see how the BMU reports failures, make the simulated CollectionSpace fail on purpose. A rule is JSON; with
+`"agent": "bmu-worker"` it applies only to job runs (not to the editor's checks), and it is used up after one
+matching request unless you give `"times"` (0: until cleared):
 
 ```sh
-curl -X POST 'localhost:8180/_fake/fail?step=upload&status=413&match=1-2345'         # file too large
-curl -X POST 'localhost:8180/_fake/fail?step=objectSearch&effect=none&match=15-1234'  # object gone at run time
-curl -X POST 'localhost:8180/_fake/fail?step=objectSearch&effect=many&match=15-1240'  # several objects
-curl -X POST 'localhost:8180/_fake/fail?step=media&status=400&match=12-5678'          # Media record rejected
-curl -X POST 'localhost:8180/_fake/fail?step=relation&status=403&count=0'             # no permission for relations
-curl -X POST 'localhost:8180/_fake/fail?step=media&status=401'                        # sign-in failed (job stops)
-curl -X POST 'localhost:8180/_fake/fail?step=media&status=503&count=0'                # outage: 5 in a row stop the job
-curl -X POST 'localhost:8180/_fake/fail?step=mediaSearch&effect=many'                 # ID in use since submission (notice)
-curl -X POST 'localhost:8180/_fake/fail?step=group&status=400'                        # the job's group can't be created
-curl -X POST 'localhost:8180/_fake/fail?step=termRead&status=503&match=7475'          # a term can't be read at run time
+fail() { curl -X POST localhost:8180/_fake/fail -H 'Content-Type: application/json' -d "$1"; echo; }
+fail '{"step": "upload", "status": 413, "match": "1-2345", "agent": "bmu-worker"}'          # file too large
+fail '{"step": "objectSearch", "effect": "none", "match": "15-1234", "agent": "bmu-worker"}' # object gone at run time
+fail '{"step": "objectSearch", "effect": "many", "match": "15-1240", "agent": "bmu-worker"}' # several objects
+fail '{"step": "media", "status": 400, "match": "12-5678", "agent": "bmu-worker"}'          # Media record rejected
+fail '{"step": "relation", "status": 403, "times": 0, "agent": "bmu-worker"}'              # no permission for relations
+fail '{"step": "media", "status": 401, "agent": "bmu-worker"}'                             # sign-in failed (job stops)
+fail '{"step": "media", "status": 503, "times": 0, "agent": "bmu-worker"}'                 # outage: 5 in a row stop the job
+fail '{"step": "mediaSearch", "effect": "many", "agent": "bmu-worker"}'                    # ID in use since submission (notice)
+fail '{"step": "group", "status": 400, "agent": "bmu-worker"}'                             # the job's group can't be created
+fail '{"step": "termRead", "status": 503, "match": "7475", "agent": "bmu-worker"}'         # a term can't be read at run time
 curl localhost:8180/_fake/fail            # list the rules
 curl -X DELETE localhost:8180/_fake/fail  # clear them
 ```
 
 `match` is compared with the document's identification number, filename, object number and group title (for
 `termRead`, the term's short identifier or display name). Steps: `media`, `upload`, `objectSearch`,
-`objectCreate`, `relation`, `mediaSearch`, `group`, `termRead`. Add `client=any` to make a rule apply to the
-editor's checks as well.
+`objectCreate`, `relation`, `mediaSearch`, `group`, `termRead`. Leave out `agent` to make a rule apply to the
+editor's checks as well. The package's README has the rest (`path` instead of a step, for any request).
 
 To use the Lyrasis QA tenant instead, start `./bmu up qa` (see Several environments below), or set
 `BMU_CSPACE_URL=https://pahma.qa.collectionspace.org` in `.env`, and sign in with a QA account. Records created there

@@ -5,7 +5,7 @@ completes. As the simulator's admin, and intern for what an intern can't do, eac
 signed in once. The tests run in order and build on the first one's jobs.
 
 Each failure names one file, so it fails only that document; it applies to one request of the job's run. The files
-are named for the simulator's sample Objects (backend/fakecspace/app.py), so every document is found and links."""
+are named for the simulator's sample Objects (the fakecspace package's BMU set), so every document is found and links."""
 from __future__ import annotations
 
 from collections.abc import Iterator

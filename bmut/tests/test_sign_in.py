@@ -1,5 +1,5 @@
 """Signing in and out (docs/testing-checklist.md section 2: Sign-in; Sign out and session end), with the simulator's
-synthetic accounts (backend/fakecspace/app.py, USERS: each password is its username). Each test has its own browser,
+synthetic accounts (the fakecspace package, accounts.py: each password is its username). Each test has its own browser,
 so its sign-in ends with the test. Nothing here changes a job."""
 from __future__ import annotations
 

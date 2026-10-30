@@ -173,7 +173,7 @@
                 <label for="demo-fail-count-input">Times</label>
                 <input
                   id="demo-fail-count-input"
-                  v-model.number="fail.count"
+                  v-model.number="fail.times"
                   class="demo-num native-input"
                   max="99"
                   min="0"
@@ -196,13 +196,13 @@
               </span>
               <select
                 id="demo-fail-client-select"
-                v-model="fail.client"
+                v-model="fail.agent"
                 aria-label="Where it fails"
                 class="native-select"
                 title="Job runs only (the editor's checks unaffected), or every request"
               >
-                <option value="worker">in job runs</option>
-                <option value="any">everywhere</option>
+                <option value="bmu-worker">in job runs</option>
+                <option value="">everywhere</option>
               </select>
               <v-btn
                 id="demo-add-failure-btn"
@@ -519,7 +519,7 @@ const CONFIRM_TEXT = {
 const objects = ref<{objectNumber: string, note: string, deleted: boolean, sensitivity?: unknown}[] | null>(null)
 const copied = ref('')
 
-const fail = reactive({step: 'upload', status: 500, match: '', count: 1, client: 'worker'})
+const fail = reactive({step: 'upload', status: 500, match: '', times: 1, agent: 'bmu-worker'})
 const term = reactive({name: '', how: 'deleted', to: ''})
 const language = reactive({code: '', how: 'delete', to: ''})
 
@@ -545,7 +545,7 @@ const termChanges = computed(() => {
 
 const numberOf = (event: Event) => +(event.target as HTMLSelectElement).value
 const ruleText = (rule: SimSettings['rules'][number]) => `${rule.step} → ${rule.effect || rule.status}${rule.match ? ` if “${rule.match}”` : ''}, `
-  + (rule.count ? `${rule.left} of ${rule.count} left` : 'until cleared') + (rule.client === 'any' ? ', everywhere' : '')
+  + (rule.times ? `${rule.left} of ${rule.times} left` : 'until cleared') + (rule.agent ? '' : ', everywhere')
 
 const refresh = async () => {
   try {
@@ -593,7 +593,7 @@ const setDelay = (seconds: number) => run(
   () => demoApi.sim('slow', {seconds, upload_mbps: sim.value?.upload_mbps ?? 0}),
   seconds ? `Each create and upload in a run now takes ${seconds} s longer.` : 'No added delay in runs.'
 )
-const addFailure = () => run(() => demoApi.sim('fail', {...fail}), failureText(fail.step, fail.status, fail.count))
+const addFailure = () => run(() => demoApi.sim('fail', {...fail}), failureText(fail.step, fail.status, fail.times))
 const clearFailures = () => run(() => demoApi.sim('clear-failures'), 'No failures set.')
 const changeTerm = () => run(() => (term.how === 'rename'
   ? demoApi.sim('rename-term', {name: term.name, to: term.to})
