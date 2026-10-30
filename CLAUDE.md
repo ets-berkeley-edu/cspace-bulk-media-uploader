@@ -63,7 +63,7 @@ npm run build:demo                          # build with Demo tools
 ./bmu down sim|qa|all
 ./bmu logs sim web  # services: web, worker, frontend, fakecspace, s3, dynamodb
 
-# Selenium tests (bmut/, Python 3.11 and Chrome on the Mac; bmut/README.md)
+# Selenium tests (bmut/, Python 3.11, Docker and Chrome; bmut/README.md); CI's bmut job runs them too
 ./bmu test          # fresh bmu-test stack on its own ports (app → http://localhost:5573), then every test, headless
 ./bmu test -k sign_out --headed   # one test, with the browser showing
 ./bmu test-down
@@ -72,11 +72,12 @@ npm run build:demo                          # build with Demo tools
 CI (`.github/workflows/ci.yml`) runs `pytest -q`, then `npm run lint`, `typecheck`, `test` and `build`, and a
 `dependencies` job: the requirements files are in step (below) and `pip-audit` finds no known vulnerabilities, and a
 `terraform` job: `terraform fmt -check`, `validate` for both configurations in `deploy/terraform`, and `terraform test`
-for the app's (no AWS sign-in; the Terraform version is pinned in the job). After changing a `.tf` file, run
-`terraform fmt -recursive deploy/terraform`.
+for the app's (no AWS sign-in; the Terraform version is pinned in the job), and a `bmut` job: `./bmu test`, the
+Selenium tests on the bmu-test stack in Docker (a failed run uploads the screenshots and the services' logs). After
+changing a `.tf` file, run `terraform fmt -recursive deploy/terraform`.
 `.github/workflows/audit.yml` repeats the audit, with `npm audit`, every Monday.
 A pull request that changes only documentation (`docs/`, `*.md`, `LICENSE`, issue/PR templates) skips `backend`,
-`frontend` and `terraform`; the `changes` job decides, and a skipped job counts as passing. `dependencies` and
+`frontend`, `bmut` and `terraform`; the `changes` job decides, and a skipped job counts as passing. `dependencies` and
 `.github/workflows/security.yml` (`gitleaks` over the whole history, and `npm audit`) run on every pull request and
 push, whatever changed: never add a path filter or a docs-only condition to them. A gitleaks match that isn't a
 secret goes in `.gitleaksignore`, by fingerprint, with a comment saying why. Actions are pinned by commit SHA with

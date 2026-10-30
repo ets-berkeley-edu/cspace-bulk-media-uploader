@@ -18,7 +18,10 @@ class SignInPage(Page):
         self.fill_in(username, password)
 
     def fill_in(self, username: str, password: str) -> None:
-        """Signs in from the page as it is (where the app sent you, say)."""
+        """Signs in from the page as it is (where the app sent you, say). It first waits for the page to put the focus
+        on the username, half a second after it shows (Login.vue): typed before then, the password's keys would
+        follow the focus into the username."""
+        self.wait_for_focus("username")
         self.type(self.USERNAME, username)
         self.type(self.PASSWORD, password)
         self.click(self.BUTTON)

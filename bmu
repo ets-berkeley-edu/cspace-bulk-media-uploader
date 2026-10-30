@@ -127,8 +127,9 @@ case "$cmd" in
   test)
     # Started afresh each run (every store is in memory), so every run begins from the same data; left running
     # afterwards, to look at what a failed test saw. bmut/README.md explains the suite.
-    py="$(command -v python3.11 || true)"
-    [ -n "$py" ] || { echo "./bmu test needs python3.11 (the repository's Python)." >&2; exit 1; }
+    # BMUT_PYTHON names another Python 3.11 (CI's, from setup-python, is plain "python").
+    py="${BMUT_PYTHON:-$(command -v python3.11 || true)}"
+    [ -n "$py" ] || { echo "./bmu test needs python3.11 (the repository's Python), or BMUT_PYTHON." >&2; exit 1; }
     if [ ! -x bmut/.venv/bin/python ]; then
       "$py" -m venv bmut/.venv
       bmut/.venv/bin/pip install -q --require-hashes -r bmut/requirements.txt
