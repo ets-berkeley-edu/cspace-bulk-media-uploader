@@ -65,7 +65,7 @@ def test_failure_rules_affect_only_job_runs_by_default(api, login, add_uploaded,
     login()
     job = new_job(api)
     add_uploaded(job, ["15-1234_1.jpg"])
-    fail_on("objectSearch", effect="none", match="15-1234", count=0)
+    fail_on("objectSearch", effect="none", match="15-1234", times=0)
     # the editor's check still finds the object: the rule is for the worker only
     row = api.post(f"/api/jobs/{job}/check", json={"rows": [1]}).json()["rows"][0]
     assert not [c for c in row["checks"] if c["level"] == "block"]
@@ -373,7 +373,7 @@ def test_no_permission_for_relations_offers_stop_linking(api, login, add_uploade
     login()
     job = new_job(api)
     add_uploaded(job, ["15-1234_1.jpg"])
-    fail_on("relation", status=403, count=0)
+    fail_on("relation", status=403, times=0)
     row = run_once(api, job, worker)["rows"][0]
     assert row["result"]["error"]["code"] == "no_permission" and row["result"]["state"] == "Partial"
     api.post(f"/api/jobs/{job}/fix")
@@ -491,7 +491,7 @@ def test_five_failed_requests_in_a_row_stop_the_job(api, login, add_uploaded, wo
     for n in range(1, 6):
         api.patch(f"/api/jobs/{job}/rows/{n}", json={"handling": "mediaonly"})
     for step in ("media", "mediaSearch"):
-        fail_on(step, status=503, count=0)
+        fail_on(step, status=503, times=0)
     j = run_once(api, job, worker)
     assert j["job"]["status"] == "Failed" and j["job"]["code"] == "unavailable"
     assert j["job"]["counts"]["failed"] == 3 and j["job"]["counts"]["notStarted"] == 2
@@ -505,7 +505,7 @@ def test_failures_between_successful_requests_do_not_stop_the_job(api, login, ad
     login()
     job = new_job(api)
     add_uploaded(job, [f"15-1234_{i}.jpg" for i in range(1, 7)])
-    fail_on("media", status=503, count=0)
+    fail_on("media", status=503, times=0)
     j = run_once(api, job, worker)
     assert j["job"]["status"] == "NeedsAttention" and j["job"]["counts"]["failed"] == 6
 
@@ -943,7 +943,7 @@ def test_no_request_is_sent_after_the_fifth_failure_in_a_row(api, login, add_upl
     login()
     job = new_job(api)
     add_uploaded(job, ["15-1234_1.jpg"])
-    fail_on("mediaSearch", status=503, count=0)
+    fail_on("mediaSearch", status=503, times=0)
     real = worker.client_factory
 
     def four_failed_already(t, u, p):

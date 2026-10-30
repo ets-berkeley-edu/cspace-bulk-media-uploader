@@ -3,7 +3,7 @@ which this user can't create, is "Needs an Object creator", not a mistake in the
 create stops only Submit. With the simulator's limited (staff who can't create Objects or groups), admin and intern,
 each in a browser of its own signed in once. The tests run in order, as the people would work.
 
-20-0990 to 20-0992 are object numbers the simulator doesn't have (backend/fakecspace/app.py), so "Link to object
+20-0990 to 20-0992 are object numbers the simulator doesn't have (the fakecspace package's BMU set), so "Link to object
 (create if missing)" (linkorcreate, bmu/tenants/pahma.yaml) creates them; 15-1234 exists."""
 from __future__ import annotations
 

@@ -21,10 +21,10 @@ def test_failed_sign_ins_are_limited_per_username(api, services, fake):
     allowed = services.settings.login_failures_allowed
     for _ in range(allowed):
         assert api.post("/api/login", json={"username": "admin", "password": "wrong"}).status_code == 401
-    calls = len(fake.calls)
+    calls = len(fake.requests)
     r = api.post("/api/login", json={"username": "Admin", "password": "admin"})
     assert r.status_code == 429 and r.json()["detail"]["code"] == "login_limit"
-    assert len(fake.calls) == calls  # CollectionSpace wasn't asked
+    assert len(fake.requests) == calls  # CollectionSpace wasn't asked
     assert api.post("/api/login", json={"username": "limited", "password": "limited"}).status_code == 200  # others can
 
 

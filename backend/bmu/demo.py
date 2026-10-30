@@ -3,8 +3,9 @@
 Off unless BMU_DEMO=true: every endpoint answers 404, and uploads go straight to S3 as designed. With it on, a
 signed-in user can
   - slow the browser's uploads: the presigned POST is sent to the web app, which passes it on to S3 at a set speed;
-  - control the simulated CollectionSpace (backend/fakecspace): slow its creates and file uploads, make steps fail,
-    delete or rename sample terms and languages, reset it; these only pass requests on to its /_fake endpoints;
+  - control the simulated CollectionSpace (the fakecspace package): slow its creates and file uploads, make steps fail,
+    delete or rename sample terms and languages, reset it (and seed the BMU's samples again: it resets empty); these
+    only pass requests on to its /_fake endpoints;
   - delete every job in the tenant except running ones (drafts open in an editor too), to start a demo afresh.
     Records in CollectionSpace are never touched (the BMU is create-only); the usual "Job deleted" audit entries
     are written.
@@ -31,7 +32,8 @@ log = logging.getLogger(__name__)
 UPLOAD_PATH = "/api/_demo/s3upload"
 CHUNK = 64 * 1024
 
-# Simulator controls the pane may use: action -> (method, /_fake path). Anything else is refused.
+# Simulator controls the pane may use: action -> (method, /_fake path). Anything else is refused. "fail" sends its
+# parameters as the JSON body /_fake/fail takes (step, match, status, effect, times, agent); the rest as query parameters.
 SIM_ACTIONS: dict[str, tuple[str, str]] = {
     "slow": ("POST", "/_fake/slow"),
     "fail": ("POST", "/_fake/fail"),
@@ -103,15 +105,15 @@ def register(app: FastAPI) -> None:
             raise HTTPException(404, "Not Found")
         return s
 
-    def sim_call(s: Services, method: str, path: str, params: dict | None = None) -> Any:
+    def sim_call(s: Services, method: str, path: str, params: dict | None = None, json: dict | None = None) -> Any:
         try:
-            r = s.demo.sim_client().request(method, path, params=params or {})
+            r = s.demo.sim_client().request(method, path, params=params or {}, json=json)
         except httpx.HTTPError as e:
             raise HTTPException(502, f"The simulated CollectionSpace at {s.settings.cspace_url} didn't answer ({e.__class__.__name__}). "
                                      "Is it running? Demo tools only work with the simulator, not a real server.")
         if r.status_code == 404:
             raise HTTPException(502, f"{s.settings.cspace_url} has no simulator controls: Demo tools only work with the "
-                                     "simulated CollectionSpace (backend/fakecspace), not a real server.")
+                                     "simulated CollectionSpace (the fakecspace package), not a real server.")
         if r.status_code >= 400:
             raise HTTPException(400, r.text or f"The simulator refused this ({r.status_code}).")
         return r.json()
@@ -140,13 +142,22 @@ def register(app: FastAPI) -> None:
 
     @app.post("/api/_demo/sim/{action}")
     def sim_action(action: str, body: SimAction, sess: Session = Depends(current_session), s: Services = Depends(demo_on)):
-        """Pass one control on to the simulated CollectionSpace (see SIM_ACTIONS and backend/fakecspace/app.py)."""
+        """Pass one control on to the simulated CollectionSpace (see SIM_ACTIONS and the fakecspace package's README)."""
         if action not in SIM_ACTIONS:
             raise HTTPException(404, "Not Found")
         method, path = SIM_ACTIONS[action]
         params = {k: v for k, v in body.params.items() if v is not None and v != ""}
-        sim_call(s, method, path, params)
+        if action == "fail":
+            sim_call(s, method, path, json=params)
+        else:
+            sim_call(s, method, path, params)
+        if action == "reset":
+            seed_samples(s)
         return sim_call(s, "GET", "/_fake/settings")
+
+    def seed_samples(s: Services) -> None:
+        """The simulator resets empty: add the BMU's sample Objects and Media record again (the set it starts with)."""
+        sim_call(s, "POST", "/_fake/seed", json={"set": "bmu"})
 
     @app.get("/api/_demo/sim/objects")
     def sim_objects(sess: Session = Depends(current_session), s: Services = Depends(demo_on)):
@@ -199,6 +210,7 @@ def register(app: FastAPI) -> None:
         s.queue_rows.clear()
         s.demo.browser_upload_mbps = 0.0
         sim_call(s, "POST", "/_fake/reset")
+        seed_samples(s)
         log.info("demo: %s reset everything (%d items, %d objects)", sess.user, counts["items"], counts["objects"])
         return counts
 

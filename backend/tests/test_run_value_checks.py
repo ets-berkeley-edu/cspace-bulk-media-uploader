@@ -221,7 +221,7 @@ def test_a_failed_lookup_fails_the_document_and_creates_nothing(api, login, add_
     login()
     job, _ = make_job(api, add_uploaded, {"15-1234_1.jpg": {"creator": LESLIE}, "12-5678_1.jpg": {}})
     schedule(api, job, fake)
-    fail_on("termRead", status=503, match="7475", count=2)  # the check before the run and the document's own check
+    fail_on("termRead", status=503, match="7475", times=2)  # the check before the run and the document's own check
     j, rows = run(api, job, worker)
     bad = rows["15-1234_1.jpg"]
     assert bad["result"]["state"] == "Failed" and bad["result"]["error"]["code"] == "server_error"
@@ -235,7 +235,7 @@ def test_a_lookup_that_failed_before_the_run_is_asked_again(api, login, add_uplo
     login()
     job, _ = make_job(api, add_uploaded, {"15-1234_1.jpg": {"creator": LESLIE}})
     schedule(api, job, fake)
-    fail_on("termRead", status=500, count=1)
+    fail_on("termRead", status=500, times=1)
     j, rows = run(api, job, worker)
     assert j["job"]["status"] == "Completed" and fake.term_reads == ["7475", "7475"]
 
@@ -246,7 +246,7 @@ def test_failing_lookups_count_toward_five_in_a_row(api, login, add_uploaded, wo
     job, _ = make_job(api, add_uploaded, {n: {"creator": LESLIE} for n in names})
     schedule(api, job, fake)
     before = media_ids(fake)
-    fail_on("termRead", status=503, count=0)
+    fail_on("termRead", status=503, times=0)
     j, rows = run(api, job, worker)
     assert j["job"]["status"] == "Failed" and j["job"]["code"] == "unavailable"
     # the check before the run fails once, but the language list read after it succeeds; then documents 1-5 fail
@@ -261,7 +261,7 @@ def test_a_refused_sign_in_while_checking_values_stops_the_job(api, login, add_u
     login()
     job, _ = make_job(api, add_uploaded, {"15-1234_1.jpg": {"creator": LESLIE}})
     schedule(api, job, fake)
-    fail_on("termRead", status=401, count=0)
+    fail_on("termRead", status=401, times=0)
     j, _ = run(api, job, worker)
     assert j["job"]["status"] == "Failed" and j["job"]["code"] == "auth"
     assert j["job"]["codeDetail"].startswith("Checking values before the first document:")

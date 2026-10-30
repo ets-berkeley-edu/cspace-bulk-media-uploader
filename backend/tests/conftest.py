@@ -12,8 +12,9 @@ from bmu.crypto import LocalCrypto
 from bmu.cspace import CSpaceClient
 from bmu.storage import Storage
 from bmu.worker import Worker
+from fakecspace import seeds
 from fakecspace.app import app as fake_app
-from fakecspace.app import store as fake_store
+from fakecspace.app import stores
 
 os.environ.setdefault("AWS_ACCESS_KEY_ID", "testing")
 os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "testing")
@@ -31,8 +32,11 @@ def settings():
 
 @pytest.fixture
 def fake():
-    fake_store.reset()
-    return fake_store
+    """The simulator's PAHMA store (the one http://fake reaches), emptied and seeded with the BMU's samples."""
+    stores.reset()  # every museum's
+    store = stores["pahma"]
+    seeds.seed(store, "bmu")
+    return store
 
 
 def factory(tenant, user, password):
@@ -46,11 +50,12 @@ def worker_factory(tenant, user, password):
 
 @pytest.fixture
 def fail_on(fake):
-    """Add a /_fake/fail rule: e.g. fail_on("upload", status=413, match="1-2345")."""
+    """Add a /_fake/fail rule for job runs only (agent bmu-worker): e.g. fail_on("upload", status=413, match="1-2345");
+    times=0 until cleared; agent="" for the editor's checks too."""
     c = TestClient(fake_app, base_url="http://fake")
 
-    def _add(step, **params):
-        r = c.post("/_fake/fail", params={"step": step, **params})
+    def _add(step, **rule):
+        r = c.post("/_fake/fail", json={"step": step, "agent": "bmu-worker", **rule})
         assert r.status_code == 200, r.text
         return r.json()["rules"]
     return _add

@@ -52,7 +52,7 @@ def test_with_the_reader_account_an_interns_documents_are_really_checked(service
     # nothing is held against the intern's own account: the intern acts for whoever submits (design: Roles)
     assert _blocks(found) == []
     # the lookups were the reader account's, not the intern's
-    assert {c["user"] for c in fake.calls if "collectionobjects" in c["path"]} == {"bmureader"}
+    assert {c["user"] for c in fake.requests if "collectionobjects" in c["path"]} == {"bmureader"}
 
 
 def test_autocomplete_vocabularies_and_dates_use_the_reader_account_for_an_intern(services, reader, login, api):
@@ -70,7 +70,7 @@ def test_staff_never_use_the_reader_account(api, login, add_uploaded, reader, fa
     job = new_job(api)
     add_uploaded(job, ["15-1234_1.jpg"])
     assert api.post(f"/api/jobs/{job}/check").status_code == 200
-    assert "bmureader" not in {c["user"] for c in fake.calls}
+    assert "bmureader" not in {c["user"] for c in fake.requests}
 
 
 def test_a_protected_file_is_found_for_an_intern_but_not_why(services, add_uploaded, reader, login, api):
