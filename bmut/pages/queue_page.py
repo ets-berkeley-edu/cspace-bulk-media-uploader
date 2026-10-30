@@ -16,6 +16,14 @@ class QueuePage(JobsPage):
     PAUSE_REASON = by_id("pause-reason")
     PAUSE_CONFIRM = by_id("pause-queue-confirm-btn")
     RESUME = by_id("resume-queue-btn")
+    # Jobs that collide (design: Jobs that collide in the queue): the box above the list
+    COLLISIONS = by_id("queue-collisions")
+    REMAINING = by_id("queue-collisions-remaining")  # what a reorder can't fix
+    REORDER = by_id("queue-reorder-btn")
+    REORDER_WHY = by_id("queue-reorder-why")  # an intern's line in its place
+    REORDER_CONFIRM = by_id("queue-reorder-confirm")
+    REORDER_CONFIRM_BTN = by_id("queue-reorder-confirm-btn")
+    REORDER_CANCEL = by_id("queue-reorder-cancel-btn")
 
     @staticmethod
     def order(job_id: str) -> Locator:

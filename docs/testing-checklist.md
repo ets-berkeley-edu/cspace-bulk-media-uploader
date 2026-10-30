@@ -6,7 +6,7 @@ This list moved into the repository on October 5, 2026, from "BMU Testing To Do"
 
 Each section was written for its own branch. Later work has changed some screens, so where a step no longer matches `main`, the step says what replaced it. The automated test counts quoted in sections 1 and 2a are the counts at that time. Today, expect every test to pass.
 
-Steps marked *Automated* are checked by the Selenium tests in `bmut/` (named after the mark), which CI runs on every pull request that changes code (`bmut/README.md`): they needn't be done by hand while those tests pass. *Partly automated* says what the tests don't check, and only that part is left to do by hand. A pull request that adds a bmut test marks the steps it covers, as its docstring names them. Marked on October 30, 2026, for the 46 tests then in `bmut/`.
+Steps marked *Automated* are checked by the Selenium tests in `bmut/` (named after the mark), which CI runs on every pull request that changes code (`bmut/README.md`): they needn't be done by hand while those tests pass. *Partly automated* says what the tests don't check, and only that part is left to do by hand. A pull request that adds a bmut test marks the steps it covers, as its docstring names them. Marked on October 30, 2026, for the 46 tests then in `bmut/`. Section 19's 22 tests marked theirs on October 29.
 
 Already done on October 3: a quick look at `./bmu up sim`, and browser uploads continuing while on other tabs.
 
@@ -73,15 +73,15 @@ Once `feature/vuetify-editor` is merged (or on that branch), in `./bmu up sim`. 
 
 - [ ] Backend suite still 328 passed (no backend file changed).
 - [ ] *Partly automated:* `test_name_a_job_and_add_files`; dropping files, and thumbnails and progress by hand. Drop files on the drop area, and pick files with "browse". Rows appear, thumbnails load, uploads show progress and finish.
-- [ ] Expand a row, edit each kind of field: file name, object number (and "Use parsed value"), date, media type (and "Add an additional type"), creator (type three letters, pick from the list with mouse and with arrow keys), description, language. Reload the page: the edits are kept.
-- [ ] Change a row's handling, Restricted and Exclude. The status chip and the Public portal column follow.
-- [ ] *Partly automated:* `test_a_document_that_needs_an_object_creator`; Cancel by hand. Delete one document with its trash can: the confirmation appears under the row; Cancel and Delete both work.
-- [ ] Select rows, then in "Change selected documents": Apply to selected, Apply to all (with its confirmation), Exclude, Include and Delete selected.
-- [ ] Sort by each column; change page and page size; "Show documents with problems".
+- [ ] *Automated:* `test_edit_each_kind_of_field_and_reload`. Expand a row, edit each kind of field: file name, object number (and "Use parsed value"), date, media type (and "Add an additional type"), creator (type three letters, pick from the list with mouse and with arrow keys), description, language. Reload the page: the edits are kept.
+- [ ] *Automated:* `test_handling_restricted_and_exclude`. Change a row's handling, Restricted and Exclude. The status chip and the Public portal column follow.
+- [ ] *Automated:* `test_delete_a_document`, `test_a_document_that_needs_an_object_creator`. Delete one document with its trash can: the confirmation appears under the row; Cancel and Delete both work.
+- [ ] *Automated:* `test_change_selected_documents`. Select rows, then in "Change selected documents": Apply to selected, Apply to all (with its confirmation), Exclude, Include and Delete selected. (Apply to all has no confirmation now: it applies at once. Delete selected asks first.)
+- [ ] *Automated:* `test_sort_page_and_show_problems`. Sort by each column; change page and page size; "Show documents with problems".
 - [ ] With 30 or more documents, click the header chevron to expand all, then scroll. Expect each document's fields to be there as it comes into view, with no visible jump or blank gap.
-- [ ] Turn on "Create a group", give a title, submit; the group box and a row's Group checkbox behave as before.
-- [ ] A failed upload (Demo tools): Replace file and Retry work from the row.
-- [ ] *Partly automated:* `test_take_over_a_draft`; Take over from the editor's locked banner (the test takes over from Drafts) by hand. Open a draft someone else is editing: the locked banner and "Take over" work.
+- [ ] *Automated:* `test_a_group`. Turn on "Create a group", give a title, submit; the group box and a row's Group checkbox behave as before.
+- [ ] *Automated:* `test_a_failed_upload_and_retry`, `test_fix_and_reschedule_with_a_replacement_file`. A failed upload (Demo tools): Replace file and Retry work from the row. (Replace file follows a run whose upload Demo tools failed; for Retry the test stops the browser reaching S3, since Demo tools only slow browser uploads.)
+- [ ] *Automated:* `test_locked_banner_and_take_over`, `test_take_over_a_draft`. Open a draft someone else is editing: the locked banner and "Take over" work.
 - [ ] Save draft and Submit job; with a must-fix document, Submit is refused and says why.
 - [ ] Dark mode: every part of the screen is readable, including expanded rows and the delete confirmation.
 - [ ] If you have a large draft (several hundred documents), page through it at 100 per page. Changing page measured about 0.4 s, twice what it was; say if it feels slow.
@@ -90,7 +90,7 @@ Once `feature/vuetify-editor` is merged (or on that branch), in `./bmu up sim`. 
 
 On branch `fix/editor-reload-and-deleting` (or `main` once it is merged), in `./bmu up sim`. On October 3 Richard ran 21 checks of Create / edit job by hand; 20 passed, and these two changes followed.
 
-- [ ] *Partly automated:* `test_name_a_job_and_add_files`; editing a field before the reload by hand. Open a draft, edit a field, reload the browser. Expect the same draft open, with the edit, and the address ending in `/job/` and the job's id.
+- [ ] *Automated:* `test_edit_each_kind_of_field_and_reload`, `test_name_a_job_and_add_files`. Open a draft, edit a field, reload the browser. Expect the same draft open, with the edit, and the address ending in `/job/` and the job's id.
 - [ ] *Automated:* `test_name_a_job_and_add_files`. Start a new job by typing a name. Expect the address to gain the job's id. Reload: the job is still open.
 - [ ] *Automated:* `test_the_draft_in_drafts_and_back`. With a draft open, go to Drafts and back by the Create / edit job tab. Expect the draft still open.
 - [ ] Click New job, then the browser's Back button. Expect the earlier draft to reopen.
@@ -133,14 +133,14 @@ On branch `feature/vuetify-lists` (or `main` once it is merged). Run `./bmu down
 
 On branch `feature/vuetify-finished` (or `main` once it is merged), in `./bmu up sim`. Claude saw this page only in screenshots against a stand-in API. Use Demo tools to make a job need attention and one fail.
 
-- [ ] The list shows each job's outcome chip, documents by result, when it finished and who ran it. Sort by each column; Expand all and Collapse all.
-- [ ] Expand a job: its run line and its most important documents appear, with what happened; "View all N documents' results" opens the results.
-- [ ] View results: run history newest first, each document's steps with CSIDs, failures with "Show technical details"; the Show filter, sorting and paging work; "Back to finished jobs" returns to the list.
-- [ ] A job whose failures only need another run reads Reschedule; one that needs a change reads Fix and reschedule. Either opens the job in Create / edit job.
-- [ ] Delete a job from the list: the confirmation opens in a row under the job and says what stays in CollectionSpace; Cancel closes it; Delete job removes the job and shows the blue message.
-- [ ] Delete from inside a job's results: the confirmation takes the place of the buttons; after deleting you are back at the list.
-- [ ] A completed job shows "Removed" and a date, and no Fix or Delete.
-- [ ] As `intern` (this said "a view-only user" before roles part 1): Fix and Delete are off, with the reason on hover.
+- [ ] *Automated:* `test_the_list`. The list shows each job's outcome chip, documents by result, when it finished and who ran it. Sort by each column; Expand all and Collapse all.
+- [ ] *Automated:* `test_a_jobs_details_and_results`. Expand a job: its run line and its most important documents appear, with what happened; "View all N documents' results" opens the results.
+- [ ] *Partly automated:* `test_a_jobs_details_and_results`; paging (the test's job has two documents) and the run history's order (it has one run) by hand. View results: run history newest first, each document's steps with CSIDs, failures with "Show technical details"; the Show filter, sorting and paging work; "Back to finished jobs" returns to the list.
+- [ ] *Partly automated:* `test_fix_labels_and_a_completed_job`, `test_fix_and_reschedule_with_a_replacement_file`; Reschedule opening the job by hand (the test opens Fix and reschedule). A job whose failures only need another run reads Reschedule; one that needs a change reads Fix and reschedule. Either opens the job in Create / edit job.
+- [ ] *Automated:* `test_delete_from_the_list`. Delete a job from the list: the confirmation opens in a row under the job and says what stays in CollectionSpace; Cancel closes it; Delete job removes the job and shows the blue message.
+- [ ] *Automated:* `test_delete_from_the_results`. Delete from inside a job's results: the confirmation takes the place of the buttons; after deleting you are back at the list.
+- [ ] *Automated:* `test_fix_labels_and_a_completed_job`. A completed job shows "Removed" and a date, and no Fix or Delete.
+- [ ] *Automated:* `test_an_intern_cant_fix_or_delete`. As `intern` (this said "a view-only user" before roles part 1): Fix and Delete are off, with the reason on hover.
 - [ ] Dark mode: the list, an expanded job, the results and an open confirmation are readable.
 
 ## 2e. Demo tools after part 6 (10 minutes)
@@ -173,23 +173,23 @@ On branch `feature/demo-reset` (it contains `feature/queue-collisions`), or `mai
 
 **At Submit**
 
-- [ ] Job A: one file, "Create new object + link", object 11-2345; submit. Job B the same: expect "Must fix" naming Job A and offering "Link to object (create if missing)", and Submit refused.
-- [ ] Change Job B's document to "Link to object (create if missing)": the Must fix goes, a warning about the same identification number stays, Submit works.
-- [ ] Job A "Link to object (create if missing)" queued first, then Job B "Create new object + link": B is refused at Submit.
-- [ ] Two jobs that both use "Link to object (create if missing)": both submit.
+- [ ] *Automated:* `test_a_second_create_is_refused_at_submit`. Job A: one file, "Create new object + link", object 11-2345; submit. Job B the same: expect "Must fix" naming Job A and offering "Link to object (create if missing)", and Submit refused.
+- [ ] *Automated:* `test_a_second_create_is_refused_at_submit`. Change Job B's document to "Link to object (create if missing)": the Must fix goes, a warning about the same identification number stays, Submit works.
+- [ ] *Automated:* `test_create_after_create_if_missing_and_two_create_if_missing`. Job A "Link to object (create if missing)" queued first, then Job B "Create new object + link": B is refused at Submit.
+- [ ] *Automated:* `test_create_after_create_if_missing_and_two_create_if_missing`. Two jobs that both use "Link to object (create if missing)": both submit.
 
 **Changing the order** (A "Create new object" first, B "create if missing" second, both queued)
 
-- [ ] Move B above A with the arrow. Expect a question under B naming A's document, with "Move anyway" and Cancel; Cancel leaves the order alone.
-- [ ] Move again and choose "Move anyway". Expect A's "Checks now" to read "1 needs fixing" at once, and a box above the list naming the document.
-- [ ] Same question for Run now on B, and for Hold on A; drag and drop asks too.
-- [ ] In a second browser signed in as `limited`, with the Job queue open: after the move it shows the box and the flag within a few seconds, without a reload, and no Reorder button.
+- [ ] *Automated:* `test_a_move_that_would_fail_asks_first`. Move B above A with the arrow. Expect a question under B naming A's document, with "Move anyway" and Cancel; Cancel leaves the order alone.
+- [ ] *Automated:* `test_a_move_that_would_fail_asks_first`. Move again and choose "Move anyway". Expect A's "Checks now" to read "1 needs fixing" at once, and a box above the list naming the document.
+- [ ] *Partly automated:* `test_a_move_that_would_fail_asks_first`; drag and drop by hand. Same question for Run now on B, and for Hold on A; drag and drop asks too.
+- [ ] *Automated, as it is now:* `test_a_move_that_would_fail_asks_first`, with `intern` (roles part 1 made `limited` staff, who have the Reorder button). In a second browser signed in as `limited`, with the Job queue open: after the move it shows the box and the flag within a few seconds, without a reload, and no Reorder button.
 
 **Reorder to avoid failures**
 
-- [ ] Click "Reorder to avoid failures…": it says what it will move; Cancel does nothing; Reorder puts A first, the box and the flag go, and other jobs keep their places.
-- [ ] Give B Run now ("Run now anyway"). Expect the box to say a reorder can't fix it and to name the Run now; B's Run now is not undone.
-- [ ] Leave the order broken and let both run. Expect B Completed, and A Needs attention with that document Failed ("Object already exists") and nothing created for it.
+- [ ] *Partly automated:* `test_reorder_to_avoid_failures`; other jobs keeping their places by hand. Click "Reorder to avoid failures…": it says what it will move; Cancel does nothing; Reorder puts A first, the box and the flag go, and other jobs keep their places.
+- [ ] *Automated:* `test_run_now_anyway_and_the_run`. Give B Run now ("Run now anyway"). Expect the box to say a reorder can't fix it and to name the Run now; B's Run now is not undone.
+- [ ] *Partly automated:* `test_run_now_anyway_and_the_run`; that nothing was created for A's document by hand. Leave the order broken and let both run. Expect B Completed, and A Needs attention with that document Failed ("Object already exists") and nothing created for it.
 
 ## 2h. Demo tools: Reset everything (5 minutes)
 
@@ -284,10 +284,10 @@ Branch `feature/submit-for-review`, built on part 4. Restart first: `./bmu down 
 
 Branch `feature/no-preview-button`, built on Submit for review. Frontend only: reload the page.
 
-- [ ] Drafts and the Job queue: no Preview button on any row.
-- [ ] Expand a job: "Open full preview" is the first line, above the job's facts. It opens the full preview; "Back to Drafts" (or "Back to the job queue") returns.
-- [ ] In the full preview, the job's buttons are as before (Edit, Submit…, and so on).
-- [ ] Finished jobs still has "View results".
+- [ ] *Automated:* `test_no_preview_button_on_the_rows`. Drafts and the Job queue: no Preview button on any row.
+- [ ] *Automated:* `test_no_preview_button_on_the_rows`. Expand a job: "Open full preview" is the first line, above the job's facts. It opens the full preview; "Back to Drafts" (or "Back to the job queue") returns.
+- [ ] *Partly automated:* `test_no_preview_button_on_the_rows`; the buttons other than Edit by hand. In the full preview, the job's buttons are as before (Edit, Submit…, and so on).
+- [ ] *Automated:* `test_delete_from_the_results`, `test_a_group`. Finished jobs still has "View results".
 
 ## 3. The same, against PAHMA QA (10 minutes)
 
@@ -546,6 +546,23 @@ Two things the tests showed, neither changed here:
 
 - [ ] On the pull request, the `bmut` job passes. Note how much longer it took than on earlier pull requests.
 - [ ] `./bmu test -k roles --headed`: watch the intern's and admin's browsers work side by side.
+
+## 19. The Selenium tests: the editor, Finished jobs and jobs that collide (29 October 2026; 15 minutes)
+
+Branch `test/bmut-editor-finished-collisions`. Tests only: no change to the app. 22 more checks in `bmut/` (`bmut/README.md` lists them), automating most of what was left of sections 2a and 2b, and of 2d, 2g and 2n; those steps are marked above. Three new files, `test_editor.py`, `test_finished_jobs.py` and `test_queue_collisions.py`, and one test added to `test_drafts_and_queue.py`. The runs that fail on purpose get their failures from Demo tools ("Make CollectionSpace fail"), each naming one file; a failed browser upload, which Demo tools can only slow down, comes from Chrome blocking the stack's S3 address.
+
+Claude ran `./bmu test` three times in a row, each on a fresh stack: 68 tests passed each time, about 5 minutes of tests per run after the stack's start-up (46 before). The new tests passed first time apart from their own expectations, which the runs corrected (what a job reads when one document fails, and "1 done · 1 partial").
+
+Still by hand, because the tests don't cover them: 2a's 30-document expand-all scroll, Save draft, dark mode and the large-draft paging speed; 2d's paging in the results, the run history's order over several runs, Reschedule opening the job, and dark mode; 2g's drag and drop, other jobs keeping their places after Reorder, and that nothing was created for the document that failed; 2n's preview buttons other than Edit.
+
+Three things the tests showed, none changed here:
+
+- In the read-only preview of a draft someone else is editing (the locked banner), Submit job is on: the job name and the documents are off, Submit isn't. Say whether it should be off too.
+- "Change selected documents": Apply to all applies at once. Section 2a's step expects a confirmation; there is none now (Delete selected still asks).
+- A job in which one document fails and the others are done reads "Needs attention", whichever step failed; "Failed" is only for a run that stopped as a whole, such as CollectionSpace refusing the sign-in. Section 2d's "make a job need attention and one fail" needs a failure of that kind (Demo tools: `media` with 401).
+
+- [ ] On the pull request, the `bmut` job passes. Note how long it took.
+- [ ] `./bmu test -k test_queue_collisions --headed`: watch the intern's Job queue flag job A after admin's "Move anyway", without a reload.
 
 ## Not tests, but still open
 

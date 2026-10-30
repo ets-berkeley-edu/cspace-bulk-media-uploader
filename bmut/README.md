@@ -39,8 +39,9 @@ plus the tests.
   `conftest.signed_in_browser`): a second sign-in as the same user is a session of its own, and finds a draft the
   first has open held by it. A failed test saves a screenshot of each browser it used.
 - **The files run in `conftest.py`'s `FILE_ORDER`**: what only looks first (sign-in, then the tabs), then what changes
-  the stack's data (the job flow, then roles, three kinds of result, Submit for review, and Drafts and Job queue). Each file's tests run in file order, never in parallel or shuffled. A new file goes
-  where its changes belong.
+  the stack's data (the job flow, then roles, three kinds of result, Submit for review, Drafts and Job queue, Create /
+  edit job, Finished jobs, and jobs that collide in the queue). Each file's tests run in file order, never in parallel
+  or shuffled. A new file goes where its changes belong.
 - **A test that builds on an earlier one** says so with `@pytest.mark.after("test_name")`: if that test didn't pass,
   it's skipped rather than failing for the same reason.
 
@@ -56,11 +57,17 @@ plus the tests.
 | `tests/test_roles.py` | Roles (sections 2i, 2j, 2k), as `admin` and `intern`: the Intern chip and the Job queue's controls, "Staff only" and "Open to interns" drafts, what an intern can't edit and why, Open to interns from Drafts and from the editor, Submit… from Drafts (and off when a document needs fixing), an intern's checks through the read-only account (a missing Object, a protected file and an access note, without the reasons staff see) |
 | `tests/test_three_kinds_of_result.py` | Three kinds of result (section 2l), as `limited`, `admin` and `intern`: "Needs an Object creator" in the document, the job's purple line and the bar, Submit job off until the document is deleted, the Drafts chip for each user, `admin` submitting it to Completed, the group problem that stops only Submit |
 | `tests/test_submit_for_review.py` | Submit for review (section 2m), as `intern` and `admin`: off while a document needs fixing, then sent from the editor and from Drafts; the "Needs review" mark, first in Drafts and staff only; the mark kept through a staff edit, cleared by Open to interns, and gone after Submit… and Move to Drafts |
-| `tests/test_drafts_and_queue.py` | Drafts and Job queue (sections 2c, 2i, 2j): a draft's line, details and full preview, Expand and Collapse all, sorting, Take over… from a second session, deleting a draft; with the queue paused, two queued jobs, Run now, Hold, Set run time, the arrows, what an intern sees, Move to Drafts…, and Edit on a queued job |
+| `tests/test_drafts_and_queue.py` | Drafts and Job queue (sections 2c, 2i, 2j): a draft's line, details and full preview, Expand and Collapse all, sorting, Take over… from a second session, deleting a draft; with the queue paused, two queued jobs, Run now, Hold, Set run time, the arrows, what an intern sees, Move to Drafts…, Edit on a queued job, and no Preview button on the rows (2n) |
+| `tests/test_editor.py` | Create / edit job (sections 2a, 2b), as `admin` and a second `admin` session: editing each kind of field, kept after a reload; handling, Restricted and Exclude with the status chip and Public portal column; deleting a document; "Change selected documents"; sorting by each column, paging, page size and "Show documents with problems"; a group, through to its run; a failed browser upload and Retry; the locked banner and Take over |
+| `tests/test_finished_jobs.py` | Finished jobs (section 2d) and Replace file (2a), as `admin` and `intern`: jobs that need attention, fail and complete (failures set in Demo tools); the list, its sorting and Expand all; a job's details and results, with "Show technical details"; Fix and reschedule or Reschedule; "Removed" on a completed job; Fix and Delete off for an intern; deleting from the list and from the results; Fix and reschedule with a replacement file, to Completed |
+| `tests/test_queue_collisions.py` | Jobs that collide in the queue (section 2g), as `admin` and `intern`: a second "Create new object" for the same object refused at Submit, "create if missing" submitting; a move, Run now or Hold that would fail asks first; "Move anyway" flags the job in both browsers; Reorder to avoid failures; "Run now anyway", and the run: B Completed, A Needs attention with "Object already exists" |
 
 The files are named for the simulator's sample Objects (`backend/fakecspace/app.py`, `SAMPLE_OBJECTS` and
 `SENSITIVE_OBJECTS`), or for object numbers it doesn't have (20-0777, 20-0990 and up) where a test needs a missing
-Object, and the image is a 20-pixel JPEG from the frontend's fixtures (`files.py`). Every moment is a run time on the
+Object, and the image is a 20-pixel JPEG from the frontend's fixtures (`files.py`). A test that needs a run to fail
+sets the failure in Demo tools ("Make CollectionSpace fail", `DemoPage.add_failure`), naming one file so only that
+document fails; for a failed browser upload, which Demo tools can only slow down, the test has Chrome block the
+stack's S3 address instead. Every moment is a run time on the
 test stack, so a test that needs jobs to wait in the Job queue pauses the queue first and resumes it afterwards
 (`QueuePage.pause`).
 
