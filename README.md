@@ -423,7 +423,8 @@ python scripts/check_cspace.py --create                          # also creates 
   - It is used only for an intern's checks, autocomplete, vocabularies and date previews. Staff always use their
     own sign-in, and every record is created with the submitting staff member's credentials.
   - An intern gets minimal answers: found or not, protected or not, and term names. Not why a file is protected,
-    not an object's access notes, not a record's CSID, contents or images.
+    not an object's access notes, not the CSID, contents or images of a record the checks found. (The CSIDs of
+    records a job's runs created are shown to everyone, interns too.)
   - Every lookup is counted against the intern who caused it and logged, and each intern is limited to 20,000 an
     hour (`BMU_READER_LOOKUPS_PER_HOUR`). That bounds how much an intern can look up, and the log records it, but it
     doesn't stop someone from testing thousands of object numbers an hour (design doc, Roles).
