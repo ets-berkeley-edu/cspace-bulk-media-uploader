@@ -499,6 +499,14 @@ Branch `docs/review-design-2026-10-30`. Claude ran the backend suite with `tests
 - [ ] As `intern`, open the Drafts list where a staff-only draft has thumbnails: its expanded row and its preview show placeholders, not the images. Open the draft to interns: the images appear.
 - [ ] Optional: in a fix, retry a failed upload, then let the fix expire (or set its `draftExpiresAt` in the past and wait for the sweep): the restored document shows "Upload failed" with Retry.
 
+## 15. A 409, and the security headers (30 October 2026; 15 minutes)
+
+Branch `fix/review-409-headers`. Claude ran the backend suite with `tests/test_review_fixes_409_headers.py`, and loaded the built app in Chromium under the new Content Security Policy (sign-in and every tab, no violations); it couldn't try uploads there.
+
+- [ ] `./bmu up sim`, sign in, add a JPEG and a TIFF, submit and run a job: no "Refused to…" or "Content Security Policy" messages in the browser's console (the local dev server doesn't send the policy, so do this in AWS, below, too).
+- [ ] In AWS after `./bmu aws deploy`: the response headers of the page (browser dev tools, Network) include `content-security-policy` with `connect-src 'self' https://…s3…amazonaws.com`, and uploads, thumbnails and a run work with no console errors.
+- [ ] Demo tools, fail rule on `media` with status 409 for one file: that document fails with "CollectionSpace refused a request as a conflict", and the job's other documents still run.
+
 ## Not tests, but still open
 
 - The design doc's "For Richard to address" list (from the October 3 comparison of the doc with the prototype).

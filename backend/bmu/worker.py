@@ -569,6 +569,20 @@ class Worker:
         j = self.storage.get_job(job_id) or {}
         return not (j.get("status") == "Queued" or (j.get("status") == "Running" and int(j.get("run", 0)) != run_no))
 
+    def _classify(self, step: str, e: CSpaceError) -> tuple[str, str]:
+        """failures.classify, with one check of its own (review 4.8): CollectionSpace answers 409 for an inactive
+        account, but also for a conflict about one record. Stopping the whole job for the latter would be wrong, so a 409
+        is confirmed by reading the account's permissions once: if that answers normally, the account is active and
+        the 409 was about the record (row-level `conflict`); if it fails too, the account is inactive (job-level)."""
+        code, detail = classify(step, e)
+        if code != "account_inactive" or self._client is None:
+            return code, detail
+        try:
+            self._client.account_permissions()
+        except CSpaceError:
+            return code, detail
+        return "conflict", f"{detail}; the account's own permissions read normally, so the account is active"
+
     def _check_staff(self, client: CSpaceClient, user: str) -> None:
         """Design (Roles): only staff submit jobs, and a role removed in CollectionSpace takes effect at once, so a
         job waiting in the queue whose submitter has lost BMU_Staff doesn't run (not_staff); a staff member can
@@ -578,7 +592,7 @@ class Worker:
         except CSpaceUnavailable as e:
             raise JobStop("unavailable", _unavailable_before(client)) from e
         except CSpaceError as e:
-            code, detail = classify("values", e)
+            code, detail = self._classify("values", e)
             if code in JOB_LEVEL:
                 raise JobStop(code, f"Reading the roles of the account that submitted the job: {detail}") from e
             if e.status != 403:  # refused: no role; anything else: the role couldn't be confirmed, so nothing runs
@@ -816,7 +830,7 @@ class Worker:
                 st.update(before)
                 raise JobStop("unavailable", _unavailable(client, row, name)) from e
             except (CSpaceError, _RowError) as e:
-                code, detail = (e.code, e.detail) if isinstance(e, _RowError) else classify(name, e)
+                code, detail = (e.code, e.detail) if isinstance(e, _RowError) else self._classify(name, e)
                 prior = st.get("prior")
                 st.clear()
                 st.update(s="failed", code=code, detail=detail, run=run_no)
@@ -890,7 +904,7 @@ class Worker:
             self.storage.update_job(job_id, {"groupStep": g or None}, fence_run=run_no)
             raise
         except CSpaceError as e:
-            code, detail = classify("group", e)
+            code, detail = self._classify("group", e)
             if code in JOB_LEVEL:
                 # CollectionSpace refused the sign-in, so nothing was created: the row's addToGroup step fails with
                 # this code and run_row settles the row and stops the job, as for any other step (not interrupted)
@@ -977,7 +991,7 @@ class Worker:
             except CSpaceUnavailable as e:
                 raise JobStop("unavailable", _unavailable_before(client)) from e
             except CSpaceError as e:
-                code, detail = classify("values", e)
+                code, detail = self._classify("values", e)
                 if code in JOB_LEVEL:
                     raise JobStop(code, f"Checking values before the first document: {detail}") from e
 
@@ -990,7 +1004,7 @@ class Worker:
         except CSpaceUnavailable as e:
             raise JobStop("unavailable", _unavailable_before(client)) from e
         except CSpaceError as e:
-            code, detail = classify("values", e)
+            code, detail = self._classify("values", e)
             if code in JOB_LEVEL:
                 raise JobStop(code, f"Reading the account's permissions before the first document: {detail}") from e
             return None
@@ -1073,7 +1087,7 @@ class Worker:
                                                                         "csids": [current] if current else [], "at": int(now())}
         errors = [f["error"] for f in findings if f["kind"] == "unchecked"]
         for e in errors:  # a refused sign-in, or a request not sent after five failures, stops the job first
-            if isinstance(e, CSpaceUnavailable) or classify("values", e)[0] in JOB_LEVEL:
+            if isinstance(e, CSpaceUnavailable) or self._classify("values", e)[0] in JOB_LEVEL:
                 raise e
         missing = [f for f in findings if f["kind"] == "missing"]
         if missing:

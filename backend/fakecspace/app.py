@@ -158,6 +158,7 @@ class Store:
         self.delay = 0.0  # seconds added to every create or upload, to watch the queue in a browser (/_fake/slow)
         self.upload_mbps = 0.0  # file uploads (PUT media/{csid}/blob) are received at this many MB/s (0 = no limit)
         self.rules: list[dict] = []  # failures on demand (/_fake/fail)
+        self.inactive: set[str] = set()  # users whose account is inactive: every request of theirs answers 409
         for num, note in SAMPLE_OBJECTS:
             self.objects[str(uuid.uuid4())] = {"objectNumber": num, "deleted": False, "note": note}
         for num, note, sens in SENSITIVE_OBJECTS:
@@ -599,6 +600,21 @@ def _lost(service: str) -> Response | None:
     if fail is None:
         return None
     return Response(status_code=fail)
+
+
+@app.middleware("http")
+async def inactive_accounts(request: Request, call_next):
+    """An inactive account (store.inactive): CollectionSpace answers every request with 409 (design: Row errors versus
+    job errors)."""
+    h = request.headers.get("authorization", "")
+    if store.inactive and h.lower().startswith("basic "):
+        try:
+            user = base64.b64decode(h[6:]).decode().partition(":")[0]
+        except Exception:
+            user = ""
+        if user in store.inactive:
+            return Response(status_code=409)
+    return await call_next(request)
 
 
 # ---- development helpers (not part of CollectionSpace) ----------------------------------

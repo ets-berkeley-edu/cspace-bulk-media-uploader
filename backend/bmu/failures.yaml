@@ -134,6 +134,13 @@ auth:
   explain: CollectionSpace rejected the password of the person who submitted the job; it may have been changed after the job was submitted. The job stopped at once so the account wouldn't be locked out.
   fix: Reschedule the job. Submitting it again uses your own current sign-in.
 
+conflict:
+  title: CollectionSpace refused a request as a conflict
+  level: row
+  needs_fix: false
+  explain: CollectionSpace answered one of this document's requests with a conflict (HTTP 409), which is about that record, not the account. The account was checked and is active, so the job carried on with the other documents.
+  fix: Reschedule the job; only the failed step and the steps that depend on it run again. If it fails the same way, look at the record named in the technical details in CollectionSpace, or ask a CollectionSpace administrator.
+
 account_inactive:
   title: CollectionSpace account inactive
   level: job
