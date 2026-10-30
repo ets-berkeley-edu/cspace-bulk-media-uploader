@@ -62,6 +62,11 @@ npm run build:demo                          # build with Demo tools
 ./bmu up qa         # against the PAHMA QA tenant: creates real records → http://localhost:5273
 ./bmu down sim|qa|all
 ./bmu logs sim web  # services: web, worker, frontend, fakecspace, s3, dynamodb
+
+# Selenium tests (bmut/, Python 3.11 and Chrome on the Mac; bmut/README.md)
+./bmu test          # fresh bmu-test stack on its own ports (app → http://localhost:5573), then every test, headless
+./bmu test -k sign_out --headed   # one test, with the browser showing
+./bmu test-down
 ```
 
 CI (`.github/workflows/ci.yml`) runs `pytest -q`, then `npm run lint`, `typecheck`, `test` and `build`, and a

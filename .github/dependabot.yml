@@ -16,6 +16,14 @@ updates:
       python:
         patterns: ["*"]
 
+  # bmut's own requirements (its Selenium tests run on the Mac, not in the images or CI).
+  - package-ecosystem: pip
+    directory: /bmut
+    schedule: { interval: weekly, day: monday, time: "06:00", timezone: America/Los_Angeles }
+    groups:
+      bmut:
+        patterns: ["*"]
+
   - package-ecosystem: npm
     directory: /frontend
     schedule: { interval: weekly, day: monday, time: "06:00", timezone: America/Los_Angeles }

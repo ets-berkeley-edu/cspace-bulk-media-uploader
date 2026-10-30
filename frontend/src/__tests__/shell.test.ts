@@ -276,6 +276,24 @@ describe('the signed-in page', () => {
     w.unmount()
   })
 
+  it('signing in again after a session ended returns to the page you were on', async () => {
+    stubApi((url, method) => {
+      if (url === '/api/login' && method === 'POST') { signedIn = me; return me }
+    })
+    const w = await mountApp('/finished')
+    signedIn = null
+    window.dispatchEvent(new CustomEvent('bmu-signed-out', {detail: 'Your session ended.'}))
+    await settle()
+    expect(router.currentRoute.value.query.redirect).toBe('/finished')
+    await w.find('#username').setValue('admin')
+    await w.find('#password').setValue('secret')
+    await w.find('form').trigger('submit')
+    await settle()
+    expect(router.currentRoute.value.path).toBe('/finished')
+    expect(tabOf(w, 'Finished jobs').classes()).toContain('v-tab--selected')
+    w.unmount()
+  })
+
   it('an intern can start a job, and the header says they are an intern', async () => {
     signedIn = {...me, role: 'intern', perms: {media: false, relations: false, objects: false, readObjects: false, authorities: false, groups: false}}
     stubApi()

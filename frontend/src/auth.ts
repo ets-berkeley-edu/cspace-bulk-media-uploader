@@ -3,11 +3,14 @@ import {useContextStore} from '@/stores/context'
 
 const NO_REDIRECT = ['/', '/job', '/404']
 
+/** The page to return to after signing in, unless it is where signing in leads anyway. */
+export const returnTo = (to: RouteLocationNormalized) => (NO_REDIRECT.includes(to.path) ? undefined : to.fullPath)
+
 const goToLogin = (to: RouteLocationNormalized, next: NavigationGuardNext) => {
   next({
     path: '/login',
     query: {
-      redirect: NO_REDIRECT.includes(to.path) ? undefined : to.fullPath
+      redirect: returnTo(to)
     }
   })
 }

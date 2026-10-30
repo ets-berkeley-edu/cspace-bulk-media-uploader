@@ -9,6 +9,8 @@ venv/
 node_modules/
 frontend/dist/
 .DS_Store
+# bmut, the Selenium tests: its runs' files to upload, and failed tests' screenshots and page HTML (bmut/README.md)
+bmut/.run/
 # ./bmu aws: per-environment account number and allowed addresses, and the deployed address
 deploy/environments/*.local.conf
 deploy/environments/*.url

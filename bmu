@@ -9,11 +9,14 @@
 #   ./bmu open sim|qa|aws|mockup|home
 #   ./bmu urls          every address, including the UI mockup and AWS
 #   ./bmu aws ...       deploy to AWS and look after it: ./bmu aws help (deploy/README.md)
+#   ./bmu test [pytest options]   the Selenium tests (bmut/) on their own stack, started afresh; --headed shows Chrome
+#   ./bmu test-down     stop the test stack
 #
-# Each local environment is its own Docker Compose project (bmu-sim, bmu-qa) with its own ports, data, environment
-# label (shown in the app's header) and session cookie, so both can run at once without signing each other out.
-# Both need .env with BMU_SESSION_KEY_B64 and BMU_JOB_KEY_B64 (see README, Run it locally). Nothing here holds a
-# password: in the QA environment you sign in with your own QA account, in the browser.
+# Each local environment is its own Docker Compose project (bmu-sim, bmu-qa, bmu-test) with its own ports, data,
+# environment label (shown in the app's header) and session cookie, so they can run at once without signing each other
+# out. sim and qa need .env with BMU_SESSION_KEY_B64 and BMU_JOB_KEY_B64 (see README, Run it locally); the test stack
+# makes its own keys each run. Nothing here holds a password: in the QA environment you sign in with your own QA
+# account, in the browser.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -46,10 +49,18 @@ env_settings() {
       # Without them an intern's documents are checked with the intern's own sign-in.
       export BMU_READER_USER="${BMU_QA_READER_USER:-}" BMU_READER_PASSWORD="${BMU_QA_READER_PASSWORD:-}"
       export BMU_ALWAYS_RUN_TIME="${BMU_ALWAYS_RUN_TIME:-false}" ;;
+    test)
+      # The Selenium tests' stack (bmut/README.md): the simulator on ports of its own, and every moment a run time, so
+      # a submitted job runs at once. Its keys are made afresh each run (./bmu test), so it needs no .env.
+      export BMU_UI_PORT=5573 BMU_API_PORT=8500 BMU_S3_PORT=9500 BMU_DYNAMODB_PORT=8501 BMU_SIM_PORT=8580
+      export BMU_CSPACE_URL="http://fakecspace:8180" BMU_TENANT=pahma BMU_DEMO=true BMU_COOKIE_NAME=bmu_session_test
+      export BMU_ENV_LABEL="Local · test stack"
+      export BMU_READER_USER=bmureader BMU_READER_PASSWORD=bmureader
+      export BMU_ALWAYS_RUN_TIME=true ;;
     *) echo "Unknown environment '$1': use sim or qa." >&2; exit 2 ;;
   esac
 }
-ui_port() { case "$1" in sim) echo 5173 ;; qa) echo 5273 ;; esac; }
+ui_port() { case "$1" in sim) echo 5173 ;; qa) echo 5273 ;; test) echo 5573 ;; esac; }
 
 compose() {  # compose <env> <args...>
   local env="$1"; shift
@@ -113,7 +124,38 @@ case "$cmd" in
     echo "Start page:             $PWD/docs/start.html   (./bmu open home)" ;;
   aws)
     exec deploy/aws.sh "$@" ;;
+  test)
+    # Started afresh each run (every store is in memory), so every run begins from the same data; left running
+    # afterwards, to look at what a failed test saw. bmut/README.md explains the suite.
+    py="$(command -v python3.11 || true)"
+    [ -n "$py" ] || { echo "./bmu test needs python3.11 (the repository's Python)." >&2; exit 1; }
+    if [ ! -x bmut/.venv/bin/python ]; then
+      "$py" -m venv bmut/.venv
+      bmut/.venv/bin/pip install -q --require-hashes -r bmut/requirements.txt
+    fi
+    # Throwaway keys: the test stack holds only the simulator's synthetic accounts, and is never kept.
+    BMU_SESSION_KEY_B64="$(openssl rand -base64 32)"; BMU_JOB_KEY_B64="$(openssl rand -base64 32)"
+    export BMU_SESSION_KEY_B64 BMU_JOB_KEY_B64
+    echo "Starting the test stack afresh"
+    compose test down >/dev/null 2>&1 || true
+    compose test up -d --build
+    port="$(ui_port test)"
+    printf 'Waiting for http://localhost:%s ' "$port"
+    for _ in $(seq 1 120); do
+      if curl -fs -o /dev/null "http://localhost:$port/api/env"; then echo; break; fi
+      printf '.'; sleep 2
+    done
+    curl -fs -o /dev/null "http://localhost:$port/api/env" ||
+      { echo; echo "Not up: docker compose -p bmu-test logs web frontend" >&2; exit 1; }
+    rm -rf bmut/.run/failures
+    status=0
+    BMUT_STACK=test BMUT_BASE_URL="http://localhost:$port/" BMUT_SIM_URL="http://localhost:$BMU_SIM_PORT" \
+      bmut/.venv/bin/python -m pytest bmut -p no:cacheprovider "$@" || status=$?
+    echo "The test stack is still running (./bmu test-down stops it). Failed tests' screenshots: bmut/.run/failures/"
+    exit "$status" ;;
+  test-down)
+    compose test down ;;
   help|-h|--help)
-    sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//' ;;
   *) echo "Unknown command '$cmd'. ./bmu help lists them." >&2; exit 2 ;;
 esac
