@@ -491,6 +491,14 @@ Branch `fix/review-infra-2026-10-30`. Claude ran `terraform fmt`, `validate` and
 - [ ] Optional, with `WAF_ENABLED=true`: deploy, then 25 wrong sign-ins from one address within 5 minutes: after about 20 the page gets a 403 from CloudFront. It lifts within minutes.
 - [ ] Optional, once there is a domain: set `ORIGIN_DOMAIN` and `ORIGIN_CERTIFICATE_ARN` (deploy/README.md, HTTPS to the load balancer), deploy, and check the app still opens.
 
+## 14. The design document's review fixes (30 October 2026; 15 minutes)
+
+Branch `docs/review-design-2026-10-30`. Claude ran the backend suite with `tests/test_review_fixes_design.py`. Section 7 of the review is mostly wording in `docs/design.md`; these are the checks for the code that came with it.
+
+- [ ] Chunked uploads through the hosted CollectionSpace (review 7.14). With the QA sign-in in the shell as in section 11, `python scripts/check_cspace.py --tenant pahma --object <a test object number> --create`: "attach file (PUT media/{csid}/blob, chunked like the worker)" succeeds, and the Media record's blobCsid and Thumbnail are read back. If it fails where the earlier check passed, the worker's uploads fail on QA the same way: tell Claude.
+- [ ] As `intern`, open the Drafts list where a staff-only draft has thumbnails: its expanded row and its preview show placeholders, not the images. Open the draft to interns: the images appear.
+- [ ] Optional: in a fix, retry a failed upload, then let the fix expire (or set its `draftExpiresAt` in the past and wait for the sweep): the restored document shows "Upload failed" with Retry.
+
 ## Not tests, but still open
 
 - The design doc's "For Richard to address" list (from the October 3 comparison of the doc with the prototype).
