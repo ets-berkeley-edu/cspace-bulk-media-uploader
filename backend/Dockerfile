@@ -10,7 +10,6 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir --require-hashes -r requirements.txt
 COPY pyproject.toml ./
 COPY bmu ./bmu
-COPY fakecspace ./fakecspace
 # The BMU itself downloads nothing: its dependencies and setuptools came from requirements.txt.
 # Make the code readable by the non-root user whatever file modes the checkout has (e.g. a umask of 077).
 RUN pip install --no-cache-dir --no-deps --no-build-isolation . && chmod -R a+rX /app && useradd -r -u 10001 bmu

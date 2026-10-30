@@ -2,7 +2,7 @@
 submit it. With the simulator's intern and admin, each in a browser of its own signed in once; the tests run in
 order, building on the first draft, as the two would work.
 
-15-1234 exists in the simulator (backend/fakecspace/app.py); 20-0777 and 20-0993 don't."""
+15-1234 exists in the simulator (the fakecspace package's BMU set); 20-0777 and 20-0993 don't."""
 from __future__ import annotations
 
 from collections.abc import Iterator

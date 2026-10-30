@@ -175,7 +175,7 @@ affected.
 ## The simulated CollectionSpace
 
 For trying the BMU in AWS without a CollectionSpace account: the environment runs its own copy of the simulated
-CollectionSpace (`backend/fakecspace`, the same one as `./bmu up sim`), and nothing reaches a real server. It
+CollectionSpace (the `fakecspace` package, the same one as `./bmu up sim`), and nothing reaches a real server. It
 simulates PAHMA, so the environment serves PAHMA alone. It is off by default. To use it, put this in the environment's `.local.conf` before its first deploy:
 
 ```bash
@@ -189,7 +189,8 @@ ALWAYS_RUN_TIME=true   # optional: queued jobs start at once instead of at PAHMA
 - **Interns' checks** use the simulator's read-only account, `bmureader`. The first deploy puts it in the secret, so
   `./bmu aws reader-secret` isn't needed (and refuses).
 - **Its records don't last.** The simulator keeps them in memory: a pause, a deploy or a restart starts it again
-  with its sample data, while the BMU keeps its jobs. Finished jobs then point at records that are gone. That's
+  with its sample data (`deploy/fakecspace_start.py` seeds the BMU's samples at every start), while the BMU keeps
+  its jobs. Finished jobs then point at records that are gone. That's
   fine for trying things out; never use it for anything that matters (it can't be combined with `PROTECT_DATA`).
 - **The label** reads "AWS · <env> · simulated CollectionSpace", unless `ENV_LABEL` is set in `.local.conf`.
   `CSPACE_TENANTS`, `TENANT` and `CSPACE_URL` are ignored: the museums are PAHMA alone, on the simulator.
@@ -197,7 +198,8 @@ ALWAYS_RUN_TIME=true   # optional: queued jobs start at once instead of at PAHMA
   `./bmu aws` refuses (see "Once deployed, a museum's server never changes"). Destroy first, or use another
   `BMU_ENV_NAME`.
 - **How it runs.** One small task (`fakecspace`, 0.25 vCPU and 512 MB) from its own image
-  (`deploy/fakecspace.Dockerfile`) and repository: the BMU's image never contains the simulator. The web app and the
+  (`deploy/fakecspace.Dockerfile`: the `fakecspace` package, pinned in `backend/requirements-sim.in`) and repository:
+  the BMU's image never contains the simulator. Building it downloads the package from PyPI, which needs IPv4. The web app and the
   worker find it as `fakecspace.bmu-<env>.internal` (a private DNS namespace), and only they can connect to it.
   `./bmu aws status` lists it with the other services; `./bmu aws logs fakecspace` follows its log.
 

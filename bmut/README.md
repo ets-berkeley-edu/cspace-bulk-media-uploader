@@ -62,8 +62,8 @@ plus the tests.
 | `tests/test_finished_jobs.py` | Finished jobs (section 2d) and Replace file (2a), as `admin` and `intern`: jobs that need attention, fail and complete (failures set in Demo tools); the list, its sorting and Expand all; a job's details and results, with "Show technical details"; Fix and reschedule or Reschedule; "Removed" on a completed job; Fix and Delete off for an intern; deleting from the list and from the results; Fix and reschedule with a replacement file, to Completed |
 | `tests/test_queue_collisions.py` | Jobs that collide in the queue (section 2g), as `admin` and `intern`: a second "Create new object" for the same object refused at Submit, "create if missing" submitting; a move, Run now or Hold that would fail asks first; "Move anyway" flags the job in both browsers; Reorder to avoid failures; "Run now anyway", and the run: B Completed, A Needs attention with "Object already exists" |
 
-The files are named for the simulator's sample Objects (`backend/fakecspace/app.py`, `SAMPLE_OBJECTS` and
-`SENSITIVE_OBJECTS`), or for object numbers it doesn't have (20-0777, 20-0990 and up) where a test needs a missing
+The files are named for the simulator's sample Objects (the fakecspace package's BMU set, `seeds.py`: `BMU_OBJECTS`
+and `BMU_SENSITIVE_OBJECTS`; the simulator's image seeds it at every start), or for object numbers it doesn't have (20-0777, 20-0990 and up) where a test needs a missing
 Object, and the image is a 20-pixel JPEG from the frontend's fixtures (`files.py`). A test that needs a run to fail
 sets the failure in Demo tools ("Make CollectionSpace fail", `DemoPage.add_failure`), naming one file so only that
 document fails; for a failed browser upload, which Demo tools can only slow down, the test has Chrome block the

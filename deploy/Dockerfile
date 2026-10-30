@@ -32,7 +32,7 @@ COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir --require-hashes -r requirements.txt
 COPY backend/pyproject.toml ./
 COPY backend/bmu ./bmu
-# Not backend/fakecspace: the simulated CollectionSpace has its own image (deploy/fakecspace.Dockerfile).
+# Not the simulated CollectionSpace (the fakecspace package): it has its own image (deploy/fakecspace.Dockerfile).
 # The BMU itself downloads nothing: its dependencies and setuptools came from requirements.txt.
 RUN pip install --no-cache-dir --no-deps --no-build-isolation . && useradd -r -u 10001 bmu
 COPY --from=frontend /src/dist ./static

@@ -48,16 +48,19 @@ def test_simulator_controls_are_passed_on_and_only_known_ones(api, login, demo, 
     login()
     r = api.post("/api/_demo/sim/slow", json={"params": {"seconds": 2, "upload_mbps": 5}})
     assert r.status_code == 200 and fake.delay == 2 and fake.upload_mbps == 5 and r.json()["upload_mbps"] == 5
-    assert api.post("/api/_demo/sim/fail", json={"params": {"step": "upload", "status": 500, "count": 1}}).json()["rules"][0]["step"] == "upload"
+    rule = api.post("/api/_demo/sim/fail", json={"params": {"step": "upload", "status": 500, "times": 2, "agent": "bmu-worker"}}).json()["rules"][0]
+    assert (rule["step"], rule["times"], rule["agent"]) == ("upload", 2, "bmu-worker")  # sent as /_fake/fail's JSON
     assert api.post("/api/_demo/sim/rename-term", json={"params": {"name": "Leslie Freund", "to": "Leslie Freund (1950-)"}}).status_code == 200
     assert list(fake.term_renames.values()) == ["Leslie Freund (1950-)"]
     bad = api.post("/api/_demo/sim/fail", json={"params": {"step": "nonsense"}})
-    assert bad.status_code == 400 and "step must be one of" in bad.json()["detail"]
+    assert bad.status_code == 400 and "step is one of" in bad.json()["detail"]
     assert api.post("/api/_demo/sim/objects-delete-all", json={"params": {}}).status_code == 404  # not a known control
     assert api.post("/api/_demo/sim/clear-failures", json={"params": {}}).json()["rules"] == []
+    fake.objects.clear()
     api.post("/api/_demo/sim/reset", json={"params": {}})
     assert fake.delay == 0 and fake.term_renames == {}
-    assert any(o["objectNumber"] for o in api.get("/api/_demo/sim/objects").json()["objects"])
+    objects = api.get("/api/_demo/sim/objects").json()["objects"]
+    assert len(objects) == 14 and fake.seeded == ["bmu"]  # it resets empty, then the BMU's samples are seeded again
 
 
 def test_a_real_server_is_reported_not_passed_on(api, login, demo):
@@ -139,7 +142,8 @@ def test_reset_everything_clears_jobs_files_audit_and_schedule_and_keeps_the_sig
     assert not left.get("Versions") and not left.get("DeleteMarkers")
     status = api.get("/api/_demo/status").json()
     assert status["browserUploadMbps"] == 0 and status["sim"]["delay"] == 0
-    assert len(fake.media) < media_before  # the simulated CollectionSpace is back to its samples
+    assert len(fake.media) < media_before and len(fake.media) == 1  # the simulated CollectionSpace is back to its samples
+    assert len(fake.objects) == 14 and fake.seeded == ["bmu"]  # reset empty, then seeded again
     assert api.get("/api/me").status_code == 200  # still signed in
     assert new_job(api, "After")  # and the prototype works again
 

@@ -69,7 +69,7 @@ describe('Demo tools', () => {
   })
 
   it('adds a failure with the step, status, times and scope chosen, and lists it', async () => {
-    const rule = {step: 'upload', match: '', status: 500, effect: '', count: 1, left: 1, client: 'worker'}
+    const rule = {step: 'upload', path: '', match: '', status: 500, effect: '', times: 1, left: 1, agent: 'bmu-worker', hits: 0}
     let rules: typeof rule[] = []
     stub((url) => {
       if (url.includes('/sim/fail')) rules = [rule]
@@ -80,7 +80,7 @@ describe('Demo tools', () => {
     expect(w.find('#demo-failures-set').text()).toBe('No failures set.') // choosing the values alone sets nothing
     await w.find('#demo-add-failure-btn').trigger('click')
     await flushPromises()
-    expect(calls.find((c) => c.url === '/api/_demo/sim/fail')?.body).toEqual({params: {step: 'upload', status: 500, match: '', count: 1, client: 'worker'}})
+    expect(calls.find((c) => c.url === '/api/_demo/sim/fail')?.body).toEqual({params: {step: 'upload', status: 500, match: '', times: 1, agent: 'bmu-worker'}})
     expect(w.find('#demo-message').text()).toBe('The next “upload” request fails with 500.')
     expect(w.find('#demo-failures-set').text()).toBe('Failures set:')
     expect(w.find('#demo-failure-list').text()).toContain('upload → 500, 1 of 1 left')
@@ -168,7 +168,7 @@ describe('Demo tools', () => {
   })
 
   it('summarizes failures and term changes', () => {
-    const s = status({sim: {...sim, delay: 2, rules: [{step: 'upload', match: '', status: 500, effect: '', count: 1, left: 1, client: 'worker'}],
+    const s = status({sim: {...sim, delay: 2, rules: [{step: 'upload', path: '', match: '', status: 500, effect: '', times: 1, left: 1, agent: 'bmu-worker', hits: 0}],
       term_renames: {leslie: 'L. Freund'}}})
     expect(demoSummary(s)).toBe('Browser uploads: full speed · Run uploads: full speed · 2 s delay per create · 1 failure set · 1 term change')
   })

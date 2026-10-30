@@ -564,6 +564,31 @@ Three things the tests showed, none changed here:
 - [ ] On the pull request, the `bmut` job passes. Note how long it took.
 - [ ] `./bmu test -k test_queue_collisions --headed`: watch the intern's Job queue flag job A after admin's "Move anyway", without a reload.
 
+## 20. The shared simulator, the fakecspace package (30 October 2026; 15 minutes, on a network with IPv4 to PyPI)
+
+Branch `feature/fakecspace-package`. The simulated CollectionSpace is now the `fakecspace` package (0.2.0, from PyPI), in
+place of `backend/fakecspace`, in its own image for every local stack as in AWS. It starts empty and its image seeds the
+BMU's samples; PAHMA's tenant ID there is 14. The backend tests and the Selenium tests cover the app; these checks are
+of the stacks and the Demo tools. Rebuild first: `./bmu down sim`, then `./bmu up sim` (the build downloads the package,
+so not on the T-Mobile hotspot, which gives no IPv4).
+
+- [ ] **1. It starts seeded.** `./bmu logs sim fakecspace` shows Uvicorn on port 8180, and Demo tools' sample objects
+  list the 14 Objects (12-2001 to 12-2003 sensitive, 3-1004 deleted). `curl localhost:8180/_fake/state` shows one
+  Media record, 15-1234.
+- [ ] **2. Sign in** as `admin` (staff), `intern` (intern) and `reader` (refused), with Sign in as and by typing.
+- [ ] **3. A job runs.** Submit a job with `15-1240_1.jpg` and `1-2345_a.jpg`: Completed, with the Media records,
+  Blobs and Relations in `/_fake/state`.
+- [ ] **4. Make CollectionSpace fail.** In Demo tools, add `upload` with 413, Times 1, "in job runs", mentioning
+  `1-2345`: the list shows "upload → 413 if “1-2345”, 1 of 1 left". Run a job with that file: its document fails with
+  "File too large", and the editor's checks were unaffected. Add one "everywhere", then Clear failures.
+- [ ] **5. Resets seed the samples again.** Reset the simulator, then Reset everything: each time the sample objects are
+  the 14 again and a job with `15-1240_1.jpg` finds its Object.
+- [ ] **6. The commands.** The commands box's simulator lines (copy them) add a rule, reset and seed, run as shown.
+- [ ] **7. AWS, with the simulator** (`SIMULATED_CSPACE=true`, an environment you can redeploy): `./bmu aws deploy`
+  builds the simulator's image from the package and the service starts. There are no Demo tools there, so: a job with
+  `15-1240_1.jpg` finds its Object (the samples were seeded), and an intern's checks work (the `bmureader` secret).
+- [ ] On the pull request, the `bmut` job passes: the Selenium tests run against the package's simulator.
+
 ## Not tests, but still open
 
 - The design doc's "For Richard to address" list (from the October 3 comparison of the doc with the prototype).

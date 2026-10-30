@@ -10,7 +10,8 @@ export const DEMO_BUILD = import.meta.env.MODE !== 'production'
 export interface SimSettings {
   delay: number;
   upload_mbps: number;
-  rules: { step: string; match: string; status: number; effect: string; count: number; left: number; client: string }[];
+  // /_fake/fail's rules (the fakecspace package): times 0 = until cleared; agent bmu-worker = job runs only, '' = everywhere
+  rules: { step: string; path: string; match: string; status: number; effect: string; times: number; left: number; agent: string; hits: number }[];
   term_states: Record<string, string>;
   term_renames: Record<string, string>;
   deleted_languages: string[];
@@ -103,10 +104,12 @@ export const COMMANDS: { title: string; note: string; lines: string }[] = [
       + 'a real server has none of these.',
     lines: [
       'curl -X POST \'http://localhost:8180/_fake/slow?seconds=2&upload_mbps=5\'   # 2 s per create, file uploads at 5 MB/s',
-      'curl -X POST \'http://localhost:8180/_fake/fail?step=upload&status=500&count=1\'',
+      'curl -X POST \'http://localhost:8180/_fake/fail\' -H \'Content-Type: application/json\' \\',
+      '  -d \'{"step": "upload", "status": 500, "times": 1, "agent": "bmu-worker"}\'   # in job runs only',
       'curl \'http://localhost:8180/_fake/objects\'    # the sample Object records',
       'curl \'http://localhost:8180/_fake/settings\'   # what the controls are set to',
-      'curl -X POST \'http://localhost:8180/_fake/reset\'',
+      'curl -X POST \'http://localhost:8180/_fake/reset\'   # empties it; then seed the BMU\'s samples again:',
+      'curl -X POST \'http://localhost:8180/_fake/seed\' -H \'Content-Type: application/json\' -d \'{"set": "bmu"}\'',
     ].join('\n'),
   },
   {

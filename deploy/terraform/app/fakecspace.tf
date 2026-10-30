@@ -1,4 +1,4 @@
-# The simulated CollectionSpace (backend/fakecspace), for an environment without access to a real one
+# The simulated CollectionSpace (the fakecspace package, backend/requirements-sim.in), for an environment without access to a real one
 # (SIMULATED_CSPACE=true in its settings; off by default). Nothing here exists when simulated_cspace is false.
 #
 # One task with its data in memory: a pause, deploy or restart starts it empty, while the BMU's tables keep their

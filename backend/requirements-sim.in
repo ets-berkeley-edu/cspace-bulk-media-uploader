@@ -1,0 +1,7 @@
+# The simulated CollectionSpace (github.com/ets-berkeley-edu/cspace-fakecspace, on PyPI as fakecspace), for the
+# simulator's image (deploy/fakecspace.Dockerfile: ./bmu up, ./bmu test and AWS with SIMULATED_CSPACE=true) and the
+# tests (requirements-dev.txt includes it); never the BMU's images. pin-requirements.sh compiles this into
+# requirements-sim.txt, constrained to the BMU's pins. A change to the simulator is a new release of the package,
+# then a new pin here.
+-c requirements.txt
+fakecspace[server]==0.2.0

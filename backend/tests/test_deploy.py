@@ -121,13 +121,22 @@ def test_the_image_builds_the_production_app():
     assert "**/.env" in ignore and "deploy/environments/*.local.conf" in ignore and "**/.terraform" in ignore
 
 
-def test_the_production_image_has_no_simulator_and_the_simulators_image_has_no_bmu():
+def test_the_bmus_images_have_no_simulator_and_the_simulators_image_has_no_bmu():
     production = (DEPLOY / "Dockerfile").read_text()
+    local = (DEPLOY.parent / "backend" / "Dockerfile").read_text()
     simulator = (DEPLOY / "fakecspace.Dockerfile").read_text()
-    assert "COPY backend/fakecspace" not in production
-    assert "COPY backend/fakecspace ./fakecspace" in simulator and "backend/bmu" not in simulator
-    assert "pip install --no-cache-dir --require-hashes -r requirements.txt" in simulator  # the same pins
-    assert "USER fakecspace" in simulator and '"--port", "8180"' in simulator
+    for bmu_image in (production, local):  # the fakecspace package is only in requirements-sim.txt and the dev pins
+        commands = "\n".join(line for line in bmu_image.splitlines() if not line.lstrip().startswith("#"))
+        assert "requirements-sim" not in commands and "fakecspace" not in commands
+    assert "-r requirements-sim.txt" in simulator and "--require-hashes" in simulator  # the package, pinned with hashes
+    assert "requirements.txt" not in simulator.replace("requirements-sim.txt", "") and "backend/bmu" not in simulator
+    assert "USER fakecspace" in simulator and 'CMD ["python", "fakecspace_start.py"]' in simulator
+    start = (DEPLOY / "fakecspace_start.py").read_text()
+    assert 'seeds.seed(stores["pahma"], "bmu")' in start and "port=8180" in start  # the BMU's samples at every start
+    sim_in = (DEPLOY.parent / "backend" / "requirements-sim.in").read_text()
+    assert "-c requirements.txt" in sim_in and "\nfakecspace[server]==" in sim_in  # an exact version, held to the app's pins
+    compose = (DEPLOY.parent / "docker-compose.yml").read_text()
+    assert "dockerfile: deploy/fakecspace.Dockerfile" in compose  # locally the same image as in AWS
 
 
 def test_the_simulator_is_off_by_default_never_with_protected_data_and_wholly_optional():

@@ -23,6 +23,7 @@ dev = [
   "pytest>=8",
   "moto[server,dynamodb,s3,kms]>=5",
   "python-hcl2>=7",  # reads deploy/terraform in tests/test_deploy.py
+  "setuptools>=68",  # builds the BMU itself for the tests (pip install --no-build-isolation -e .)
 ]
 
 [build-system]
@@ -30,7 +31,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["bmu*", "fakecspace*"]
+include = ["bmu*"]
 
 [tool.setuptools.package-data]
 bmu = ["tenants/*.yaml", "failures.yaml"]

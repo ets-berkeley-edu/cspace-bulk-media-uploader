@@ -47,9 +47,9 @@ def test_an_intern_signs_in_with_no_permissions_at_all(api):
 
 
 def test_a_user_with_both_roles_is_staff(api, fake):
-    fake.role_overrides["admin"] = ["ROLE_15_BMU_INTERN", "ROLE_15_BMU_STAFF"]
+    fake.role_overrides["admin"] = ["ROLE_14_BMU_INTERN", "ROLE_14_BMU_STAFF"]
     assert _sign_in(api, "admin").json()["role"] == "staff"
-    fake.role_overrides["intern"] = ["ROLE_15_BMU_INTERN", "ROLE_15_BMU_STAFF"]  # staff, so the permissions are required
+    fake.role_overrides["intern"] = ["ROLE_14_BMU_INTERN", "ROLE_14_BMU_STAFF"]  # staff, so the permissions are required
     assert _sign_in(api, "intern").json()["detail"]["code"] == "account"
 
 
@@ -80,7 +80,7 @@ def test_an_intern_creates_and_edits_drafts_that_are_open_to_interns(api, login,
     assert intern.post(f"/api/jobs/{job}/save").status_code == 200
     assert intern.post(f"/api/jobs/{job}/close").status_code == 200
     # another intern picks it up; so can a staff member, and it stays open to interns
-    fake.role_overrides["newstaff"] = ["ROLE_15_BMU_INTERN"]
+    fake.role_overrides["newstaff"] = ["ROLE_14_BMU_INTERN"]
     other = _second_user(services, "newstaff")
     assert other.post(f"/api/jobs/{job}/open").json()["editingBy"] == "newstaff"
     assert other.post(f"/api/jobs/{job}/close").status_code == 200
@@ -133,7 +133,7 @@ def test_an_intern_cannot_touch_a_staff_only_draft_or_a_submitted_job(api, login
 def test_an_intern_takes_over_from_an_intern_but_not_from_staff(api, login, services, fake):
     intern = _second_user(services, "intern")
     job = intern.post("/api/jobs", json={"name": "Shared"}).json()["id"]  # the intern has it open
-    fake.role_overrides["newstaff"] = ["ROLE_15_BMU_INTERN"]
+    fake.role_overrides["newstaff"] = ["ROLE_14_BMU_INTERN"]
     other = _second_user(services, "newstaff")
     locked = other.post(f"/api/jobs/{job}/open")
     assert locked.status_code == 409 and locked.json()["detail"]["editingBy"] == "intern"
@@ -173,7 +173,7 @@ def test_a_staff_member_made_an_intern_loses_staff_actions_at_once(api, login, a
     login()
     job = new_job(api)
     add_uploaded(job, ["15-1234_1.jpg"])
-    fake.role_overrides["admin"] = ["ROLE_15_BMU_INTERN"]  # changed in CollectionSpace after signing in
+    fake.role_overrides["admin"] = ["ROLE_14_BMU_INTERN"]  # changed in CollectionSpace after signing in
     r = api.post(f"/api/jobs/{job}/schedule")
     assert r.status_code == 403 and r.json()["detail"] == STAFF_ONLY
     assert api.get("/api/me").json()["role"] == "intern"  # the session follows
@@ -275,7 +275,7 @@ def test_a_draft_with_a_document_that_needs_fixing_cannot_be_sent_for_review(api
 
     # not a draft another intern is editing, not a staff-only draft; and staff don't use it
     job2 = intern.post("/api/jobs", json={"name": "Mine"}).json()["id"]
-    fake.role_overrides["newstaff"] = ["ROLE_15_BMU_INTERN"]
+    fake.role_overrides["newstaff"] = ["ROLE_14_BMU_INTERN"]
     other = _second_user(services, "newstaff")
     r = other.post(f"/api/jobs/{job2}/review")
     assert r.status_code == 409 and "intern is editing this draft" in r.json()["detail"]

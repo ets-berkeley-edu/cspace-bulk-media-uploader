@@ -449,13 +449,13 @@ reader_secret_field() {  # reader_secret_field MUSEUM QUERY: one fact about the 
 
 json_string() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }  # printf is a builtin: not in the process list
 
-# With the simulator, deploy sets PAHMA's secret once to the simulator's read-only account (bmureader), whose password
-# is in backend/fakecspace/app.py like all its accounts'. Nothing else ever writes it: the server never changes.
+# With the simulator, deploy sets PAHMA's secret once to the simulator's read-only account (bmureader). The simulator
+# is the fakecspace package (backend/requirements-sim.in), whose accounts are synthetic and published: each password is
+# its user name (the package's README and accounts.py). Nothing else ever writes it: the server never changes.
 sim_reader_secret() {
   [ "$(reader_secret_field pahma 'length(keys(VersionIdsToStages || `{}`))')" = 0 ] || return 0
-  local user=bmureader password
-  password="$(sed -n "s/^ *\"$user\": (\"\([^\"]*\)\".*/\1/p" backend/fakecspace/app.py)"
-  [ -n "$password" ] || die "Couldn't find the simulator's $user account in backend/fakecspace/app.py; interns' checks won't work."
+  local user=bmureader
+  local password="$user"
   printf '{"username":"%s","password":"%s"}' "$user" "$(json_string "$password")" |
     aws_ secretsmanager put-secret-value --secret-id "$(reader_secret_id pahma)" --secret-string file:///dev/stdin >/dev/null
   echo "The read-only account for interns' checks is the simulator's $user."
