@@ -876,6 +876,13 @@ class Storage:
         return self.s3_public.generate_presigned_post(Bucket=self.s.s3_bucket, Key=key, Fields=fields, Conditions=conditions,
                                                       ExpiresIn=self.s.upload_url_seconds)
 
+    def upload_origin(self) -> str:
+        """The origin (scheme://host[:port]) the browser sends presigned uploads to, for the page's Content Security
+        Policy (connect-src). Computed by signing a form locally: no request is made."""
+        from urllib.parse import urlparse
+        url = urlparse(self.s3_public.generate_presigned_post(Bucket=self.s.s3_bucket, Key="staging/csp")["url"])
+        return f"{url.scheme}://{url.netloc}"
+
     def _kms_key(self, key: str) -> str | None:
         """The SSE-KMS key for an object: its museum's, from the key's second part (staging/<tenant>/... and
         audit/<tenant>/...; design: One deployment for several museums). The bucket policy refuses any other."""

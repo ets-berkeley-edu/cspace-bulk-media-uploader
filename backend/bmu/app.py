@@ -122,7 +122,28 @@ def create_app(services: Services | None = None) -> FastAPI:
         # The built app's files have content hashes in their names, so they never change; everything else is fresh.
         immutable = request.url.path.startswith("/assets/") and resp.status_code == 200
         resp.headers.setdefault("Cache-Control", "public, max-age=31536000, immutable" if immutable else "no-store")
+        for name, value in security_headers().items():
+            resp.headers.setdefault(name, value)
         return resp
+
+    csp: list[str] = []
+
+    def security_headers() -> dict[str, str]:
+        """Review 4.5: on every answer, whether or not CloudFront adds its own. The page may run only its own scripts,
+        talk only to the BMU and the staging bucket (direct uploads), show images only from itself (thumbnails) and
+        the browser (local previews), and never be framed. Vuetify sets inline style attributes, so styles may be
+        inline; scripts may not. HSTS only where the cookie is Secure (HTTPS)."""
+        if not csp:
+            upload = services.storage.upload_origin()
+            csp.append("; ".join([
+                "default-src 'self'", "script-src 'self'", "style-src 'self' 'unsafe-inline'",
+                "img-src 'self' blob: data:", "font-src 'self' data:", f"connect-src 'self' {upload}",
+                "object-src 'none'", "base-uri 'self'", "form-action 'self'", "frame-ancestors 'none'"]))
+        out = {"Content-Security-Policy": csp[0], "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY",
+               "Referrer-Policy": "same-origin"}
+        if services.settings.cookie_secure:
+            out["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        return out
 
     @app.exception_handler(ReaderUnavailable)
     async def reader_unavailable(request: Request, exc: ReaderUnavailable):
@@ -1214,6 +1235,11 @@ def _routes(app: FastAPI) -> None:
                 raise HTTPException(404 if e.status in (403, 404) else 502, "No thumbnail from CollectionSpace.")
             finally:
                 client.close()
+            # Review 4.5: only an image is passed on, whatever type CollectionSpace names (never HTML or script),
+            # and never SVG, which can carry script
+            ctype = (ctype or "").split(";")[0].strip().lower()
+            if not ctype.startswith("image/") or ctype == "image/svg+xml":
+                raise HTTPException(404, "No thumbnail from CollectionSpace.")
             return Response(content=data, media_type=ctype, headers=headers)
         if row.get("protected") or not row.get("thumbKey"):
             raise HTTPException(404, "No thumbnail.")

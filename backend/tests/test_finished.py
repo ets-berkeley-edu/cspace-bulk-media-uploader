@@ -32,7 +32,8 @@ def past_the_check(worker, monkeypatch):
 def test_catalog_has_every_code_the_worker_records():
     codes = {"upload_too_large", "file_type_rejected", "file_missing", "media_rejected", "object_gone", "object_ambiguous",
              "object_rejected", "no_permission", "server_error", "duplicate_at_run", "group_failed", "auth",
-             "account_inactive", "unavailable", "worker_stopped", "cancelled", "unknown"}
+             "account_inactive", "unavailable", "worker_stopped", "cancelled", "unknown", "conflict", "create_uncertain",
+             "group_server_error", "not_staff"}
     assert codes <= set(catalog())
     assert needs_fix("upload_too_large") and needs_fix("object_gone") and not needs_fix("auth") and not needs_fix("cancelled")
 
