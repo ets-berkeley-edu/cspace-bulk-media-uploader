@@ -1,0 +1,3 @@
+# bmut's packages (pinned with hashes in requirements.txt): ./bmu test installs them in bmut/.venv
+pytest>=8
+selenium>=4.40

@@ -109,6 +109,7 @@ deployment is built (`deploy/README.md`); what it leaves for later is listed the
 | `backend/bmu/failures.yaml` | The failure catalog: every failure code with its title, explanation and what to do |
 | `backend/fakecspace/` | A simulated CollectionSpace API for development and tests (not CollectionSpace) |
 | `backend/tests/` | pytest: unit tests and the full run path with moto (AWS) and the simulated CollectionSpace |
+| `bmut/` | Selenium tests of the app in Chrome, on a test stack of their own (`./bmu test`); see [bmut/README.md](bmut/README.md) |
 | `frontend/` | Vue 3 + TypeScript app (Vuetify, Pinia, vue-router, axios; Vite, Vitest), built like BOA: see Frontend, below |
 | `scripts/check_cspace.py` | Checks the BMU's calls against a real CollectionSpace server |
 | `scripts/find_csid.py` | Finds which BMU job created a CollectionSpace record |
@@ -275,6 +276,7 @@ the browser tab's title (orange when the CollectionSpace is a real server).
 | Command | What | Address |
 | --- | --- | --- |
 | `./bmu up sim` | Local, simulated CollectionSpace, Demo tools on (sign in as `admin` / `admin`) | http://localhost:5173 |
+| `./bmu test` | The Selenium tests (`bmut/`) on a fresh local stack of their own, with the simulator; left running afterwards (`./bmu test-down` stops it) | http://localhost:5573 |
 | `./bmu up qa` | Local, against the PAHMA QA tenant, with your own QA account; `BMU_QA_TENANT=ucjeps ./bmu up qa` uses UCJEPS QA instead. **Jobs create real records, which stay.** Demo tools off | http://localhost:5273 |
 | `./bmu aws deploy` | Deploys to AWS (default: Richard's personal account, against the PAHMA QA tenant; real records). See [deploy/README.md](deploy/README.md) | `https://….cloudfront.net` |
 | `./bmu open aws` | The AWS deployment, at the address `./bmu aws deploy` saved (or `BMU_AWS_DEV_URL`) | — |

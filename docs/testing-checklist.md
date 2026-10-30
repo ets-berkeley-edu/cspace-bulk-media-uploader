@@ -507,6 +507,19 @@ Branch `fix/review-409-headers`. Claude ran the backend suite with `tests/test_r
 - [ ] In AWS after `./bmu aws deploy`: the response headers of the page (browser dev tools, Network) include `content-security-policy` with `connect-src 'self' https://…s3…amazonaws.com`, and uploads, thumbnails and a run work with no console errors.
 - [ ] Demo tools, fail rule on `media` with status 409 for one file: that document fails with "CollectionSpace refused a request as a conflict", and the job's other documents still run.
 
+## 16. The Selenium tests, bmut (29 October 2026; 15 minutes)
+
+Branch `test/selenium-additional`. The first automated browser checks (`bmut/`, run by `./bmu test`; `bmut/README.md`), on a test stack of their own. They automate parts of sections 2, 2a, 2b and 2i; those steps can be ticked by a passing run instead of by hand.
+
+Claude ran `./bmu test` with `./bmu up sim` running alongside: 15 passed, and the sim stack kept running. The suite found one bug, fixed on the branch: after a session ended, signing in again opened Create / edit job instead of the page you were on (section 2, Sign out and session end, step 2). Claude ran the frontend's lint, typecheck and Vitest (265 tests, one new) in Docker; Node isn't installed on the Mac.
+
+- [ ] Section 2's session-end step by hand: delete the `bmu_session` cookie on Drafts, click Finished jobs, sign in again. Expect Finished jobs, not Create / edit job.
+
+- [ ] With `./bmu up sim` running, run `./bmu test`. Expect every test to pass, and the sim stack at http://localhost:5173 untouched (still signed in, its drafts still there).
+- [ ] `./bmu test -k sign_out --headed`: Chrome opens and you can watch the one test.
+- [ ] Make a test fail on purpose (change an expected text in `bmut/tests/test_tabs.py`), run it: the report names a screenshot and the page's HTML in `bmut/.run/failures/`. Put the text back.
+- [ ] `./bmu test-down` stops the test stack; `./bmu status` still shows sim running.
+
 ## Not tests, but still open
 
 - The design doc's "For Richard to address" list (from the October 3 comparison of the doc with the prototype).
