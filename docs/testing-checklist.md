@@ -6,6 +6,8 @@ This list moved into the repository on October 5, 2026, from "BMU Testing To Do"
 
 Each section was written for its own branch. Later work has changed some screens, so where a step no longer matches `main`, the step says what replaced it. The automated test counts quoted in sections 1 and 2a are the counts at that time. Today, expect every test to pass.
 
+Steps marked *Automated* are checked by the Selenium tests in `bmut/` (named after the mark), which CI runs on every pull request that changes code (`bmut/README.md`): they needn't be done by hand while those tests pass. *Partly automated* says what the tests don't check, and only that part is left to do by hand. A pull request that adds a bmut test marks the steps it covers, as its docstring names them. Marked on October 30, 2026, for the 46 tests then in `bmut/`.
+
 Already done on October 3: a quick look at `./bmu up sim`, and browser uploads continuing while on other tabs.
 
 ## 1. Backend suite (5 minutes)
@@ -20,35 +22,35 @@ Start with `./bmu up sim`, open http://localhost:5173.
 
 **Sign-in**
 
-- [ ] Signed out, open http://localhost:5173/queue directly. Expect the sign-in page; after signing in, expect the Job queue tab, not Create / edit job.
-- [ ] Sign in with a wrong password. Expect the reason in red under the fields, the password field emptied, and the username kept.
-- [ ] Click Sign in with both fields empty. Expect "Enter your CollectionSpace username and password." and no request to the server.
-- [ ] The environment label ("Local · simulated CollectionSpace") shows above the sign-in card and in the app bar.
+- [ ] *Automated:* `test_sign_in_returns_to_the_page_asked_for`. Signed out, open http://localhost:5173/queue directly. Expect the sign-in page; after signing in, expect the Job queue tab, not Create / edit job.
+- [ ] *Automated:* `test_a_wrong_password`. Sign in with a wrong password. Expect the reason in red under the fields, the password field emptied, and the username kept.
+- [ ] *Automated:* `test_empty_fields_ask_without_a_request`. Click Sign in with both fields empty. Expect "Enter your CollectionSpace username and password." and no request to the server.
+- [ ] *Automated:* `test_the_environment_label`. The environment label ("Local · simulated CollectionSpace") shows above the sign-in card and in the app bar.
 
 **Tabs as pages**
 
-- [ ] On each of the four tabs, reload the browser. Expect to stay on the same tab.
-- [ ] Click through several tabs, then use the browser's Back button. Expect to go back through the tabs.
-- [ ] The browser tab's title names the page, for example "Drafts | BMU · Local · simulated CollectionSpace".
-- [ ] Open http://localhost:5173/nonsense. Expect "Page not found" with a button back to Create / edit job.
+- [ ] *Automated:* `test_a_reload_keeps_the_tab`. On each of the four tabs, reload the browser. Expect to stay on the same tab.
+- [ ] *Automated:* `test_back_goes_back_through_the_tabs`. Click through several tabs, then use the browser's Back button. Expect to go back through the tabs.
+- [ ] *Automated:* `test_the_browser_tabs_title_names_the_page`. The browser tab's title names the page, for example "Drafts | BMU · Local · simulated CollectionSpace".
+- [ ] *Automated:* `test_page_not_found`. Open http://localhost:5173/nonsense. Expect "Page not found" with a button back to Create / edit job.
 
 **The job being worked on, across tabs**
 
-- [ ] Start a job and add a few files. Go to Drafts and back. Expect the editor exactly as you left it (same rows, same expanded row, same selection).
+- [ ] *Partly automated:* `test_the_draft_in_drafts_and_back`; the same expanded row and selection by hand. Start a job and add a few files. Go to Drafts and back. Expect the editor exactly as you left it (same rows, same expanded row, same selection).
 - [ ] With a large file uploading (Demo tools: slow the browser upload), go to Job queue, wait, come back. Expect the upload to have continued or finished.
-- [ ] From Drafts, click Edit (or Continue editing) on a draft. Expect Create / edit job to open with that draft.
+- [ ] *Automated:* `test_a_drafts_line_details_and_preview`. From Drafts, click Edit (or Continue editing) on a draft. Expect Create / edit job to open with that draft.
 - [ ] From Drafts, open the preview of a different draft while one is open in the editor: expand that draft and click "Open full preview". (Rows had a Preview button until October 5, 2026; see 2n.) Expect the preview inside the Drafts tab; go to Create / edit job and expect your open draft untouched.
-- [ ] Submit a job. Expect to land on Job queue with the blue message saying when it runs. Close the message with its ×.
+- [ ] *Partly automated:* `test_submit_and_the_run`; closing the message with its × by hand. Submit a job. Expect to land on Job queue with the blue message saying when it runs. Close the message with its ×.
 - [ ] Click New job while a draft is open. Expect an empty editor; in Drafts, the earlier draft is no longer shown as being edited by you.
 
 **Sign out and session end**
 
 - [ ] Open a draft, then use the menu under your username to Sign out. Sign in as a different user: expect to be able to edit that draft without "Take over".
-- [ ] Let a session time out (or delete the `bmu_session` cookie in the browser's developer tools), then click something. Expect the sign-in page with the reason shown in a yellow box; after signing in, expect to return to the tab you were on.
+- [ ] *Automated:* `test_a_session_that_ended_returns_to_the_tab`. Let a session time out (or delete the `bmu_session` cookie in the browser's developer tools), then click something. Expect the sign-in page with the reason shown in a yellow box; after signing in, expect to return to the tab you were on.
 
 **Dark mode**
 
-- [ ] In the menu under your username, choose Dark mode. Expect the whole page to go dark, the menu item to read "Light mode", and the choice to survive a reload and a sign-out.
+- [ ] *Partly automated:* `test_dark_mode_and_back`; the whole page going dark, and the choice surviving a sign-out by hand. In the menu under your username, choose Dark mode. Expect the whole page to go dark, the menu item to read "Light mode", and the choice to survive a reload and a sign-out.
 - [ ] Look at each tab in dark mode for anything unreadable. The old tab contents are greyer than the frame until they are converted; that is expected. Unreadable text or white boxes are not.
 - [ ] Clear the choice (developer tools: remove `prefersDarkMode` from Local Storage) and reload. Expect the page to follow the Mac's light or dark setting.
 
@@ -70,16 +72,16 @@ Start with `./bmu up sim`, open http://localhost:5173.
 Once `feature/vuetify-editor` is merged (or on that branch), in `./bmu up sim`. This screen was rebuilt; Claude saw it only in screenshots against a stand-in API.
 
 - [ ] Backend suite still 328 passed (no backend file changed).
-- [ ] Drop files on the drop area, and pick files with "browse". Rows appear, thumbnails load, uploads show progress and finish.
+- [ ] *Partly automated:* `test_name_a_job_and_add_files`; dropping files, and thumbnails and progress by hand. Drop files on the drop area, and pick files with "browse". Rows appear, thumbnails load, uploads show progress and finish.
 - [ ] Expand a row, edit each kind of field: file name, object number (and "Use parsed value"), date, media type (and "Add an additional type"), creator (type three letters, pick from the list with mouse and with arrow keys), description, language. Reload the page: the edits are kept.
 - [ ] Change a row's handling, Restricted and Exclude. The status chip and the Public portal column follow.
-- [ ] Delete one document with its trash can: the confirmation appears under the row; Cancel and Delete both work.
+- [ ] *Partly automated:* `test_a_document_that_needs_an_object_creator`; Cancel by hand. Delete one document with its trash can: the confirmation appears under the row; Cancel and Delete both work.
 - [ ] Select rows, then in "Change selected documents": Apply to selected, Apply to all (with its confirmation), Exclude, Include and Delete selected.
 - [ ] Sort by each column; change page and page size; "Show documents with problems".
 - [ ] With 30 or more documents, click the header chevron to expand all, then scroll. Expect each document's fields to be there as it comes into view, with no visible jump or blank gap.
 - [ ] Turn on "Create a group", give a title, submit; the group box and a row's Group checkbox behave as before.
 - [ ] A failed upload (Demo tools): Replace file and Retry work from the row.
-- [ ] Open a draft someone else is editing: the locked banner and "Take over" work.
+- [ ] *Partly automated:* `test_take_over_a_draft`; Take over from the editor's locked banner (the test takes over from Drafts) by hand. Open a draft someone else is editing: the locked banner and "Take over" work.
 - [ ] Save draft and Submit job; with a must-fix document, Submit is refused and says why.
 - [ ] Dark mode: every part of the screen is readable, including expanded rows and the delete confirmation.
 - [ ] If you have a large draft (several hundred documents), page through it at 100 per page. Changing page measured about 0.4 s, twice what it was; say if it feels slow.
@@ -88,9 +90,9 @@ Once `feature/vuetify-editor` is merged (or on that branch), in `./bmu up sim`. 
 
 On branch `fix/editor-reload-and-deleting` (or `main` once it is merged), in `./bmu up sim`. On October 3 Richard ran 21 checks of Create / edit job by hand; 20 passed, and these two changes followed.
 
-- [ ] Open a draft, edit a field, reload the browser. Expect the same draft open, with the edit, and the address ending in `/job/` and the job's id.
-- [ ] Start a new job by typing a name. Expect the address to gain the job's id. Reload: the job is still open.
-- [ ] With a draft open, go to Drafts and back by the Create / edit job tab. Expect the draft still open.
+- [ ] *Partly automated:* `test_name_a_job_and_add_files`; editing a field before the reload by hand. Open a draft, edit a field, reload the browser. Expect the same draft open, with the edit, and the address ending in `/job/` and the job's id.
+- [ ] *Automated:* `test_name_a_job_and_add_files`. Start a new job by typing a name. Expect the address to gain the job's id. Reload: the job is still open.
+- [ ] *Automated:* `test_the_draft_in_drafts_and_back`. With a draft open, go to Drafts and back by the Create / edit job tab. Expect the draft still open.
 - [ ] Click New job, then the browser's Back button. Expect the earlier draft to reopen.
 - [ ] Delete a draft from Drafts, then paste its old address. Expect a message that the job isn't there, and a new, empty job.
 - [ ] Select 3 documents and Delete selected. Expect the three rows to read "Deleting…" and dim, and the button to read "Deleting…", until they disappear. Note roughly how long it takes.
@@ -101,22 +103,22 @@ On branch `feature/vuetify-lists` (or `main` once it is merged). Run `./bmu down
 
 **Drafts**
 
-- [ ] The list shows each draft's checks, last saved, who is editing and expiry. Expand a draft: its facts and its documents appear; "Open full preview" opens the preview.
-- [ ] Sort by each column heading. Expand all and Collapse all.
-- [ ] Delete a draft: the confirmation opens in a full-width row under the draft, the draft's buttons are off meanwhile, Cancel closes it, Delete draft removes the draft.
-- [ ] As a second user, a draft someone else is editing shows Take over…; the warning opens under the draft; Take over and edit opens it.
-- [ ] Open a draft's full preview (expand the draft, then "Open full preview"; the row's Preview button was removed on October 5, 2026, see 2n): Back to Drafts, Check again, the Show filter, paging and sorting work; Edit opens Create / edit job.
+- [ ] *Partly automated:* `test_a_drafts_line_details_and_preview`; last saved, and the documents under an expanded draft by hand. The list shows each draft's checks, last saved, who is editing and expiry. Expand a draft: its facts and its documents appear; "Open full preview" opens the preview.
+- [ ] *Partly automated:* `test_expand_all_collapse_all_and_sort`; sorting by the other columns (the test sorts by one) by hand. Sort by each column heading. Expand all and Collapse all.
+- [ ] *Automated:* `test_delete_a_draft`. Delete a draft: the confirmation opens in a full-width row under the draft, the draft's buttons are off meanwhile, Cancel closes it, Delete draft removes the draft.
+- [ ] *Automated:* `test_take_over_a_draft`. As a second user, a draft someone else is editing shows Take over…; the warning opens under the draft; Take over and edit opens it.
+- [ ] *Partly automated:* `test_a_drafts_line_details_and_preview`; the Show filter, paging and sorting by hand. Open a draft's full preview (expand the draft, then "Open full preview"; the row's Preview button was removed on October 5, 2026, see 2n): Back to Drafts, Check again, the Show filter, paging and sorting work; Edit opens Create / edit job.
 
 **Job queue**
 
-- [ ] Submit two or three jobs. The banner shows the schedule and the next run time; each job shows Runs at.
-- [ ] As staff (`admin`; this said "a scheduler" before roles part 1 replaced BMU\_Scheduler with BMU\_Staff): Schedule settings (change days and times, Save; try run days more than 3 days apart and expect the server's message in the panel), Pause queue with a reason, Resume queue.
-- [ ] Run now and Undo Run now, Hold and Release, Set run time (Save, Clear, Cancel) on a queued job.
-- [ ] Reorder with the arrows and by dragging. Sort by a column: the "Sorted view" note appears and moving is off until the sort is cleared.
-- [ ] Edit on a queued job: the warning opens under the job; Edit anyway moves it to Drafts and opens it.
+- [ ] *Partly automated:* `test_submitted_jobs_wait_in_a_paused_queue`; the banner's schedule and next run time (the test's queue is paused) by hand. Submit two or three jobs. The banner shows the schedule and the next run time; each job shows Runs at.
+- [ ] *Partly automated:* `test_submitted_jobs_wait_in_a_paused_queue`; Schedule settings, and Resume queue by hand. As staff (`admin`; this said "a scheduler" before roles part 1 replaced BMU\_Scheduler with BMU\_Staff): Schedule settings (change days and times, Save; try run days more than 3 days apart and expect the server's message in the panel), Pause queue with a reason, Resume queue.
+- [ ] *Partly automated:* `test_run_now_hold_and_set_run_time`; Set run time's Save and Clear by hand. Run now and Undo Run now, Hold and Release, Set run time (Save, Clear, Cancel) on a queued job.
+- [ ] *Partly automated:* `test_reorder_with_the_arrows`; dragging, and the sorted view by hand. Reorder with the arrows and by dragging. Sort by a column: the "Sorted view" note appears and moving is off until the sort is cleared.
+- [ ] *Automated:* `test_edit_a_queued_job`. Edit on a queued job: the warning opens under the job; Edit anyway moves it to Drafts and opens it.
 - [ ] While a job runs: the spinner, the done / failed / to go line, the bar and "Now: file, step" update; Cancel run asks first, then the job stops after the document in progress.
 - [ ] Open a running job's full preview (expand it, then "Open full preview"): each document's run state updates.
-- [ ] As `intern` (this said "a user without the scheduler role" before roles part 1): no schedule buttons and no arrows. Since roles part 1, any staff member can cancel any run; an intern can't cancel one (see 2i).
+- [ ] *Partly automated:* `test_an_intern_in_the_job_queue`, `test_staff_and_interns_in_the_header_and_the_job_queue`; that an intern can't cancel a run by hand. As `intern` (this said "a user without the scheduler role" before roles part 1): no schedule buttons and no arrows. Since roles part 1, any staff member can cancel any run; an intern can't cancel one (see 2i).
 
 **Deleting many documents (the backend change)**
 
@@ -205,14 +207,14 @@ Branch `feature/roles-and-sign-in`. The backend changed, so restart first: `./bm
 
 - [ ] Demo tools has a "Sign in as" box. It says who you are and your role, and has one button for each simulator user. Use it for the switches below instead of signing out and in. Its buttons for `reader` and `newstaff` show the refusal message and leave you signed in as you were.
 - [ ] Clicking a "Sign in as" button for a user who is let in reloads the app as that user, on Create / edit job.
-- [ ] Sign in as `reader`: refused, with a message that the account has neither BMU role and to contact the CollectionSpace administrator.
-- [ ] Sign in as `newstaff`: refused, with a message naming what the account can't do (create and update Media records, create relations).
-- [ ] Sign in as `admin`: works as before. No "Intern" chip in the header. The Job queue has every control (reorder, Run now, Set run time, Hold, Schedule settings, Pause queue).
-- [ ] As `admin`, create a draft, add a file and close it (New job). In Drafts it reads "Staff only" under its name.
-- [ ] Sign in as `intern` (a private window keeps `admin` signed in): the header shows "Intern". New job works; add a file. In Drafts the intern's draft reads "Open to interns", and its Edit and Delete work.
-- [ ] As `intern`, in Drafts: Edit and Delete on `admin`'s draft are off, and the tooltip says "This draft is for staff only."
-- [ ] As `intern`, in the editor: Submit job is off, and its tooltip says only staff can submit. Expected for now: the documents show "needs fixing" because the intern's account can read nothing (the service account comes in part 3).
-- [ ] As `intern`, in the Job queue (submit a job as `admin` first): no reorder arrows or run controls, the line "Only staff can change the schedule or the order of the queue", and Edit and Delete off with "Only staff can do this."
+- [ ] *Partly automated:* `test_accounts_without_the_role_or_the_permissions_are_refused`; the message's wording by hand. Sign in as `reader`: refused, with a message that the account has neither BMU role and to contact the CollectionSpace administrator.
+- [ ] *Partly automated:* `test_accounts_without_the_role_or_the_permissions_are_refused`; the message's wording by hand. Sign in as `newstaff`: refused, with a message naming what the account can't do (create and update Media records, create relations).
+- [ ] *Automated:* `test_staff_and_interns_in_the_header_and_the_job_queue`. Sign in as `admin`: works as before. No "Intern" chip in the header. The Job queue has every control (reorder, Run now, Set run time, Hold, Schedule settings, Pause queue).
+- [ ] *Automated:* `test_a_staff_draft_is_staff_only`. As `admin`, create a draft, add a file and close it (New job). In Drafts it reads "Staff only" under its name.
+- [ ] *Automated:* `test_an_interns_draft`, `test_staff_and_interns_in_the_header_and_the_job_queue`. Sign in as `intern` (a private window keeps `admin` signed in): the header shows "Intern". New job works; add a file. In Drafts the intern's draft reads "Open to interns", and its Edit and Delete work.
+- [ ] *Automated:* `test_a_staff_draft_is_off_for_an_intern`. As `intern`, in Drafts: Edit and Delete on `admin`'s draft are off, and the tooltip says "This draft is for staff only."
+- [ ] *Automated, as it is now:* `test_an_interns_draft` (an intern has Submit for review in place of Submit job, 2m; the documents are found, 2k). As `intern`, in the editor: Submit job is off, and its tooltip says only staff can submit. Expected for now: the documents show "needs fixing" because the intern's account can read nothing (the service account comes in part 3).
+- [ ] *Automated:* `test_an_intern_in_the_job_queue`. As `intern`, in the Job queue (submit a job as `admin` first): no reorder arrows or run controls, the line "Only staff can change the schedule or the order of the queue", and Edit and Delete off with "Only staff can do this."
 - [ ] As `intern`, in Finished jobs: Fix and reschedule and Delete are off.
 - [ ] As `admin`, open the intern's draft and submit it: it runs under `admin`.
 - [ ] As `limited` (staff who can't create Objects): signs in; behaves as before.
@@ -221,26 +223,26 @@ Branch `feature/roles-and-sign-in`. The backend changed, so restart first: `./bm
 
 Branch `feature/intern-access`. Restart first: `./bmu down sim`, then `./bmu up sim`. Use the Demo tools "Sign in as" box to switch users.
 
-- [ ] As `admin`, in Drafts: a draft with nothing to fix has Submit… on. Click it: the confirmation names the document count, who created and last saved the draft, and says it runs with your sign-in. Cancel changes nothing.
-- [ ] Confirm the submit: you land in the Job queue with the usual "was submitted" message, and the job runs as `admin`.
-- [ ] A draft with a document that needs fixing has Submit… off, and the tooltip says to open the draft with Edit.
-- [ ] As `admin`, "Open to interns" on a draft's row: the line under its name changes, and a message says so. "Make staff only" changes it back.
-- [ ] As `admin`, open a draft: the "Open to interns" checkbox under the job name does the same.
+- [ ] *Automated:* `test_submit_from_drafts`. As `admin`, in Drafts: a draft with nothing to fix has Submit… on. Click it: the confirmation names the document count, who created and last saved the draft, and says it runs with your sign-in. Cancel changes nothing.
+- [ ] *Automated:* `test_submit_from_drafts`, `test_staff_who_can_create_objects_submit_it`. Confirm the submit: you land in the Job queue with the usual "was submitted" message, and the job runs as `admin`.
+- [ ] *Automated:* `test_submit_from_drafts_is_off_when_a_document_needs_fixing`. A draft with a document that needs fixing has Submit… off, and the tooltip says to open the draft with Edit.
+- [ ] *Automated:* `test_open_to_interns_from_drafts`. As `admin`, "Open to interns" on a draft's row: the line under its name changes, and a message says so. "Make staff only" changes it back.
+- [ ] *Automated:* `test_open_to_interns_in_the_editor`. As `admin`, open a draft: the "Open to interns" checkbox under the job name does the same.
 - [ ] As `intern`, open a draft that is open to interns. In a private window as `admin`, make it staff only. Back as the intern, the next change is refused and the page says the draft is no longer theirs to edit.
 - "Hand over to staff…" is gone: Submit for review replaced it on October 5, 2026. Test that in 2m instead. The two steps that were here no longer apply.
-- [ ] As `admin`, in the Job queue: "Move to Drafts…" on a queued job asks first, then the job is in Drafts with nobody editing it.
-- [ ] As `intern`, in the Job queue: "Move to Drafts…" is off, with "Only staff can do this."
+- [ ] *Automated:* `test_move_to_drafts`. As `admin`, in the Job queue: "Move to Drafts…" on a queued job asks first, then the job is in Drafts with nobody editing it.
+- [ ] *Automated:* `test_an_intern_in_the_job_queue`. As `intern`, in the Job queue: "Move to Drafts…" is off, with "Only staff can do this."
 - [ ] Still expected: an intern's documents show "needs fixing" (part 3).
 
 ## 2k. Roles, part 3: the read-only account for interns' checks (15 minutes)
 
 Branch `feature/reader-account`. Restart first: `./bmu down sim`, then `./bmu up sim`. Use the Demo tools "Sign in as" box to switch users.
 
-- [ ] As `intern`, create a job and add a file named `15-1234_1.jpg`. Expect no "can't read Object records" or "can't read Media records" message. Still expected until part 4: "can't update Media" or "can't create relations".
-- [ ] As `intern`, add `20-0777_1.jpg`. Expect "No object 20-0777 in CollectionSpace": a real finding, made for the intern.
-- [ ] As `intern`, add `12-2001_1.jpg`. Expect a protected file whose reason reads "marked sensitive in CollectionSpace", with no mention of Human Remains or "culturally", and no thumbnail.
-- [ ] As `intern`, add `12-2003_1.jpg`. Expect the warning "Object 12-2003 has a note about access in CollectionSpace", without the kind of restriction.
-- [ ] Sign in as `admin` and preview the same draft: the full reasons are there.
+- [ ] *Automated:* `test_an_interns_draft`. As `intern`, create a job and add a file named `15-1234_1.jpg`. Expect no "can't read Object records" or "can't read Media records" message. Still expected until part 4: "can't update Media" or "can't create relations".
+- [ ] *Automated:* `test_an_interns_checks_use_the_read_only_account`. As `intern`, add `20-0777_1.jpg`. Expect "No object 20-0777 in CollectionSpace": a real finding, made for the intern.
+- [ ] *Automated:* `test_an_interns_checks_use_the_read_only_account`. As `intern`, add `12-2001_1.jpg`. Expect a protected file whose reason reads "marked sensitive in CollectionSpace", with no mention of Human Remains or "culturally", and no thumbnail.
+- [ ] *Automated:* `test_an_interns_checks_use_the_read_only_account`. As `intern`, add `12-2003_1.jpg`. Expect the warning "Object 12-2003 has a note about access in CollectionSpace", without the kind of restriction.
+- [ ] *Automated:* `test_staff_see_the_full_reasons`. Sign in as `admin` and preview the same draft: the full reasons are there.
 - [ ] As `intern`: the Creator field's search finds terms, the Language list fills, and a date such as `1920s` gets its preview.
 - [ ] `./bmu logs sim web` shows lines like "reader: intern made 3 lookups (checking job …)".
 - [ ] The sign-in page refuses `bmureader` / `<simulator-password>`, and "Sign in as" doesn't list it.
@@ -249,33 +251,33 @@ Branch `feature/reader-account`. Restart first: `./bmu down sim`, then `./bmu up
 
 Branch `feature/three-kinds-of-result`. Restart first: `./bmu down sim`, then `./bmu up sim`. Use the Demo tools "Sign in as" box to switch users. `limited` is staff who can't create objects or groups.
 
-- [ ] As `limited`, create a job with `20-0990_1.jpg` and `15-1234_1.jpg`. Set the first to "Link to object (create if missing)". Expect its Status to read "Needs an Object creator" in purple, not "Needs fixing", and one purple line at the top of the job.
-- [ ] The bar under the table reads "nothing to fix · 1 needs an Object creator". Submit job is off, and its tooltip says why.
-- [ ] The handling list offers "Create new object + link (needs an Object creator)", and it can be chosen.
-- [ ] There is no "Submit without…" button: a job is submitted whole. The purple line says to leave the draft for a colleague, change the handling, or delete the document from this job.
-- [ ] Delete that document from the job: Submit job comes on.
-- [ ] Make such a draft again, save it and sign in as `admin`: Submit… from the Drafts list works, the job runs and is Completed, and object 20-0990 exists in the simulator.
+- [ ] *Automated:* `test_a_document_that_needs_an_object_creator`. As `limited`, create a job with `20-0990_1.jpg` and `15-1234_1.jpg`. Set the first to "Link to object (create if missing)". Expect its Status to read "Needs an Object creator" in purple, not "Needs fixing", and one purple line at the top of the job.
+- [ ] *Automated:* `test_a_document_that_needs_an_object_creator`. The bar under the table reads "nothing to fix · 1 needs an Object creator". Submit job is off, and its tooltip says why.
+- [ ] *Automated:* `test_a_document_that_needs_an_object_creator`. The handling list offers "Create new object + link (needs an Object creator)", and it can be chosen.
+- [ ] *Automated:* `test_a_document_that_needs_an_object_creator`. There is no "Submit without…" button: a job is submitted whole. The purple line says to leave the draft for a colleague, change the handling, or delete the document from this job.
+- [ ] *Automated:* `test_a_document_that_needs_an_object_creator`. Delete that document from the job: Submit job comes on.
+- [ ] *Automated:* `test_staff_who_can_create_objects_submit_it`. Make such a draft again, save it and sign in as `admin`: Submit… from the Drafts list works, the job runs and is Completed, and object 20-0990 exists in the simulator.
 - [ ] In the Show list, "With problems" does not count the document; "Need an Object creator" does.
-- [ ] As `limited`, save such a draft. In Drafts its checks chip is purple: "nothing to fix · 1 needs an Object creator", and Submit… is off with the reason. As `admin` the same chip reads "nothing to fix · 1 new Object", and Submit… is on.
-- [ ] As `limited`, a job with `15-1234_1.jpg` and "Create a group" ticked with a title: one orange message beside the group says to contact the CollectionSpace administrator. The document does not read "Needs fixing". Submit job is off.
-- [ ] Untick Group on the document: the message goes and Submit job is on.
-- [ ] As `intern`, add `15-1234_1.jpg`: no "Must fix" about Media or relations. Add `20-0991_1.jpg` set to "Link to object (create if missing)": "Needs an Object creator", with "The staff member who submits the job must be able to create Objects."
-- [ ] As `intern`, add `20-0777_1.jpg` left on "Link to existing object": "Needs fixing" with "No object 20-0777", a real problem.
+- [ ] *Automated:* `test_in_drafts_it_waits_for_someone_who_can_create_objects`. As `limited`, save such a draft. In Drafts its checks chip is purple: "nothing to fix · 1 needs an Object creator", and Submit… is off with the reason. As `admin` the same chip reads "nothing to fix · 1 new Object", and Submit… is on.
+- [ ] *Automated:* `test_a_group_the_account_cant_create`. As `limited`, a job with `15-1234_1.jpg` and "Create a group" ticked with a title: one orange message beside the group says to contact the CollectionSpace administrator. The document does not read "Needs fixing". Submit job is off.
+- [ ] *Automated:* `test_a_group_the_account_cant_create`. Untick Group on the document: the message goes and Submit job is on.
+- [ ] *Automated:* `test_an_interns_draft`, `test_an_interns_document_that_needs_an_object_creator`. As `intern`, add `15-1234_1.jpg`: no "Must fix" about Media or relations. Add `20-0991_1.jpg` set to "Link to object (create if missing)": "Needs an Object creator", with "The staff member who submits the job must be able to create Objects."
+- [ ] *Automated:* `test_an_interns_checks_use_the_read_only_account`. As `intern`, add `20-0777_1.jpg` left on "Link to existing object": "Needs fixing" with "No object 20-0777", a real problem.
 - [ ] Check the purple in dark mode too, if you use it: say if it is hard to read.
 
 ## 2m. Submit for review (10 minutes)
 
 Branch `feature/submit-for-review`, built on part 4. Restart first: `./bmu down sim`, then `./bmu up sim`. Use the Demo tools "Sign in as" box to switch users.
 
-- [ ] As `intern`, create a job with `15-1234_1.jpg` and `20-0777_1.jpg`. At the bottom of the job, where staff have Submit job, the button reads "Submit for review…". It is off, and its tooltip says to fix or exclude the documents that need fixing. There is no Submit job button, and nothing under the job name.
-- [ ] Tick Exclude on `20-0777_1.jpg`: "Submit for review…" comes on. Click it: it asks first, in the same bar. Confirm.
-- [ ] The editor starts a new job, with a message that the draft was sent for review. In Drafts the job is first in the list, with a blue "Needs review · sent by intern, <time>" mark, and reads "Staff only". Its Edit and Delete are off for the intern.
-- [ ] As `intern`, a second job with `20-0993_1.jpg` set to "Link to object (create if missing)" (purple, needs an Object creator): "Submit for review…" is on.
-- [ ] As `intern`, in Drafts: "Submit for review…" on a draft's row does the same, and is off with the reason when a document needs fixing.
-- [ ] As `admin`, the bottom button still reads Submit job.
-- [ ] As `admin`, open the first job with Edit: a blue line says who sent it and when. Change something and close it: the mark is still there.
-- [ ] As `admin`, "Open to interns" on that row: the mark goes, and the intern can edit it again.
-- [ ] Send it for review again as `intern`, then as `admin` use "Submit…" on its row. It goes to the Job queue. Move it back to Drafts: no "Needs review" mark.
+- [ ] *Automated:* `test_submit_for_review_waits_for_what_needs_fixing`. As `intern`, create a job with `15-1234_1.jpg` and `20-0777_1.jpg`. At the bottom of the job, where staff have Submit job, the button reads "Submit for review…". It is off, and its tooltip says to fix or exclude the documents that need fixing. There is no Submit job button, and nothing under the job name.
+- [ ] *Automated:* `test_exclude_then_submit_for_review`. Tick Exclude on `20-0777_1.jpg`: "Submit for review…" comes on. Click it: it asks first, in the same bar. Confirm.
+- [ ] *Automated:* `test_exclude_then_submit_for_review`. The editor starts a new job, with a message that the draft was sent for review. In Drafts the job is first in the list, with a blue "Needs review · sent by intern, <time>" mark, and reads "Staff only". Its Edit and Delete are off for the intern.
+- [ ] *Automated:* `test_submit_for_review_from_drafts`. As `intern`, a second job with `20-0993_1.jpg` set to "Link to object (create if missing)" (purple, needs an Object creator): "Submit for review…" is on.
+- [ ] *Automated:* `test_submit_for_review_from_drafts`. As `intern`, in Drafts: "Submit for review…" on a draft's row does the same, and is off with the reason when a document needs fixing.
+- [ ] *Automated:* `test_staff_review_the_draft`. As `admin`, the bottom button still reads Submit job.
+- [ ] *Automated:* `test_staff_review_the_draft`. As `admin`, open the first job with Edit: a blue line says who sent it and when. Change something and close it: the mark is still there.
+- [ ] *Automated:* `test_open_to_interns_sends_it_back`. As `admin`, "Open to interns" on that row: the mark goes, and the intern can edit it again.
+- [ ] *Automated:* `test_submit_a_reviewed_draft_and_move_it_back`. Send it for review again as `intern`, then as `admin` use "Submit…" on its row. It goes to the Job queue. Move it back to Drafts: no "Needs review" mark.
 - [ ] The audit log has "Sent for review" entries.
 
 ## 2n. No Preview button on the rows (5 minutes)
