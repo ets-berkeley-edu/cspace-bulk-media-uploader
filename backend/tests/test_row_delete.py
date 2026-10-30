@@ -103,7 +103,7 @@ def test_a_job_that_has_run_lists_the_deleted_documents_once_and_completes(api, 
     job = new_job(api)
     add_uploaded(job, ["15-1234_1.jpg", "12-5678_1.jpg", "1-2345.jpg"])
     fail_on("media", status=400, match="12-5678")
-    fail_on("media", status=500, match="1-2345")
+    fail_on("media", status=403, match="1-2345")  # refused: surely nothing created (a 5xx may have)
     assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
     worker.tick()
     api.post(f"/api/jobs/{job}/fix")

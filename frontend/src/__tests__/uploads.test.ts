@@ -35,7 +35,8 @@ class FakeXHR {
   open(_method: string, url: string) { this.url = url }
   setRequestHeader() {}
   send() {}
-  abort() { this.onabort?.() }
+  aborted = false
+  abort() { this.aborted = true; this.onabort?.() }
   finish() { this.status = 204; this.onload?.() }
 }
 
@@ -141,6 +142,18 @@ describe('a fresh upload form for a file that waited its turn (design: Browser u
     expect(FakeXHR.all).toHaveLength(3) // nothing sent for row 4
     expect(calls.some((x) => x.url.endsWith('/rows/4/upload-failed'))).toBe(false) // and it isn't a failure
     w.unmount()
+  })
+
+  it('leaving the editor stops its uploads, sends no more and marks nothing failed (review 6.1)', async () => {
+    const calls = stub()
+    const w = await editor()
+    await choose(w, ['15-1234_1.tif', '15-1234_2.tif', '15-1234_3.tif', '15-1234_4.tif'].map((n) => tif(n)))
+    expect(FakeXHR.all).toHaveLength(3)
+    w.unmount()
+    await settle()
+    expect(FakeXHR.all.every((x) => x.aborted)).toBe(true)
+    expect(FakeXHR.all).toHaveLength(3) // the fourth, waiting its turn, isn't sent
+    expect(calls.some((x) => x.url.endsWith('/upload-failed') || x.url.endsWith('/uploaded'))).toBe(false)
   })
 
   it('formIsOld: older than the margin, which leaves most of the 15 minutes a form lasts', () => {

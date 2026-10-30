@@ -589,7 +589,7 @@ def test_run_history_lists_documents_disabled_or_deleted_before_the_run(api, log
     job = new_job(api)
     add_uploaded(job, ["15-1234_1.jpg", "12-5678_1.jpg", "1-2345.jpg"])
     fail_on("media", status=400, match="12-5678")
-    fail_on("media", status=500, match="1-2345")
+    fail_on("media", status=403, match="1-2345")  # refused: surely nothing created (a 5xx may have)
     run_once(api, job, worker)
     api.post(f"/api/jobs/{job}/fix")
     r = api.patch(f"/api/jobs/{job}/rows/2", json={"include": False}).json()["row"]
@@ -609,7 +609,7 @@ def test_rerun_records_disabled_documents(api, login, add_uploaded, worker, fail
     job = new_job(api)
     add_uploaded(job, ["15-1234_1.jpg", "12-5678_1.jpg", "1-2345.jpg"])
     fail_on("media", status=400, match="12-5678")
-    fail_on("media", status=500, match="1-2345")
+    fail_on("media", status=403, match="1-2345")  # refused: surely nothing created (a 5xx may have)
     run_once(api, job, worker)
     api.post(f"/api/jobs/{job}/fix")
     api.patch(f"/api/jobs/{job}/rows/2", json={"include": False})
@@ -1020,7 +1020,7 @@ def test_deleted_rows_move_to_the_run_item_when_the_run_starts(api, login, add_u
     job = new_job(api)
     add_uploaded(job, ["15-1234_1.jpg", "12-5678_1.jpg", "1-2345.jpg"])
     fail_on("media", status=400, match="12-5678")
-    fail_on("media", status=500, match="1-2345")
+    fail_on("media", status=403, match="1-2345")  # refused: surely nothing created (a 5xx may have)
     run_once(api, job, worker)
     api.post(f"/api/jobs/{job}/fix")
     assert api.delete(f"/api/jobs/{job}/rows/3").status_code == 200

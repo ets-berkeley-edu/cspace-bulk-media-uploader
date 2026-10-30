@@ -158,7 +158,7 @@
         <span class="text-caption text-medium-emphasis">Pacific time</span>
       </div>
       <div class="mb-2 text-caption text-medium-emphasis">
-        Run days can’t be more than 3 days apart: a queued job’s saved sign-in lasts 72 hours. An end time may be after midnight.
+        Run days can’t be more than 3 days apart: a queued job’s saved sign-in lasts 96 hours. An end time may be after midnight.
       </div>
       <v-alert
         v-if="settings.error"

@@ -5,6 +5,7 @@ import copy
 import hashlib
 import json
 import logging
+import math
 import secrets
 import time
 import uuid
@@ -26,10 +27,10 @@ from .cspace import CSpaceClient, CSpaceError, Permissions
 from .failures import catalog
 from .reader import Reader, ReaderLimit, ReaderUnavailable, ensure_logged, minimal
 from .filetypes import content_type, unsupported
-from .rows import (CREATOR, PROBLEM_TEXT, apply_edit, can_replace_file, check_rows, clean_filename, collision_checks, created_records,
+from .rows import (CREATOR, PROBLEM_TEXT, apply_edit, can_replace_file, check_rows, check_types, clean_filename, collision_checks, created_records,
                    object_plans, object_step_ran,
                    describe_deletion, edit_problem, is_locked, media_created, new_row, worst)
-from .storage import RowChanged, Storage, draft_expiry, expiry_of, now
+from .storage import JobFull, NotEditing, RowChanged, Storage, draft_expiry, expiry_of, now
 from .thumbnails import MAX_BROWSER_BYTES, TIFF_EXTENSIONS, NotAnImage, make_thumbnail, tiff_thumbnail_step
 from .tenant import Tenant, load_tenant
 
@@ -135,6 +136,12 @@ def create_app(services: Services | None = None) -> FastAPI:
                              "You have made more CollectionSpace lookups in the past hour than the BMU allows for one "
                              "person. Your changes are saved; the checks work again within the hour."}}, status_code=429)
 
+    @app.exception_handler(NotEditing)
+    async def not_editing(request: Request, exc: NotEditing):
+        return JSONResponse({"detail": {"code": "not_editing", "editingBy": "", "message":
+                             "You're no longer editing this draft (someone took it over, or it was submitted), so your "
+                             "change wasn't saved. Everything you changed before was saved."}}, status_code=409)
+
     @app.exception_handler(RowChanged)
     async def row_changed(request: Request, exc: RowChanged):
         return JSONResponse({"detail": f"Document {exc.n} changed while you were working on it (for example its upload "
@@ -181,6 +188,7 @@ class Session(BaseModel):
     perms: dict[str, bool]
     password_token: str
     role: str = "staff"  # "staff" or "intern": the user's BMU role (design: Roles)
+    role_checked_at: float = 0.0  # when the role was last read from CollectionSpace (sign-in, or editor_session)
 
     def client(self, s: Services) -> CSpaceClient:
         return s.client_factory(self.tenant, self.user, self.password(s))
@@ -219,7 +227,7 @@ def current_session(request: Request, s: Services = Depends(svc)) -> Session:
     if request.headers.get("x-bmu-poll") != "1" and t - last > 60:
         s.storage.touch_session(item["PK"], t)
     return Session(key=item["PK"], user=item["user"], tenant=item["tenant"], perms=item["perms"],
-                   password_token=item["password"], role=item["role"])
+                   password_token=item["password"], role=item["role"], role_checked_at=float(item.get("roleCheckedAt") or 0))
 
 
 ROLES = ("staff", "intern")
@@ -262,10 +270,23 @@ def _read_role(tenant: Tenant, client: CSpaceClient) -> str:
     return tenant.role_of(roles.tenant_id, roles.role_names)
 
 
-def editor_session(sess: Session = Depends(current_session)) -> Session:
+ROLE_RECHECK_SECONDS = 300
+NO_ROLE_NOW = ("Your CollectionSpace account no longer has a BMU role, so you can't change drafts. Contact your "
+               "CollectionSpace administrator if you think this is wrong.")
+
+
+def editor_session(sess: Session = Depends(current_session), s: Services = Depends(svc)) -> Session:
     """The signed-in session of a request that creates or changes a draft. Staff and interns both may; which
-    drafts an intern may change is decided per job (see _intern_may)."""
-    return sess
+    drafts an intern may change is decided per job (see _intern_may). Design (Roles: a role removed in
+    CollectionSpace takes effect at once): the role is read again from CollectionSpace when it is more than
+    ROLE_RECHECK_SECONDS old, so a staff member whose role was removed or changed loses staff rights on drafts within
+    minutes, not at the end of the session (staff_session reads it on every request)."""
+    if now() - sess.role_checked_at <= ROLE_RECHECK_SECONDS:
+        return sess
+    role = _role_now(s, sess)
+    if role not in ROLES:
+        raise HTTPException(403, {"code": "no_role", "message": NO_ROLE_NOW})
+    return sess.model_copy(update={"role": role, "role_checked_at": now()})
 
 
 def _role_now(s: Services, sess: Session) -> str:
@@ -282,8 +303,8 @@ def _role_now(s: Services, sess: Session) -> str:
         role = ""
     finally:
         client.close()
-    if role != sess.role and role in ROLES:
-        s.storage.update_session_role(sess.key, role)
+    if role in ROLES:
+        s.storage.update_session_role(sess.key, role, now())
     return role
 
 
@@ -323,6 +344,24 @@ def _intern_may(job: dict, sess: Session, delete: bool = False) -> None:
         raise HTTPException(403, INTERN_DELETE_RAN)
 
 
+def _intern_keeps_a_row(s: "Services", sess: "Session", job: dict, ns: set[int], rows: dict | None = None) -> None:
+    """Design (Roles): an intern can't delete a job that has run, so can't delete its last documents either (that
+    deletes the job)."""
+    if sess.role == "staff" or not (int(job.get("run") or 0) > 0 or job.get("fixFrom")):
+        return
+    current = rows if rows is not None else {r["n"]: r for r in s.storage.get_rows(job["id"])}
+    if set(current) <= ns:
+        raise HTTPException(403, INTERN_DELETE_RAN)
+
+
+def _draft_for_editor(s: "Services", sess: "Session", job_id: str) -> dict:
+    """A draft this session may change and is editing: the job, or 404/403/409."""
+    job = _job_or_404(s, sess, job_id)
+    _intern_may(job, sess)
+    _editable(job, sess)
+    return job
+
+
 def _job_or_404(s: Services, sess: Session, job_id: str) -> dict:
     job = s.storage.get_job(job_id)
     if not job or job["tenant"] != sess.tenant:
@@ -347,9 +386,11 @@ def _draft_days(s: "Services", job: dict | None) -> int:
 
 
 def _saved(s: "Services", sess: "Session", job_id: str) -> None:
-    """A change to a draft was saved: record who saved it and restart its expiry."""
+    """A change to a draft is being saved: record who saved it and restart its expiry. Only while this session is
+    editing it (NotEditing otherwise, before the change is written)."""
     job = s.storage.get_job(job_id)
-    s.storage.mark_saved(job_id, sess.user, sess.key, _draft_days(s, job), fix=bool((job or {}).get("fixFrom")))
+    if not s.storage.mark_saved(job_id, sess.user, sess.key, _draft_days(s, job), fix=bool((job or {}).get("fixFrom"))):
+        raise NotEditing()
 
 
 def _keep_original(s: "Services", job: dict, row: dict) -> None:
@@ -437,7 +478,8 @@ def _after_rows_deleted(s: "Services", sess: "Session", job: dict, rows: list[di
         current = s.storage.get_job(job_id) or job
         at = now()
         s.storage.update_job(job_id, {"deletedRows": (current.get("deletedRows") or []) +
-                                      [{"n": r["n"], "file": r["file"], "by": sess.user, "at": at} for r in rows]})
+                                      [{"n": r["n"], "file": r["file"], "by": sess.user, "at": at} for r in rows]},
+                             expect_status="Draft")
     if not s.storage.get_rows(job_id):  # design: deleting the last document deletes the job, run or not
         fresh = s.storage.get_job(job_id)
         if fresh:
@@ -656,7 +698,7 @@ class OnOff(BaseModel):
 
 
 class RunAt(BaseModel):
-    at: float | None  # epoch seconds, or None to clear the job's own run time
+    at: float | None  # epoch seconds, or None to clear the job's own run time (NaN and infinity: 422 in run_at)
     confirm: bool = False  # go ahead although the new order makes a document fail (see _guard)
 
 
@@ -676,7 +718,14 @@ def _museum_chosen(s: Services, chosen: str | None) -> Tenant:
 def _sign_in(s: Services, response: Response, username: str, password: str, tenant: Tenant) -> dict:
     """Check the username and password against CollectionSpace (Basic Auth), read the account's permissions and
     roles, and start a session with its cookie. Raises 401 for a wrong sign-in, and 403 with the reason for an
-    account the BMU doesn't let in (design: Roles)."""
+    account the BMU doesn't let in (design: Roles). Design (Login and session): CollectionSpace doesn't lock an
+    account after failed sign-ins, so the BMU limits them itself: after login_failures_allowed failed sign-ins
+    for one username at one museum within login_failure_window_seconds, sign-in is refused (429) until the window
+    ends, without asking CollectionSpace, so the BMU can't be used to guess passwords."""
+    who = f"{tenant.key}:{username.strip().lower()}"
+    if s.storage.login_failures(who, s.settings.login_failure_window_seconds) >= s.settings.login_failures_allowed:
+        raise HTTPException(429, {"code": "login_limit", "message":
+                                  "Too many failed sign-ins for this username. Wait a few minutes, then try again."})
     client = s.client_factory(tenant.key, username, password)
     try:
         perms = client.account_permissions()
@@ -689,6 +738,7 @@ def _sign_in(s: Services, response: Response, username: str, password: str, tena
             role = ""
     except CSpaceError as e:
         if e.code in ("auth", "forbidden"):
+            s.storage.note_login_failure(who, s.settings.login_failure_window_seconds)
             raise HTTPException(401, "CollectionSpace didn't accept that username and password.")
         raise _cspace_http(e)
     finally:
@@ -707,7 +757,7 @@ def _sign_in(s: Services, response: Response, username: str, password: str, tena
     expires = now() + s.settings.session_hours * 3600
     s.storage.put_session(key, {
         "user": username, "tenant": tenant.key, "perms": perms.summary, "role": role,
-        "expires": int(expires), "lastSeen": now(),
+        "expires": int(expires), "lastSeen": now(), "roleCheckedAt": now(),
         "password": s.crypto.encrypt("session", password, session_context(username, key, tenant.key)),
     })
     response.set_cookie(s.settings.cookie_name, token, httponly=True, secure=s.settings.cookie_secure, samesite="strict",
@@ -1080,7 +1130,10 @@ def _routes(app: FastAPI) -> None:
             if job.get("fixFrom"):
                 row["addedInFix"] = True  # an abandoned fix removes it again
             new.append(row)
-        rows = s.storage.add_rows(sess.tenant, job_id, new)
+        try:
+            rows = s.storage.add_rows(sess.tenant, job_id, new, session=sess.key, max_rows=s.settings.max_rows)
+        except JobFull:
+            raise HTTPException(413, f"A job holds at most {s.settings.max_rows} documents.")
         return {"rows": [{**r, "uploadForm": _upload_form(s, r["s3Key"], f.size, r["contentType"])}
                          for r, f in zip(rows, body.files)]}
 
@@ -1103,14 +1156,14 @@ def _routes(app: FastAPI) -> None:
 
     @app.post("/api/jobs/{job_id}/rows/{n}/uploaded")
     def uploaded(job_id: str, n: int, background: BackgroundTasks, sess: Session = Depends(editor_session), s: Services = Depends(svc)):
-        _editable(_job_or_404(s, sess, job_id))
+        _draft_for_editor(s, sess, job_id)
         row = s.storage.get_row(job_id, n) or _404()
         head = s.storage.head_object(row["s3Key"])
         if head and head["ContentLength"] == row["size"]:
             row["upload"] = {"s": "done", "version": head.get("VersionId") or ""}
         else:
             row["upload"] = {"s": "failed", "reason": "missing" if not head else "size mismatch"}
-        s.storage.put_row(job_id, row)
+        s.storage.put_row(job_id, row, editing=sess.key)
         result = _recheck_after_change(s, sess, job_id, n)
         if row["upload"]["s"] == "done" and row["file"].rsplit(".", 1)[-1].lower() in TIFF_EXTENSIONS:
             background.add_task(tiff_thumbnail_step, s.storage, sess.tenant, job_id, n)  # the thumbnail step (a Lambda in AWS)
@@ -1120,12 +1173,19 @@ def _routes(app: FastAPI) -> None:
     @app.post("/api/jobs/{job_id}/rows/{n}/thumbnail")
     async def put_thumbnail(job_id: str, n: int, request: Request, sess: Session = Depends(editor_session), s: Services = Depends(svc)):
         """The thumbnail the browser made from the local file (JPEG and PNG). It is decoded and written again
-        here, so nothing but pixels is kept; none is stored for a protected file."""
-        _editable(_job_or_404(s, sess, job_id))
+        here, so nothing but pixels is kept; none is stored for a protected file. The body is read in pieces and
+        refused as soon as it passes MAX_BROWSER_BYTES, so a huge request can't fill the task's memory."""
+        _draft_for_editor(s, sess, job_id)
         row = s.storage.get_row(job_id, n) or _404()
-        body = await request.body()
-        if len(body) > MAX_BROWSER_BYTES:
+        if int(request.headers.get("content-length") or 0) > MAX_BROWSER_BYTES:
             raise HTTPException(413, "The thumbnail is too large.")
+        parts, size = [], 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > MAX_BROWSER_BYTES:
+                raise HTTPException(413, "The thumbnail is too large.")
+            parts.append(chunk)
+        body = b"".join(parts)
         if row.get("protected"):
             return {"stored": False}
         try:
@@ -1189,7 +1249,7 @@ def _routes(app: FastAPI) -> None:
             row["thumbKey"] = None
         row.update(file=name, fileOriginal=name, size=body.size, contentType=content_type(name) or body.type, upload={"s": "pending"},
                    s3Key=s.storage.staging_key(sess.tenant, job_id, n), replacedFor=(row.get("result") or {}).get("run"))
-        s.storage.put_row(job_id, row)
+        s.storage.put_row(job_id, row, editing=sess.key)
         return {"row": row, "uploadForm": _upload_form(s, row["s3Key"], body.size, row["contentType"])}
 
     @app.post("/api/jobs/{job_id}/rows/{n}/retry-upload")
@@ -1217,15 +1277,15 @@ def _routes(app: FastAPI) -> None:
         row["thumbKey"] = None
         row.update(size=body.size, contentType=content_type(name) or body.type or row.get("contentType", ""), upload={"s": "pending"},
                    s3Key=s.storage.staging_key(sess.tenant, job_id, n))
-        s.storage.put_row(job_id, row)
+        s.storage.put_row(job_id, row, editing=sess.key)
         return {"row": row, "uploadForm": _upload_form(s, row["s3Key"], body.size, row["contentType"])}
 
     @app.post("/api/jobs/{job_id}/rows/{n}/upload-failed")
     def upload_failed(job_id: str, n: int, sess: Session = Depends(editor_session), s: Services = Depends(svc)):
-        _editable(_job_or_404(s, sess, job_id))
+        _draft_for_editor(s, sess, job_id)
         row = s.storage.get_row(job_id, n) or _404()
         row["upload"] = {"s": "failed", "reason": "browser"}
-        s.storage.put_row(job_id, row)
+        s.storage.put_row(job_id, row, editing=sess.key)
         return _recheck_after_change(s, sess, job_id, n)
 
     # ---- rows -----------------------------------------------------------------------------------
@@ -1244,7 +1304,7 @@ def _routes(app: FastAPI) -> None:
             raise HTTPException(422, str(e))
         _note_include(row, bool(before.get("include")), sess.user)
         _keep_original(s, job, before)
-        s.storage.put_row(job_id, row)
+        s.storage.put_row(job_id, row, editing=sess.key)
         return _recheck_after_change(s, sess, job_id, n)
 
     @app.post("/api/jobs/{job_id}/rows/bulk")
@@ -1267,6 +1327,10 @@ def _routes(app: FastAPI) -> None:
             raise HTTPException(409, {"message": f"{len(problems)} of the {len(targets)} documents can't take this change "
                                                  f"(document {n}: {PROBLEM_TEXT[p]}) Nothing was changed.",
                                       "rows": list(problems)})
+        try:
+            check_types(body.changes)
+        except ValueError as e:
+            raise HTTPException(422, f"{e} Nothing was changed.")
         originals = copy.deepcopy(targets)
         edited = []
         for r in targets:
@@ -1278,7 +1342,7 @@ def _routes(app: FastAPI) -> None:
             edited.append(r)
         for o in originals:
             _keep_original(s, job, o)
-        s.storage.put_rows_all_or_none(job_id, edited, originals)
+        s.storage.put_rows_all_or_none(job_id, edited, originals, editing=sess.key)
         rc = _recheck(s, sess, job_id, targets={r["n"] for r in edited})
         changed = {r["n"] for r in edited} | {r["n"] for r in rc["changed"]}
         return {"rows": [r for r in rc["rows"] if r["n"] in changed]}
@@ -1289,6 +1353,7 @@ def _routes(app: FastAPI) -> None:
         _editable(job, sess)
         _saved(s, sess, job_id)
         row = s.storage.get_row(job_id, n) or _404()
+        _intern_keeps_a_row(s, sess, job, {n})
         problem = _delete_rows(s, sess, job, [row])[1].get(n)
         if problem == "created":
             raise HTTPException(409, "This document already created records in CollectionSpace, so it can't be deleted. "
@@ -1307,6 +1372,7 @@ def _routes(app: FastAPI) -> None:
         _saved(s, sess, job_id)
         by_n = {r["n"]: r for r in s.storage.get_rows(job_id)}
         asked = list(dict.fromkeys(body.rows))
+        _intern_keeps_a_row(s, sess, job, set(asked), by_n)
         deleted, problems = _delete_rows(s, sess, job, [by_n[n] for n in asked if n in by_n])
         problems.update({n: "missing" for n in asked if n not in by_n})
         skipped = [{"n": n, "file": by_n[n]["file"] if n in by_n else "", "code": problems[n], "reason": DELETE_SKIPPED[problems[n]]}
@@ -1464,6 +1530,8 @@ def _routes(app: FastAPI) -> None:
         if body.at is None:
             return _queue_action(s, sess, job_id, {"runAt": None}, "Run time cleared",
                                  "“{name}” runs at the next scheduled run time again.", body.confirm)
+        if not math.isfinite(body.at):
+            raise HTTPException(422, "Choose a run time.")
         job = _job_or_404(s, sess, job_id)
         t = s.clock()
         # a minute's grace: the browser's date-time field has minutes only, so "now" is already past

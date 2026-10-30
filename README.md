@@ -75,7 +75,7 @@ deployment is built (`deploy/README.md`); what it leaves for later is listed the
 - **Move to Drafts…** on a queued job takes it out of the queue like Edit (its saved sign-in is deleted), but
   leaves it in Drafts in nobody's editor.
 - **Submit job** (only when nothing needs fixing) checks the whole job again with fresh permissions and adds it
-  to the end of the job queue, with the submitter's password saved encrypted for at most 72 hours.
+  to the end of the job queue, with the submitter's password saved encrypted for at most 96 hours.
 - **Job scheduling:** queued jobs start at the tenant's run times (by default every day at 7:00 PM Pacific), one
   job at a time per tenant, in queue order. Staff (see Roles) can change the run days and times, pause and
   resume the queue, reorder it, give a job Run now, its own run time or a hold, and cancel any run. Everyone sees

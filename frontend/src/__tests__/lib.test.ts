@@ -1,6 +1,6 @@
 import {describe, expect, it} from 'vitest'
 import {displayName, isRefName} from '../lib/refname'
-import {formatBytes, mapLimit} from '../lib/files'
+import {CHECKS_AT_ONCE, formatBytes, mapLimit} from '../lib/files'
 import {checksColor, checksText, jobCounts, rowStatus, runName, runNumber} from '../lib/status'
 import {isPreset} from '../lib/presets'
 import type {Row, TenantInfo} from '../types'
@@ -127,5 +127,18 @@ describe('presets (design: Handling per document)', () => {
     expect(isPreset(r({}), t, 'language')).toBe(true)
     expect(isPreset(r({handling: 'slide'}), t, 'language')).toBe(false)
     expect(isPreset(r({handling: 'slide', language: [spa]}), t, 'language')).toBe(true)
+  })
+})
+
+describe('checks at once (review 6.5)', () => {
+  it('never runs more than CHECKS_AT_ONCE of a tab\'s checks together', async () => {
+    let running = 0
+    let most = 0
+    await mapLimit(Array.from({length: 12}, (_, i) => i), CHECKS_AT_ONCE, async () => {
+      most = Math.max(most, ++running)
+      await new Promise((r) => setTimeout(r, 1))
+      running--
+    })
+    expect(most).toBe(CHECKS_AT_ONCE)
   })
 })

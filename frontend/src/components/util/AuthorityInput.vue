@@ -122,6 +122,8 @@ const onInput = () => {
   isOpen.value = true
   active.value = -1
   clearTimeout(timer)
+  // Every keystroke makes the answers to earlier searches stale, also those already on their way
+  const mine = ++seq
   const q = text.value.trim()
   if (q.length < minLength.value) {
     terms.value = []
@@ -130,7 +132,6 @@ const onInput = () => {
   }
   message.value = 'Searching…'
   timer = setTimeout(async () => {
-    const mine = ++seq
     try {
       const r = await api.terms(props.field, q)
       if (mine !== seq) {

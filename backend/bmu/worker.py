@@ -9,6 +9,7 @@ Run: python -m bmu.worker
 from __future__ import annotations
 
 import logging
+import signal
 import socket
 import threading
 import time
@@ -24,7 +25,7 @@ from .crypto import Crypto, job_context, make_crypto
 from .cspace import CSpaceClient, CSpaceError, CSpaceUnavailable
 from .cspace.client import display_name
 from .cspace.payloads import group_xml, media_xml, object_xml, relation_xml
-from .failures import JOB_LEVEL, classify
+from .failures import JOB_LEVEL, classify, maybe_sent
 from .filetypes import HEAD_BYTES, mismatch
 from .rows import (AUTHORITY_FIELDS, AUTHORITY_LABEL, authority_read_checks, created_records, describe_deletion,
                    language_map, media_created, object_step_ran, permission_checks, use_current, value_findings)
@@ -41,9 +42,13 @@ INLINE_AUDIT_ROWS = 100  # a run's per-row audit detail goes in the entry up to 
 RECORD_TYPE = {"media": "Media", "upload": "Blob", "createObject": "CollectionObject", "findOrCreateObject": "CollectionObject",
                "relMediaObject": "Relation",
                "relObjectMedia": "Relation", "addToGroup": "Relation", "group": "Group"}
-STOPPED_JOB = {"unavailable", "worker_stopped", "unknown"} | JOB_LEVEL  # these end the job as Failed
+STOPPED_JOB = {"unavailable", "worker_stopped", "unknown", "not_staff"} | JOB_LEVEL  # these end the job as Failed
 LINK_STEPS = OBJECT_STEPS + ("relMediaObject", "relObjectMedia", "addToGroup")  # what "Stop linking" skips
 FINISHED = ("done", "not needed")
+# Steps that create a record. Each is marked "sending" just before its request; a rerun of a step left "sending" (the
+# worker stopped) or failed with maybeSent (a 5xx or no answer) looks for the record that request may have saved
+# before sending it again (design: Job execution, "a create whose answer was lost").
+CREATE_STEPS = ("media", "upload", "createObject", "findOrCreateObject", "relMediaObject", "relObjectMedia")
 # Design (Job execution): a row's values are checked against CollectionSpace just before its records are created,
 # from lookups at most this old; each distinct term is read about once a minute however many rows use it.
 VALUE_CHECK_SECONDS = 60
@@ -54,6 +59,17 @@ class JobStop(Exception):
         super().__init__(detail)
         self.code = code
         self.detail = detail
+
+
+class _Fenced(Exception):
+    """The run this worker is on is no longer the job's run: the heartbeat check stopped it (worker_stopped) and it
+    may have been rescheduled since. The worker stops at once and writes nothing more to the job."""
+
+
+def uncertain(st: dict | None) -> bool:
+    """A create step whose request may have reached CollectionSpace without its CSID being recorded."""
+    st = st or {}
+    return st.get("s") == "sending" or bool(st.get("maybeSent"))
 
 
 def _step(row: dict, name: str) -> dict:
@@ -125,15 +141,19 @@ def row_counts(rows: list[dict]) -> dict:
 class _Heartbeat(threading.Thread):
     """Renews the running job's heartbeat and the tenant's run lock, even while one long upload runs."""
 
-    def __init__(self, worker: "Worker", job_id: str):
+    def __init__(self, worker: "Worker", job_id: str, run_no: int):
         super().__init__(daemon=True, name=f"heartbeat-{job_id}")
-        self.w, self.job_id = worker, job_id
+        self.w, self.job_id, self.run_no = worker, job_id, run_no
         self.halt = threading.Event()
 
     def run(self) -> None:
         while not self.halt.wait(self.w.s.heartbeat_seconds):
             try:
-                self.w.storage.heartbeat(self.job_id)
+                if not self.w.storage.heartbeat(self.job_id, self.run_no):
+                    # the heartbeat check already stopped this run: tell the worker, and stop holding the lock
+                    log.warning("job %s run %s was stopped by the heartbeat check; its worker stops", self.job_id, self.run_no)
+                    self.w.fenced.set()
+                    return
                 self.w.storage.renew_lock(self.w.tenant.key, self.w.owner, self.w.s.worker_lock_seconds)
             except Exception:  # a missed beat is harmless; several in a row let the sweeper stop the job
                 log.exception("heartbeat failed for job %s", self.job_id)
@@ -166,17 +186,47 @@ class Worker:
         self._object_found: dict[int, list[str]] = {}  # the check's Object search, per row, for its Object step
         self._job_name = ""
         self._where = ""  # where the running job is, for the detail of an unexpected error
+        self.fenced = threading.Event()  # set by the heartbeat when the running job's run was stopped by the sweep
+        self.stopping = threading.Event()  # set on SIGTERM (main): finish the step in progress, then end the run
+        self._client: CSpaceClient | None = None  # the running job's client, so stop(abort=True) can close it
 
     # ---- scheduling ------------------------------------------------------------------------
     def run_forever(self) -> None:
         log.info("worker %s started for tenant %s", self.owner, self.tenant.key)
-        while True:
+        while not self.stopping.is_set():
             try:
                 if not self.tick():
-                    time.sleep(self.s.worker_poll_seconds)
+                    self.stopping.wait(self.s.worker_poll_seconds)
             except Exception:  # keep the worker alive; a stuck job is stopped by the heartbeat check
                 log.exception("worker loop error")
-                time.sleep(self.s.worker_poll_seconds)
+                self.stopping.wait(self.s.worker_poll_seconds)
+        log.info("worker %s for tenant %s stopped", self.owner, self.tenant.key)
+
+    def stop(self, abort: bool = False) -> None:
+        """Design (Job execution, Stopping the worker): on SIGTERM the running job ends after the step in progress,
+        as worker_stopped, through the normal end of a run, so its sign-in is deleted and the run lock released at
+        once. abort: close the job's connection to CollectionSpace too, for a step (a long upload) still running
+        when the container's stop timeout is near; the step fails with no answer and the rerun checks what it
+        saved."""
+        self.stopping.set()
+        if abort and self._client is not None:
+            try:
+                self._client.close()
+            except Exception:
+                log.warning("could not close the running job's connection", exc_info=True)
+
+    def _check_stop(self, job_id: str, run_no: int, where: str) -> None:
+        """Between steps: stop for SIGTERM, or (fenced) when the run was stopped by the heartbeat check."""
+        if self.fenced.is_set():
+            raise _Fenced(job_id)
+        if self.stopping.is_set():
+            raise JobStop("worker_stopped", f"The worker was stopped (SIGTERM, e.g. a deployment) {where}")
+
+    def _fenced_update(self, job_id: str, run_no: int, fields: dict) -> None:
+        """A write to the running job, only while it is Running this run (the fencing token)."""
+        if not self.storage.update_job(job_id, fields, fence_run=run_no):
+            self.fenced.set()
+            raise _Fenced(job_id)
 
     def sweep(self) -> None:
         """The periodic checks: sign-ins that expired in the queue or while running, expired drafts and fixes,
@@ -411,7 +461,7 @@ class Worker:
         """End the run of a job in Stopping as worker_stopped; repeated by the sweep if it was interrupted."""
         self.storage.delete_credential(j["id"])
         self._finish(j["id"], int(j.get("run", 0)), "worker_stopped", j.get("scheduledBy") or "BMU", [],
-                     j.get("codeDetail") or "No heartbeat")
+                     j.get("codeDetail") or "No heartbeat", expect_status="Stopping")
 
     def maybe_sweep(self) -> None:
         """The periodic checks, at most once a minute. Also called between documents during a run, so a long
@@ -452,7 +502,7 @@ class Worker:
         job = self.storage.get_job(job_id)
         cred = self.storage.get_credential(job_id)
         if not cred:
-            # The 72-hour sign-in limit passed while waiting (the store's TTL removed it first): back to Drafts.
+            # The 96-hour sign-in limit passed while waiting (the store's TTL removed it first): back to Drafts.
             self._sign_in_expired(job)
             return
         run_no = int(job.get("run", 0)) + 1
@@ -466,20 +516,28 @@ class Worker:
             if not self.storage.get_credential(job_id) and (self.storage.get_job(job_id) or {}).get("status") == "Queued":
                 self._sign_in_expired(job)
             return
-        beat = _Heartbeat(self, job_id)
+        self.fenced.clear()
+        beat = _Heartbeat(self, job_id, run_no)
         beat.start()
         client: CSpaceClient | None = None
         code, code_detail = "", ""
         created: list[dict] = []
+        fenced = False
         self._where = "while starting the run"
         try:
             self._start_run(job, run_no, t)
             pw = self.crypto.decrypt("job", cred["token"], job_context(cred["user"], job_id, self.tenant.key))
             client = self.client_factory(self.tenant.key, cred["user"], pw)
             del pw
+            self._client = client
             # Design: five failed requests in a row stop the job; the client sends nothing after the fifth
             client.max_failures_in_a_row = MAX_CONSECUTIVE_SERVER_ERRORS
+            self._where = "while reading the submitter's roles"
+            self._check_staff(client, cred["user"])
             code = self._run_rows(job_id, client, run_no, created)
+        except _Fenced:
+            fenced = True
+            log.warning("job %s: run %s was stopped by the heartbeat check; this worker stops without writing to it", job_id, run_no)
         except JobStop as e:
             code, code_detail = e.code, e.detail
             log.warning("job %s stopped: %s", job_id, e.detail)
@@ -492,11 +550,41 @@ class Worker:
             code, code_detail = "unknown", _unexpected(e, self._where)
         finally:
             beat.halt.set()
-            # Never keep the password after the run.
-            self.storage.delete_credential(job_id)
+            self._client = None
+            # Never keep the password after the run. A run the heartbeat check stopped had its sign-in deleted
+            # then; the one stored now (if any) belongs to the job's next submission, so it is left alone.
+            if not fenced and self._still_ours(job_id, run_no):
+                self.storage.delete_credential(job_id)
             if client:
                 client.close()
-        self._finish(job_id, run_no, code, cred["user"], created, code_detail)
+        if not fenced:
+            self._finish(job_id, run_no, code, cred["user"], created, code_detail, fence_run=run_no)
+
+    def _still_ours(self, job_id: str, run_no: int) -> bool:
+        """False once the job was stopped by the heartbeat check and submitted again (Queued, or Running a later run)."""
+        j = self.storage.get_job(job_id) or {}
+        return not (j.get("status") == "Queued" or (j.get("status") == "Running" and int(j.get("run", 0)) != run_no))
+
+    def _check_staff(self, client: CSpaceClient, user: str) -> None:
+        """Design (Roles): only staff submit jobs, and a role removed in CollectionSpace takes effect at once, so a
+        job waiting in the queue whose submitter has lost BMU_Staff doesn't run (not_staff); a staff member can
+        reschedule it with their own sign-in. Read once per run, with the submitter's sign-in."""
+        try:
+            roles = client.account_roles()
+        except CSpaceUnavailable as e:
+            raise JobStop("unavailable", _unavailable_before(client)) from e
+        except CSpaceError as e:
+            code, detail = classify("values", e)
+            if code in JOB_LEVEL:
+                raise JobStop(code, f"Reading the roles of the account that submitted the job: {detail}") from e
+            if e.status != 403:  # refused: no role; anything else: the role couldn't be confirmed, so nothing runs
+                raise JobStop("unavailable", f"Reading the roles of the account that submitted the job: {detail}") from e
+            role = ""
+        else:
+            role = self.tenant.role_of(roles.tenant_id, roles.role_names)
+        if role != "staff":
+            raise JobStop("not_staff", f"{user} doesn't have the {' or '.join(self.tenant.staff_roles)} role in CollectionSpace now"
+                                       + (f" (role: {role})" if role else ""))
 
     def _start_run(self, job: dict, run_no: int, started: float) -> None:
         """The run item: who scheduled it and when, and the documents excluded or deleted since the last run.
@@ -522,16 +610,21 @@ class Worker:
                 r.pop("addedInFix", None)
                 self.storage.put_row(job_id, r, guard=False)
 
-    def _finish(self, job_id: str, run_no: int, code: str, user: str, created: list[dict], code_detail: str = "") -> None:
+    def _finish(self, job_id: str, run_no: int, code: str, user: str, created: list[dict], code_detail: str = "",
+                fence_run: int | None = None, expect_status: str | None = None) -> None:
         """End a run however it ended: settle the rows, complete the run item and write its audit entry (one
         transaction), then set the job's status and counts. A Completed job gets its 30-day expiry. code_detail:
         the technical detail of a job-level code (design: "technical detail shown on request"), kept on the job and
-        the run item."""
+        the run item. fence_run (the worker ending its own run) or expect_status (the sweep ending a Stopping job):
+        the state the job must still be in, so a stopped worker never overwrites a job that moved on."""
         rows = self.storage.get_rows(job_id)
         job_before = self.storage.get_job(job_id) or {}
+        if fence_run is not None and (job_before.get("status") != "Running" or int(job_before.get("run", 0)) != fence_run):
+            log.warning("job %s: run %s was already ended elsewhere; not finishing it again", job_id, fence_run)
+            return
         group = job_before.get("groupStep") or {}
         if not code and group.get("s") == "failed" and group.get("run") == run_no:
-            code = "group_failed"  # the job needs attention; the rows' other steps still ran
+            code = group.get("code") or "group_failed"  # the job needs attention; the rows' other steps still ran
             code_detail = f"Creating the group: {group.get('detail') or 'failed'}"
         for r in rows:
             res = r.get("result")
@@ -587,11 +680,13 @@ class Worker:
                                     + (f" · cancelled by {cancelled_by}" if cancel else ""),
                                     created if "rows" in where else [], run=run_no, jobName=job.get("name", ""), counts=counts,
                                     codeDetail=code_detail, **where)
-        self.storage.update_job(job_id, {
+        if not self.storage.update_job(job_id, {
             "status": status, "code": code, "codeDetail": code_detail, "finishedAt": t, "progress": _progress(rows), "counts": counts,
             "currentRow": None, "currentFile": "", "currentStep": "", "currentUpload": None, "cancelRequested": None, "cancelledBy": cancelled_by,
             "runBy": job.get("scheduledBy") or user,
-            "expiresAt": t + self.s.completed_days * 86400 if status == "Completed" else None})
+            "expiresAt": t + self.s.completed_days * 86400 if status == "Completed" else None},
+                expect_status=expect_status, fence_run=fence_run):
+            log.warning("job %s: run %s was ended elsewhere while it was being finished", job_id, run_no)
 
     def _run_rows(self, job_id: str, client: CSpaceClient, run_no: int, created: list[dict]) -> str:
         rows = self.storage.get_rows(job_id)
@@ -606,20 +701,21 @@ class Worker:
             if not row.get("include") or (row.get("result") or {}).get("state") == "Done":
                 continue
             self.maybe_sweep()
+            self._check_stop(job_id, run_no, f"before document {row['n']}")
             job = self.storage.get_job(job_id)
             if job.get("cancelRequested"):
                 return "cancelled"
             self._where = f"at document {row['n']}"
             self.storage.acquire_lock(self.tenant.key, self.owner, self.s.worker_lock_seconds)
-            self.storage.update_job(job_id, {"currentRow": row["n"], "currentFile": row["file"], "currentStep": "",
-                                             "currentUpload": None, "heartbeatAt": now()})
+            self._fenced_update(job_id, run_no, {"currentRow": row["n"], "currentFile": row["file"], "currentStep": "",
+                                                 "currentUpload": None, "heartbeatAt": now()})
             self._progress_job = job_id
             err = self.run_row(client, job_id, row, run_no, created)
             if err in JOB_LEVEL:
                 e = (row.get("result") or {}).get("error") or {}
                 raise JobStop(err, f"Document {row['n']}, step {e.get('step', '?')}: {e.get('detail') or err}")
             self._where = f"at document {row['n']}, after its steps"
-            self.storage.update_job(job_id, {"progress": _progress(self.storage.get_rows(job_id))})
+            self._fenced_update(job_id, run_no, {"progress": _progress(self.storage.get_rows(job_id))})
         self._where = "while finishing the run"
         return ""
 
@@ -667,26 +763,41 @@ class Worker:
                 st.update(s="skipped", after=blocked)
                 self.storage.put_row(job_id, row, guard=False)
                 continue
+            # Fenced (design: Job execution): every step starts with a write that holds only while the job is Running
+            # this run, so a worker whose run the heartbeat check stopped creates nothing more.
+            self._check_stop(job_id, run_no, f"at document {row['n']}, before step {name}")
             # Design (The job queue): the queue shows the step in progress, and while the file is sent its progress
-            self.storage.update_job(job_id, {"currentStep": name, "currentUpload": None})
+            self._fenced_update(job_id, run_no, {"currentStep": name, "currentUpload": None})
+            before = dict(st)
+            unsure = uncertain(before)
             try:
                 if name == "values":
                     self._check_row(client, job, row)
                     st.clear()
                     st.update(s="done", run=run_no)
                     continue
-                if name == "media":
-                    self._notice_new_duplicates(client, row)
+                prior = before.get("prior")  # the Media records with this ID before the first create was sent
+                if name == "media" and not unsure:
+                    prior = self._notice_new_duplicates(client, row)
                 if name == "addToGroup":
                     self._add_to_group(client, job_id, row, st, run_no, created)
                     continue
-                csid, found = self._do(client, name, row)
+                if name in CREATE_STEPS:
+                    # recorded before the request: if the worker stops before the answer is recorded, the rerun knows
+                    # to look for what the request may have saved (and the row can't be deleted meanwhile)
+                    st.clear()
+                    st.update(s="sending", run=run_no, **({"maybeSent": True} if unsure else {}),
+                              **({"prior": prior} if name == "media" and prior is not None else {}))
+                    self.storage.put_row(job_id, row, guard=False)
+                csid, found, recovered = self._do(client, name, row, before)
                 st.clear()
                 st.update(s="done", csid=csid, run=run_no)
                 if name == "media":
                     self._job_media.add(csid)
                 if found:
                     st["found"] = True  # an existing record, not one this job created
+                if recovered:
+                    st["recovered"] = True  # saved by an earlier request whose answer was lost, not created again
                 if name != "findObject" and not found and csid:
                     self._record(created, job_id, run_no, {"row": row["n"], "file": row["file"], "step": name, "csid": csid})
                 if name == "upload":
@@ -694,11 +805,18 @@ class Worker:
             except CSpaceUnavailable as e:
                 # the fifth failure in a row came from an earlier request: this one was never sent, so the step
                 # stays as it was, and the job stops (_finish settles the row)
+                st.clear()
+                st.update(before)
                 raise JobStop("unavailable", _unavailable(client, row, name)) from e
             except (CSpaceError, _RowError) as e:
                 code, detail = (e.code, e.detail) if isinstance(e, _RowError) else classify(name, e)
+                prior = st.get("prior")
                 st.clear()
                 st.update(s="failed", code=code, detail=detail, run=run_no)
+                if name in CREATE_STEPS and (unsure or code == "create_uncertain" or (isinstance(e, CSpaceError) and maybe_sent(e))):
+                    st["maybeSent"] = True  # the next run looks for what this (or an earlier) request saved
+                    if prior is not None:
+                        st["prior"] = prior
                 if name in OBJECT_STEPS:
                     st["obj"] = row.get("obj", "")  # the object number that failed, so the editor knows if it changed
                 if not first_error:
@@ -720,7 +838,7 @@ class Worker:
                             if failed else None)
             if not failed and (res["steps"].get("addToGroup") or {}).get("after") == "group":
                 g = (self.storage.get_job(job_id) or {}).get("groupStep") or {}
-                res["error"] = {"code": "group_failed", "detail": g.get("detail", ""), "step": "addToGroup"}
+                res["error"] = {"code": g.get("code") or "group_failed", "detail": g.get("detail", ""), "step": "addToGroup"}
         self.storage.put_row(job_id, row, guard=False)
         return first_error
 
@@ -733,26 +851,48 @@ class Worker:
     # ---- the job's Group (design: Groups; The Group step) ---------------------------------------------
     def _ensure_group(self, client: CSpaceClient, job_id: str, run_no: int, created: list[dict]) -> str | None:
         """The job's Group CSID, creating the Group the first time a row is ready to join it. Reruns reuse
-        the recorded CSID and never create a second Group. Returns None if creating it failed in this run."""
+        the recorded CSID and never create a second Group. Returns None if creating it failed in this run.
+        Like a row's create steps, the Group is marked "sending" before its request; a rerun after a create that was
+        left "sending" or got a 5xx or no answer (maybeSent) first looks for a Group with the job's title and uses
+        the one it finds (design: Groups; Job execution)."""
         job = self.storage.get_job(job_id) or {}
         g = job.get("groupStep") or {}
         if g.get("s") == "done":
             return g["csid"]
         if g.get("s") == "failed" and g.get("run") == run_no:
             return None
+        title = job.get("groupTitle") or ""
+        unsure = uncertain(g)
         try:
-            csid = client.create_group(group_xml(job.get("groupTitle") or ""))
+            if unsure:
+                found = client.find_groups(title)
+                if len(found) == 1:
+                    self._fenced_update(job_id, run_no, {"groupStep": {"s": "done", "csid": found[0], "run": run_no, "recovered": True}})
+                    self._record(created, job_id, run_no, {"row": 0, "file": "", "step": "group", "csid": found[0]})
+                    return found[0]
+                if found:
+                    self._fenced_update(job_id, run_no, {"groupStep": {
+                        "s": "failed", "code": "group_failed", "maybeSent": True, "run": run_no,
+                        "detail": f"An earlier attempt may have created the group, and GET groups?as=title = \"{title}\" found "
+                                  f"{len(found)} groups ({', '.join(found[:5])}); have the extra ones deleted so one remains"}})
+                    return None
+            self._fenced_update(job_id, run_no, {"groupStep": {"s": "sending", "run": run_no, **({"maybeSent": True} if unsure else {})}})
+            csid = client.create_group(group_xml(title))
         except CSpaceUnavailable:
-            raise  # nothing was sent: run_row stops the job
+            # nothing was sent: run_row stops the job; the step stays as it was
+            self.storage.update_job(job_id, {"groupStep": g or None}, fence_run=run_no)
+            raise
         except CSpaceError as e:
             code, detail = classify("group", e)
             if code in JOB_LEVEL:
                 # CollectionSpace refused the sign-in, so nothing was created: the row's addToGroup step fails with
                 # this code and run_row settles the row and stops the job, as for any other step (not interrupted)
+                self.storage.update_job(job_id, {"groupStep": g or None}, fence_run=run_no)
                 raise _RowError(code, detail) from e
-            self.storage.update_job(job_id, {"groupStep": {"s": "failed", "code": "group_failed", "detail": detail, "run": run_no}})
+            self._fenced_update(job_id, run_no, {"groupStep": {"s": "failed", "code": code, "detail": detail, "run": run_no,
+                                                               **({"maybeSent": True} if unsure or maybe_sent(e) else {})}})
             return None
-        self.storage.update_job(job_id, {"groupStep": {"s": "done", "csid": csid, "run": run_no}})
+        self._fenced_update(job_id, run_no, {"groupStep": {"s": "done", "csid": csid, "run": run_no}})
         self._record(created, job_id, run_no, {"row": 0, "file": "", "step": "group", "csid": csid})
         return csid
 
@@ -783,24 +923,27 @@ class Worker:
         st.update(s="done", csid=pair[0], csid2=pair[1], run=run_no)
         self.storage.update_job(job_id, {"groupMembers": {**members, obj: {"n": row["n"], "csid": pair[0]}}})
 
-    def _notice_new_duplicates(self, client: CSpaceClient, row: dict) -> None:
+    def _notice_new_duplicates(self, client: CSpaceClient, row: dict) -> list[str] | None:
         """Design: duplicate_at_run. A Media record with the same identification number that appeared after
-        scheduling is noted on the row; the row still runs, as it would have after the editor's warning."""
+        scheduling is noted on the row; the row still runs, as it would have after the editor's warning.
+        Returns the Media records found (None if the search wasn't made), kept with the step so a rerun after a
+        lost answer knows which records existed before its create (Worker._do)."""
         idn = row.get("idnum") or ""
         if not idn:
-            return
+            return None
         try:
             existing = client.find_media(idn)
         except CSpaceUnavailable:
             raise  # not sent: the job stops (run_row)
         except CSpaceError:
-            return  # only a notice; the create itself reports real failures
+            return None  # only a notice; the create itself reports real failures
         known = set(((row.get("lookups") or {}).get("media") or {}).get("csids") or [])
         known |= self._job_media  # Media records this job created aren't news: the editor warned about IDs shared in the job
         new = [c for c in existing if c not in known]
         if new:
             row["result"].setdefault("notices", []).append(
                 {"code": "duplicate_at_run", "detail": f"GET media?as=identificationNumber = \"{idn}\" found {', '.join(new[:5])}"})
+        return list(existing)
 
     def _report_upload(self, sent: int, total: int) -> None:
         """Design (The job queue): the bytes of the document in progress sent to CollectionSpace so far, for the
@@ -880,6 +1023,14 @@ class Worker:
         found = client.find_objects(num)
         row.setdefault("lookups", {})["object"] = {"value": num, "csids": list(found), "at": int(now())}
         search = f"GET collectionobjects?as=objectNumber = \"{num}\" found {len(found)} object{'' if len(found) == 1 else 's'}"
+        # An earlier run's create whose answer was lost: the Object found may be the one it saved (the Object step
+        # takes it then), so it isn't "already exists"
+        if uncertain(((row.get("result") or {}).get("steps") or {}).get(h.object_step)) and h.object in ("create", "either"):
+            if len(found) > 1:
+                raise _RowError("create_uncertain", f"An earlier attempt may have created the Object, and {search}")
+            if found:
+                self._object_found[row["n"]] = list(found)
+                return
         if h.object == "create" and found:
             raise _RowError("object_exists", search)
         if h.object != "create" and len(found) > 1:
@@ -946,11 +1097,25 @@ class Worker:
         except ClientError:
             log.warning("could not delete staged file %s", key)
 
-    def _do(self, client: CSpaceClient, name: str, row: dict) -> tuple[str, bool]:
-        """Run one step. Returns (CSID, found): found is True when an existing record was used."""
+    def _do(self, client: CSpaceClient, name: str, row: dict, before: dict | None = None) -> tuple[str, bool, bool]:
+        """Run one step. Returns (CSID, found, recovered): found is True when an existing record was used;
+        recovered when the record is one an earlier request of this step saved without its answer arriving.
+        before: the step as it was before this run marked it "sending" (see uncertain)."""
         steps = row["result"]["steps"]
+        unsure = uncertain(before)
         if name == "media":
-            return client.create_media(media_xml(self.tenant, row)), False
+            if unsure:
+                # Design (Job execution): a Media record with this identification number and title that this job
+                # didn't know of before is the one the earlier request saved
+                known = set((before or {}).get("prior") or []) | self._job_media
+                found = [c for c in client.find_media_like(row.get("idnum") or "", row.get("file") or "") if c not in known]
+                if len(found) == 1:
+                    return found[0], False, True
+                if found:
+                    raise _RowError("create_uncertain", f"An earlier attempt may have created the Media record, and the search "
+                                                        f"for identification number “{row.get('idnum') or ''}” and title "
+                                                        f"“{row.get('file') or ''}” found {len(found)}: {', '.join(found[:5])}")
+            return client.create_media(media_xml(self.tenant, row)), False, False
         if name in OBJECT_STEPS:
             # Design (Handling per document): "Find object" needs exactly one existing object; "Create object"
             # needs none to exist (an object added since the job was checked fails the row, object_exists);
@@ -963,20 +1128,33 @@ class Worker:
             # the editor's checks reuse this search, so a fix sees what the run saw
             row.setdefault("lookups", {})["object"] = {"value": row["obj"], "csids": list(found), "at": int(now())}
             search = f"GET collectionobjects?as=objectNumber = \"{row['obj']}\" found {len(found)} object{'' if len(found) == 1 else 's'}"
+            if unsure and name != "findObject":
+                # an earlier create of this step may have saved the Object without its answer arriving: the one
+                # Object with this number is taken as that one, recorded as created by this job
+                if len(found) == 1:
+                    return found[0], False, True
+                if found:
+                    raise _RowError("create_uncertain", f"An earlier attempt may have created the Object, and {search}")
             if name == "createObject":
                 if found:
                     raise _RowError("object_exists", search)
-                return client.create_object(object_xml(row["obj"])), False
+                return client.create_object(object_xml(row["obj"])), False, False
             if len(found) > 1:
                 raise _RowError("object_ambiguous", search)
             if found:
-                return found[0], True
+                return found[0], True, False
             if name == "findObject":
                 raise _RowError("object_gone", search)
-            return client.create_object(object_xml(row["obj"])), False
+            return client.create_object(object_xml(row["obj"])), False, False
         media = steps["media"]["csid"]
         if name == "upload":
-            # An upload retry targets the existing Media record.
+            # An upload retry targets the existing Media record. Design (Job execution): PUT media/{csid}/blob again
+            # would create a second Blob and repoint the Media record (an update, which the BMU never makes), so a
+            # retry first asks whether the earlier request attached the file after all.
+            if (before or {}).get("s", "not run") != "not run":
+                blob = client.media_blob_csid(media)
+                if blob:
+                    return blob, False, True
             version = (row.get("upload") or {}).get("version") or None
             try:
                 wrong = mismatch(row["file"], self.storage.read_head(row["s3Key"], version, HEAD_BYTES))
@@ -993,7 +1171,7 @@ class Worker:
                 blob = client.upload_file(media, row["file"], sent, row.get("contentType") or "application/octet-stream")
             finally:
                 body.close()
-            return blob or client.media_blob_csid(media), False
+            return blob or client.media_blob_csid(media), False, False
         obj = object_csid(steps)
         if name == "relMediaObject":
             subj, subj_type, tgt, tgt_type = media, "Media", obj, "CollectionObject"
@@ -1003,8 +1181,8 @@ class Worker:
             raise ValueError(name)
         existing = client.find_relations(subj, tgt)  # never create a duplicate relation on a rerun
         if existing:
-            return existing[0], False
-        return client.create_relation(relation_xml(subj, subj_type, tgt, tgt_type)), False
+            return existing[0], False, unsure
+        return client.create_relation(relation_xml(subj, subj_type, tgt, tgt_type)), False, False
 
 
 def object_csid(steps: dict) -> str:
@@ -1138,14 +1316,36 @@ def main() -> None:
     def factory(tenant: str, user: str, password: str) -> CSpaceClient:
         return CSpaceClient(servers[tenant], user, password, timeout=s.cspace_timeout_seconds, agent="bmu-worker")
 
-    threads = []
+    workers, threads = [], []
     for i, key in enumerate(servers):
         w = Worker(s, Storage(s), make_crypto(s), factory, tenant=load_tenant(key), sweep_sessions=i == 0)
+        workers.append(w)
         threads.append(threading.Thread(target=w.run_forever, name=f"worker-{key}", daemon=True))
+    stop_at: list[float] = []
+
+    def on_sigterm(signum, _frame) -> None:
+        # Design (Job execution, Stopping the worker): ECS sends SIGTERM on a deployment or scale-in and SIGKILL
+        # stop_timeout seconds later. Each running job ends after its step in progress, through the normal end
+        # of a run (its sign-in deleted, the lock released); a step still running near the limit is cut off.
+        log.warning("signal %s: stopping after the steps in progress", signum)
+        if not stop_at:
+            stop_at.append(time.monotonic() + max(s.worker_stop_grace_seconds, 0))
+        for w in workers:
+            w.stop()
+
+    signal.signal(signal.SIGTERM, on_sigterm)
+    signal.signal(signal.SIGINT, on_sigterm)
     for t in threads:
         t.start()
-    for t in threads:
-        t.join()
+    aborted = False
+    while any(t.is_alive() for t in threads):  # wait in short slices, so the signal handler runs
+        for t in threads:
+            t.join(1)
+        if stop_at and not aborted and time.monotonic() > stop_at[0]:
+            aborted = True
+            log.warning("steps still running %ss after SIGTERM: closing their connections", s.worker_stop_grace_seconds)
+            for w in workers:
+                w.stop(abort=True)
 
 
 if __name__ == "__main__":

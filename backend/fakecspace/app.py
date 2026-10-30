@@ -286,11 +286,14 @@ def accountroles(request: Request):
                 f"<userId>{u}</userId><tenantId>{TENANT_ID}</tenantId></account>{roles}</ns2:account_role>")
 
 
-def _search(request: Request, table: dict, field: str, service: str):
+def _search(request: Request, table: dict, fields: str | tuple[str, ...], service: str):
+    """An advanced search (as=<part>:<field> = "<value>") on one of fields; list items carry every field."""
     if (d := _check(request, service, "R")):
         return d
+    fields = (fields,) if isinstance(fields, str) else fields
     m = _AS.match(request.query_params.get("as", ""))
-    value = m.group(2).replace('\\"', '"') if m and m.group(1) == field else None
+    field = m.group(1) if m and m.group(1) in fields else fields[0]
+    value = m.group(2).replace('\\"', '"') if m and m.group(1) in fields else None
     step = "objectSearch" if service == "collectionobjects" else "mediaSearch"
     if (rule := _rule(request, step, [value or ""])) is not None:
         effect = rule.get("effect")
@@ -302,7 +305,7 @@ def _search(request: Request, table: dict, field: str, service: str):
         return Response(status_code=rule["status"])
     store.searches.append((service, value))
     items = "".join(
-        f"<list-item><csid>{c}</csid><{field}>{escape(rec[field])}</{field}></list-item>"
+        f"<list-item><csid>{c}</csid>" + "".join(f"<{f}>{escape(rec.get(f) or '')}</{f}>" for f in fields) + "</list-item>"
         for c, rec in table.items() if not rec.get("deleted") and (value is None or rec.get(field) == value)
     )
     return _xml(f'<ns2:abstract-common-list xmlns:ns2="http://collectionspace.org/services/jaxb">{items}</ns2:abstract-common-list>')
@@ -315,7 +318,12 @@ def search_objects(request: Request):
 
 @app.get("/cspace-services/media")
 def search_media(request: Request):
-    return _search(request, store.media, "identificationNumber", "media")
+    return _search(request, store.media, ("identificationNumber", "title"), "media")
+
+
+@app.get("/cspace-services/groups")
+def search_groups(request: Request):
+    return _search(request, store.groups, ("title",), "groups")
 
 
 # A few terms of the languages vocabulary (the real one is much longer).
@@ -451,7 +459,7 @@ async def create_media(request: Request):
         return f
     store.media[csid] = {"identificationNumber": _field(body, "identificationNumber"), "title": _field(body, "title"),
                          "blobCsid": "", "xml": body.decode()}
-    return _created(request, "media", csid)
+    return _lost("media") or _created(request, "media", csid)
 
 
 @app.put("/cspace-services/media/{csid}/blob")
@@ -475,7 +483,7 @@ async def media_blob(csid: str, request: Request, file: UploadFile):
     if size <= KEEP_BYTES:
         store.content[blob] = head  # small files are kept, to serve as their own derivatives
     store.media[csid]["blobCsid"] = blob
-    return _created(request, "blobs", blob)
+    return _lost("media_blob") or _created(request, "blobs", blob)
 
 
 @app.get("/cspace-services/media/{csid}")
@@ -491,7 +499,7 @@ def get_media(csid: str, request: Request):
         return _xml(body)
     return _xml(f'<document name="media"><ns2:media_common xmlns:ns2="http://collectionspace.org/services/media">'
                 f"<identificationNumber>{escape(m.get('identificationNumber', ''))}</identificationNumber>"
-                f"<blobCsid>{m.get('blobCsid', '')}</blobCsid></ns2:media_common></document>")
+                f"<title>{escape(m.get('title') or '')}</title><blobCsid>{m.get('blobCsid', '')}</blobCsid></ns2:media_common></document>")
 
 
 KEEP_BYTES = 5 * 1024 * 1024
@@ -553,7 +561,7 @@ async def create_object(request: Request):
     if (f := _fail(request, "objectCreate", [_field(body, "objectNumber")])) is not None:
         return f
     store.objects[csid] = {"objectNumber": _field(body, "objectNumber"), "deleted": False}
-    return _created(request, "collectionobjects", csid)
+    return _lost("collectionobjects") or _created(request, "collectionobjects", csid)
 
 
 @app.post("/cspace-services/groups")
@@ -567,8 +575,8 @@ async def create_group(request: Request):
     if not title:
         return Response(status_code=400)
     csid = str(uuid.uuid4())
-    store.groups[csid] = {"title": title}
-    return _created(request, "groups", csid)
+    store.groups[csid] = {"title": title, "deleted": False}
+    return _lost("groups") or _created(request, "groups", csid)
 
 
 @app.post("/cspace-services/relations")
@@ -581,10 +589,16 @@ async def create_relation(request: Request):
     if (f := _fail(request, "relation", _media_names(rel["subjectCsid"]) + _media_names(rel["objectCsid"]))) is not None:
         return f
     store.relations[csid] = rel
-    # "relations_lost": the relation is saved but the response is lost (e.g. a gateway timeout)
-    if (fail := store.fail_next.pop("relations_lost", None)):
-        return Response(status_code=fail)
-    return _created(request, "relations", csid)
+    return _lost("relations") or _created(request, "relations", csid)
+
+
+def _lost(service: str) -> Response | None:
+    """fail_next {"<service>_lost": 504} (media, media_blob, collectionobjects, groups, relations): the record is
+    saved but the response is lost, as after a gateway timeout."""
+    fail = store.fail_next.pop(f"{service}_lost", None)
+    if fail is None:
+        return None
+    return Response(status_code=fail)
 
 
 # ---- development helpers (not part of CollectionSpace) ----------------------------------

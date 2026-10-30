@@ -14,6 +14,7 @@ Rows are separate items so a 1,000-row job never approaches the 400 KB item limi
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import time
@@ -79,6 +80,15 @@ class RowChanged(Exception):
     def __init__(self, n: int):
         super().__init__(f"Document {n} changed in the meantime.")
         self.n = n
+
+
+class NotEditing(Exception):
+    """A change to a draft from a session that is no longer editing it (taken over, closed), or to a job that is no
+    longer a draft (submitted meanwhile): nothing was saved."""
+
+
+class JobFull(Exception):
+    """Adding the documents would take the job past its limit."""
 
 
 def now() -> float:
@@ -207,15 +217,33 @@ class Storage:
                 return gone
             kw["ExclusiveStartKey"] = page["LastEvaluatedKey"]
 
+    # ---- failed sign-ins (design: Login and session) -------------------------------------------------
+    def _login_key(self, who: str, window: float) -> str:
+        """One counter per username and fixed time window, in the sessions table (removed with the expired sessions:
+        "expires" is the end of the next window). The username is hashed: it is never stored as such."""
+        digest = hashlib.sha256(who.encode()).hexdigest()
+        return f"LOGINFAIL#{digest}#{int(now() // window)}"
+
+    def login_failures(self, who: str, window: float) -> int:
+        item = self.sessions.get_item(Key={"PK": self._login_key(who, window)}, ConsistentRead=True).get("Item")
+        return int(item.get("failures", 0)) if item else 0
+
+    def note_login_failure(self, who: str, window: float) -> None:
+        end = (int(now() // window) + 2) * window
+        self.sessions.update_item(Key={"PK": self._login_key(who, window)}, UpdateExpression="ADD failures :one SET expires = :e",
+                                  ExpressionAttributeValues={":one": 1, ":e": int(end)})
+
     def update_session_perms(self, key: str, perms: dict) -> None:
         self.sessions.update_item(Key={"PK": key}, UpdateExpression="SET perms = :p",
                                   ExpressionAttributeValues={":p": perms}, ConditionExpression="attribute_exists(PK)")
 
-    def update_session_role(self, key: str, role: str) -> None:
-        """The session's BMU role, after the roles were read again (design: Roles)."""
+    def update_session_role(self, key: str, role: str, checked_at: float | None = None) -> None:
+        """The session's BMU role, after the roles were read again (design: Roles), and when (roleCheckedAt)."""
         try:
-            self.sessions.update_item(Key={"PK": key}, UpdateExpression="SET #r = :r", ExpressionAttributeNames={"#r": "role"},
-                                      ExpressionAttributeValues={":r": role}, ConditionExpression="attribute_exists(PK)")
+            self.sessions.update_item(Key={"PK": key}, UpdateExpression="SET #r = :r, roleCheckedAt = :t",
+                                      ExpressionAttributeNames={"#r": "role"},
+                                      ExpressionAttributeValues={":r": role, ":t": _dyn(checked_at if checked_at is not None else now())},
+                                      ConditionExpression="attribute_exists(PK)")
         except ClientError as e:
             if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
                 raise
@@ -398,14 +426,31 @@ class Storage:
         row = {**row, "v": int((current or row).get("v", 0)) + 1}
         self.jobs.put_item(Item=_dyn({"PK": f"JOB#{job_id}", "SK": f"ROW#{row['n']:05d}", **row}))
 
-    def heartbeat(self, job_id: str) -> None:
-        """Mark a running job alive. Uses the low-level client, which is safe to call from the heartbeat thread."""
-        self.jobs.meta.client.update_item(
-            TableName=self.jobs.name, Key={"PK": {"S": f"JOB#{job_id}"}, "SK": {"S": "META"}},
-            UpdateExpression="SET heartbeatAt = :t", ExpressionAttributeValues={":t": {"N": f"{now():.3f}"}})
+    def heartbeat(self, job_id: str, run: int | None = None) -> bool:
+        """Mark a running job alive. Uses the low-level client, which is safe to call from the heartbeat thread.
+        With run (the fencing token), only while the job is Running that run; returns False otherwise: the run was
+        stopped (the heartbeat check ended it) and its worker must stop too."""
+        kw: dict[str, Any] = {}
+        if run is not None:
+            kw = {"ConditionExpression": "#s = :running AND #r = :run", "ExpressionAttributeNames": {"#s": "status", "#r": "run"}}
+        try:
+            self.jobs.meta.client.update_item(
+                TableName=self.jobs.name, Key={"PK": {"S": f"JOB#{job_id}"}, "SK": {"S": "META"}},
+                UpdateExpression="SET heartbeatAt = :t",
+                ExpressionAttributeValues={":t": {"N": f"{now():.3f}"},
+                                           **({":running": {"S": "Running"}, ":run": {"N": str(run)}} if run is not None else {})},
+                **kw)
+            return True
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                return False
+            raise
 
-    def update_job(self, job_id: str, fields: dict, expect_status: str | list[str] | None = None) -> bool:
-        """Set fields on a job. With expect_status, only if the job is in that status (returns False otherwise)."""
+    def update_job(self, job_id: str, fields: dict, expect_status: str | list[str] | None = None,
+                   fence_run: int | None = None) -> bool:
+        """Set fields on a job. With expect_status, only if the job is in that status (returns False otherwise).
+        fence_run: the worker's fencing token (design: Job execution): only if the job is Running that run, so a
+        worker whose run was stopped by the heartbeat check (and perhaps rescheduled) can't write to the job."""
         fields = {**fields, "updated": now()}
         names = {f"#{k}": k for k in fields}
         values = {f":{k}": _dyn(v) for k, v in fields.items()}
@@ -415,6 +460,12 @@ class Storage:
         if expect_status is not None:
             allowed = [expect_status] if isinstance(expect_status, str) else expect_status
             kw["ConditionExpression"] = Attr("status").is_in(allowed)
+        if fence_run is not None:
+            fence = Attr("status").eq("Running") & Attr("run").eq(fence_run)
+            kw["ConditionExpression"] = kw["ConditionExpression"] & fence if "ConditionExpression" in kw else fence
+        # never re-create a job deleted meanwhile as a stray item with no tenant
+        kw["ConditionExpression"] = kw["ConditionExpression"] & Attr("PK").exists() if "ConditionExpression" in kw \
+            else Attr("PK").exists()
         try:
             self.jobs.update_item(**kw)
             return True
@@ -429,11 +480,33 @@ class Storage:
         part = f"{n:05d}" if isinstance(n, int) else n
         return f"staging/{tenant}/{job_id}/{part}/{uuid.uuid4().hex}"
 
-    def add_rows(self, tenant: str, job_id: str, rows: list[dict]) -> list[dict]:
-        """Append rows, numbering them after the job's existing rows, each with its staging key."""
-        r = self.jobs.update_item(Key={"PK": f"JOB#{job_id}", "SK": "META"},
-                                  UpdateExpression="SET nextRow = nextRow + :n, rowCount = rowCount + :n",
-                                  ExpressionAttributeValues={":n": len(rows)}, ReturnValues="UPDATED_OLD")
+    def add_rows(self, tenant: str, job_id: str, rows: list[dict], session: str | None = None,
+                 max_rows: int | None = None) -> list[dict]:
+        """Append rows, numbering them after the job's existing rows, each with its staging key. The numbers are
+        reserved with one conditional write: the job still exists, and (session) is a draft that session is editing
+        (NotEditing otherwise), and (max_rows) has room for them (JobFull otherwise), so two batches sent at once
+        can't take a job past its limit."""
+        cond, values, names = "attribute_exists(PK)", {":n": len(rows)}, {}
+        if session is not None:
+            cond += " AND #s = :draft AND editingSession = :ed"
+            values.update({":draft": "Draft", ":ed": session})
+            names["#s"] = "status"
+        if max_rows is not None:
+            cond += " AND rowCount <= :room"
+            values[":room"] = max_rows - len(rows)
+        try:
+            r = self.jobs.update_item(Key={"PK": f"JOB#{job_id}", "SK": "META"},
+                                      UpdateExpression="SET nextRow = nextRow + :n, rowCount = rowCount + :n",
+                                      ConditionExpression=cond, ExpressionAttributeValues=values,
+                                      **({"ExpressionAttributeNames": names} if names else {}), ReturnValues="UPDATED_OLD")
+        except ClientError as e:
+            if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
+                raise
+            job = _clean(self.jobs.get_item(Key={"PK": f"JOB#{job_id}", "SK": "META"}, ConsistentRead=True).get("Item") or {})
+            if job and max_rows is not None and int(job.get("rowCount", 0)) + len(rows) > max_rows and \
+                    (session is None or (job.get("status") == "Draft" and job.get("editingSession") == session)):
+                raise JobFull() from None
+            raise NotEditing() from None
         first = int(r["Attributes"]["nextRow"])
         out = []
         with self.jobs.batch_writer() as bw:
@@ -465,33 +538,56 @@ class Storage:
         item = self.jobs.get_item(Key={"PK": f"JOB#{job_id}", "SK": f"ROW#{n:05d}"}).get("Item")
         return self._upgrade(_strip(_clean(item))) if item else None
 
-    def put_row(self, job_id: str, row: dict, guard: bool = True) -> None:
+    def put_row(self, job_id: str, row: dict, guard: bool = True, editing: str | None = None) -> None:
         """Save a row's data and bump its version "v". Guarded: only if nobody saved it since it was read
         (RowChanged otherwise), so a stale copy never overwrites newer data. The worker, the only writer
-        while a job runs, saves unguarded."""
+        while a job runs, saves unguarded. editing: the editor's session; the row is saved only while the job is a
+        draft that session is editing (one transaction with the job item; NotEditing otherwise), so an edit can't
+        land after a take-over or after Submit has checked the job."""
         old = int(row.get("v", 0))
         row["v"] = old + 1
+        item = _dyn({"PK": f"JOB#{job_id}", "SK": f"ROW#{row['n']:05d}", **row})
+        if editing is not None:
+            put: dict[str, Any] = {"TableName": self.jobs.name, "Item": item}
+            if guard:
+                put.update(ConditionExpression="attribute_not_exists(#v)" if old == 0 else "#v = :v", ExpressionAttributeNames={"#v": "v"},
+                           **({"ExpressionAttributeValues": _dyn({":v": old})} if old else {}))
+            check = {"ConditionCheck": {"TableName": self.jobs.name, "Key": _dyn({"PK": f"JOB#{job_id}", "SK": "META"}),
+                                        "ConditionExpression": "#s = :draft AND editingSession = :ed",
+                                        "ExpressionAttributeNames": {"#s": "status"},
+                                        "ExpressionAttributeValues": _dyn({":draft": "Draft", ":ed": editing})}}
+            try:
+                self.dynamodb.meta.client.transact_write_items(TransactItems=[{"Put": put}, check])
+                return
+            except ClientError as e:
+                row["v"] = old
+                if e.response["Error"]["Code"] != "TransactionCanceledException":
+                    raise
+                reasons = [r.get("Code") for r in e.response.get("CancellationReasons") or []]
+                if len(reasons) > 1 and reasons[1] == "ConditionalCheckFailed":
+                    raise NotEditing() from None
+                raise RowChanged(row["n"]) from None
         kw: dict[str, Any] = {}
         if guard:
             kw["ConditionExpression"] = Attr("v").not_exists() if old == 0 else Attr("v").eq(old)
         try:
-            self.jobs.put_item(Item=_dyn({"PK": f"JOB#{job_id}", "SK": f"ROW#{row['n']:05d}", **row}), **kw)
+            self.jobs.put_item(Item=item, **kw)
         except ClientError as e:
             row["v"] = old
             if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
                 raise RowChanged(row["n"]) from None
             raise
 
-    def put_rows_all_or_none(self, job_id: str, rows: list[dict], originals: list[dict]) -> None:
+    def put_rows_all_or_none(self, job_id: str, rows: list[dict], originals: list[dict], editing: str | None = None) -> None:
         """Save several edited rows, each guarded like put_row. If one changed since it was read, the rows
         already saved are put back as they were (originals, read with the rows) and RowChanged is raised,
         so a bulk change is never left half applied."""
         done: list[tuple[dict, dict]] = []
         try:
             for row, orig in zip(rows, originals):
-                self.put_row(job_id, row)
+                self.put_row(job_id, row, editing=editing)
                 done.append((row, orig))
-        except RowChanged:
+        except (RowChanged, NotEditing):
             for row, orig in reversed(done):
                 back = {**orig, "v": row["v"]}  # guarded on the version just written
                 try:

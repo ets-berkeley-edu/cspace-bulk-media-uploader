@@ -165,7 +165,7 @@ def test_expired_sign_in_returns_job_to_drafts(api, login, add_uploaded, worker,
     job = new_job(api)
     add_uploaded(job, ["15-1234_d.jpg"])
     assert api.post(f"/api/jobs/{job}/schedule").status_code == 200
-    services.storage.delete_credential(job)  # as if the 72-hour limit had passed
+    services.storage.delete_credential(job)  # as if the 96-hour limit had passed
     worker.tick()
     assert api.get(f"/api/jobs/{job}").json()["job"]["status"] == "Draft"
 

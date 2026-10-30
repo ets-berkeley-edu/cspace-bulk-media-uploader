@@ -115,7 +115,7 @@ def test_starts_stay_at_local_wall_clock_time_across_daylight_saving_changes():
 
 # ---- due jobs ---------------------------------------------------------------------------------------------
 def J(id="a", queued=LA(*MON, 12, 0), **kw) -> dict:
-    return {"id": id, "status": "Queued", "queuedAt": queued, "queuePos": queued, "credentialExpires": queued + 72 * 3600, **kw}
+    return {"id": id, "status": "Queued", "queuedAt": queued, "queuePos": queued, "credentialExpires": queued + 96 * 3600, **kw}
 
 
 def test_a_job_starts_at_the_first_run_time_after_it_was_submitted():

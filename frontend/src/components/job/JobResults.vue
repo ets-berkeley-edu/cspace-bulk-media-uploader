@@ -247,7 +247,7 @@ const excludedText = (row: Row) => {
 /** The technical detail of the job-level failure (design: technical detail shown on request); jobs that ended
  *  before the worker stored codeDetail fall back to what the job itself says. */
 const jobDetail = computed(() => props.job.codeDetail
-  || (props.job.cancelledBy ? `Cancel requested by ${props.job.cancelledBy}` : props.job.code === 'group_failed' ? props.job.groupStep?.detail : undefined)
+  || (props.job.cancelledBy ? `Cancel requested by ${props.job.cancelledBy}` : ['group_failed', 'group_server_error'].includes(props.job.code ?? '') ? props.job.groupStep?.detail : undefined)
   || undefined)
 </script>
 

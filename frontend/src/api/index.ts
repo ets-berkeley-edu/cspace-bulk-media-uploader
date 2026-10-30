@@ -73,8 +73,8 @@ export const api = {
     request<{ deleted: number[]; skipped: { n: number; file: string; code: 'created' | 'changed' | 'missing'; reason: string }[];
       others: Row[]; jobStatus?: string }>('POST', `/api/jobs/${id}/rows/delete`, {rows}),
   /** Check rows against CollectionSpace: the given rows, or (no rows) any whose lookups are stale. */
-  check: (id: string, rows?: number[]) =>
-    request<{ rows: Row[]; counts: CheckCounts }>('POST', `/api/jobs/${id}/check`, rows ? {rows} : {}),
+  check: (id: string, rows?: number[], poll = false) =>
+    request<{ rows: Row[]; counts: CheckCounts }>('POST', `/api/jobs/${id}/check`, rows ? {rows} : {}, poll),
   /** Submit job: check the whole job again and add it to the queue; the job comes back with its plan. */
   schedule: (id: string) => request<Job>('POST', `/api/jobs/${id}/schedule`),
   /** Job scheduling (design: Job scheduling): the tenant's run times, pause, and per-job run controls (staff). */

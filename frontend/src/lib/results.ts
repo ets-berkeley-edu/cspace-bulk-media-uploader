@@ -103,7 +103,7 @@ export const STEP_LABEL: Record<string, string> = {
   upload: 'Upload file (creates the Blob)', relMediaObject: 'Relate Media → Object', relObjectMedia: 'Relate Object → Media',
   addToGroup: 'Add object to the job\'s group',
 }
-export const STEP_MARK: Record<Step['s'], string> = {done: '✓', failed: '✗', skipped: '–', 'not run': '·', 'not needed': '○'}
+export const STEP_MARK: Record<Step['s'], string> = {done: '✓', failed: '✗', skipped: '–', 'not run': '·', 'not needed': '○', sending: '?'}
 
 const STEP_ORDER = Object.keys(STEP_LABEL)
 const stepRank = (k: string) => (STEP_ORDER.includes(k) ? STEP_ORDER.indexOf(k) : STEP_ORDER.length)
@@ -123,6 +123,9 @@ export function stepNote(key: string, st: Step): string {
   if (st.s === 'done' && st.sameAs) return `added by document ${st.sameAs}`
   if (st.s === 'not needed') return key === 'addToGroup' ? 'not needed: left out of the group' : 'not needed: you stopped linking this document'
   if (st.s === 'not run') return 'not run'
+  if (st.s === 'sending') return 'sent, not confirmed: the next run checks whether it was saved'
+  if (st.s === 'failed' && st.maybeSent) return 'may have been saved: the next run checks before sending it again'
+  if (st.s === 'done' && st.recovered) return 'saved by an earlier attempt'
   if (st.s === 'done' && st.found) return OBJ_STEPS.includes(key) ? 'found' : 'existing'
   return ''
 }

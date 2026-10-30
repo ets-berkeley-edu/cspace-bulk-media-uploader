@@ -66,11 +66,16 @@
             v-model="choice.group"
             aria-label="Group for selected"
             class="native-select"
-            :disabled="readonly || !perms.groups"
-            :title="perms.groups ? undefined : 'You don\'t have permission to create groups'"
+            :disabled="readonly"
+            :title="perms.groups ? undefined : 'You don\'t have permission to create groups, so you can only leave documents out'"
           >
             <option value="">In the job's group — no change</option>
-            <option value="yes">Yes</option>
+            <option
+              value="yes"
+              :disabled="!perms.groups"
+            >
+              Yes
+            </option>
             <option value="no">No (leave out)</option>
           </select>
         </div>

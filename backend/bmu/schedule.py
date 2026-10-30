@@ -25,7 +25,7 @@ TZ = ZoneInfo(TIMEZONE)
 ALL_DAYS = [1, 2, 3, 4, 5, 6, 7]
 DEFAULT = {"days": ALL_DAYS, "start": "19:00", "end": "", "timezone": TIMEZONE, "paused": None,
            "updatedBy": None, "updatedAt": None}
-# A queued job's saved sign-in lasts 72 hours (Settings.credential_hours), so run days may be at most 3 days apart
+# A queued job's saved sign-in lasts 96 hours (Settings.credential_hours), so run days may be at most 3 days apart
 MAX_GAP_DAYS = 3
 DAY_NAMES = {1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri", 6: "Sat", 7: "Sun"}
 _HHMM = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
@@ -47,7 +47,7 @@ def validate(days: Iterable[Any], start: str, end: str | None) -> dict:
     """The schedule fields to save, normalized, or ScheduleError. Design (Job scheduling): at least one run day;
     a start time; an end time, if given, that differs from the start; and no gap of more than 3 days between
     consecutive run days, counted round the week (from the last run day to the first of the next week), because
-    a queued job's saved sign-in lasts 72 hours."""
+    a queued job's saved sign-in lasts 96 hours."""
     try:
         ds = sorted({int(d) for d in days})
     except (TypeError, ValueError):
@@ -68,7 +68,7 @@ def validate(days: Iterable[Any], start: str, end: str | None) -> dict:
     gaps = [(b - a) for a, b in zip(ds, ds[1:])] + [ds[0] + 7 - ds[-1]]
     if max(gaps) > MAX_GAP_DAYS:
         raise ScheduleError(f"Run days can be at most {MAX_GAP_DAYS} days apart, also from the last run day of the week "
-                            "to the first: a queued job's saved sign-in lasts 72 hours, so a longer gap would let it "
+                            "to the first: a queued job's saved sign-in lasts 96 hours, so a longer gap would let it "
                             "expire before the next run time.")
     return {"days": ds, "start": start, "end": end}
 

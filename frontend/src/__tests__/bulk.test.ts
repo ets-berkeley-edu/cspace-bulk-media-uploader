@@ -115,6 +115,15 @@ describe('bulk repeating fields', () => {
 })
 
 describe('bulk Group (design: Groups)', () => {
+  it('lets staff who can\'t create groups leave documents out, but not put them in (review 6.4)', async () => {
+    const w = mount(BulkPanel, {props: {rows: [row(), row({n: 2})], selected: new Set([1, 2]), tenant,
+      perms: {...perms, groups: false}, readonly: false, busy: false, groupOn: true}})
+    const select = w.find('#bulk-group-select')
+    expect(select.attributes('disabled')).toBeUndefined()
+    expect(select.find('option[value="yes"]').attributes('disabled')).toBeDefined()
+    expect(select.find('option[value="no"]').attributes('disabled')).toBeUndefined()
+  })
+
   const linking = new Set(['link', 'create'])
   const mk = (n: number, p: Partial<Row> = {}) => ({n, file: `${n}.jpg`, handling: 'link', include: true, group: true, result: null, ...p}) as unknown as Row
   it('can\'t put documents without an object into the group, and never takes an object out once added', () => {

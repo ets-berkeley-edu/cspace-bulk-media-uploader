@@ -455,6 +455,31 @@ Branch `feature/ucjeps-tenant`. UCJEPS's configuration (`backend/bmu/tenants/ucj
 
 **Then** section 10's second museum in AWS, with UCJEPS.
 
+## 12. Review fixes of 29 October 2026 (45 minutes)
+
+Branch `fix/review-2026-10-29`. Claude ran both full suites (backend with the new `tests/test_lost_answers.py`, `tests/test_review_fixes_auth.py` and `tests/test_review_fixes_input.py`; frontend with lint, type check and tests). These checks need a browser, the simulated CollectionSpace (`./bmu up sim`, Demo tools on) or AWS.
+
+**Lost answers and stopping (simulated CollectionSpace)**
+
+- [ ] Demo tools, Slow (a few seconds per create). Submit a job of 3 documents, and while the first one's file is uploading run `./bmu down sim` then `./bmu up sim` (the worker gets SIGTERM). Within about 2 minutes the job is Failed, "worker stopped", with "SIGTERM" in the technical detail, not after the 5-minute heartbeat check. Reschedule: it completes, and Demo tools' CollectionSpace view shows one Media record and one Blob per document.
+- [ ] A document whose step is shown as "sent, not confirmed" or "may have been saved" has no Delete button and can't be deleted with Delete selected.
+
+**Roles and editing**
+
+- [ ] Two browsers, the same draft: take it over in the second, then change a field in the first. The first shows that it's no longer editing; the field isn't changed for the second.
+- [ ] Add files, and while they upload click New job (or open another draft). Back in the first draft, the documents whose uploads were stopped show Retry, none says "Upload failed" from the server, and Retry sends each file once.
+- [ ] As `intern`, in a fix open to interns with one document: Delete is refused ("only staff can delete it"), and the job stays.
+- [ ] As `limited` (no groups permission), with the job's group on: the bulk panel's Group list offers "No (leave out)"; "Yes" can't be chosen.
+
+**Sign-in**
+
+- [ ] Ten wrong passwords for one username, then the right one: "Too many failed sign-ins". Another username still signs in. After 15 minutes the first signs in again.
+
+**In AWS (after `./bmu aws deploy`)**
+
+- [ ] Deploy while a job runs: the worker log shows "stopping after the steps in progress", the job ends as worker stopped within 2 minutes, and `./bmu aws logs worker` has no AccessDenied.
+- [ ] Sign in and use the editor for a few minutes as staff: no AccessDenied in `./bmu aws logs web` (the row writes are now DynamoDB transactions, and failed sign-ins are counted in the sessions table).
+
 ## Not tests, but still open
 
 - The design doc's "For Richard to address" list (from the October 3 comparison of the doc with the prototype).

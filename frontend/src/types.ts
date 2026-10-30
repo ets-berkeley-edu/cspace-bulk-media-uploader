@@ -113,7 +113,7 @@ export interface Check {
 }
 
 export interface Step {
-  s: 'done' | 'failed' | 'skipped' | 'not run' | 'not needed';
+  s: 'done' | 'failed' | 'skipped' | 'not run' | 'not needed' | 'sending';
   csid?: string;
   run?: number; // the run that did it
   after?: string; // skipped: the step it depended on
@@ -123,6 +123,8 @@ export interface Step {
   csid2?: string; // addToGroup: the relation in the other direction
   sameAs?: number; // addToGroup: another document already added the same object
   obj?: string; // an object step that failed: the object number it failed on
+  maybeSent?: boolean; // a create that CollectionSpace didn't confirm (5xx or no answer): the rerun looks for it first
+  recovered?: boolean; // done: the record an earlier, unconfirmed request saved, used instead of creating another
 }
 
 export interface RowResult {
@@ -296,7 +298,7 @@ export interface Job {
   // the job's group (design: Groups)
   groupOn?: boolean;
   groupTitle?: string;
-  groupStep?: { s: 'done' | 'failed'; csid?: string; code?: string; detail?: string; run?: number } | null;
+  groupStep?: { s: 'done' | 'failed' | 'sending'; csid?: string; code?: string; detail?: string; run?: number; maybeSent?: boolean; recovered?: boolean } | null;
   protectedCount?: number; // documents that are protected files (a draft then expires after 7 days)
 }
 

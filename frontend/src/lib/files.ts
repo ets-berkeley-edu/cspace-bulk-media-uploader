@@ -11,6 +11,10 @@ export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) =>
   return out
 }
 
+/** How many jobs a list tab checks against CollectionSpace at once when it is shown: all at once, a long list could hit
+ *  an intern's lookup limit (the reader account's) and load the server for nothing. */
+export const CHECKS_AT_ONCE = 3
+
 export function canPreview(file: File): boolean {
   return /^image\/(jpeg|png|gif|webp)$/i.test(file.type)
 }

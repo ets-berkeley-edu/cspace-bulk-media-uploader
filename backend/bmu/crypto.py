@@ -1,7 +1,7 @@
 """Encryption of CollectionSpace passwords at rest.
 
 Two purposes use separate keys, as in the design: "session" (while signed in) and "job"
-(from scheduling until the job's run ends, at most 72 hours). The encryption context binds a
+(from scheduling until the job's run ends, at most 96 hours). The encryption context binds a
 ciphertext to its user and session or job, so it can't be replayed elsewhere.
 
 - LocalCrypto: AES-256-GCM with keys from the environment (development only).
