@@ -332,7 +332,7 @@
             <h3 class="text-body-2 font-weight-bold">Reset</h3>
             <div class="demo-inline">
               <v-btn
-                v-if="sim"
+                v-if="sim && !status.simShared"
                 id="demo-reset-sim-btn"
                 :disabled="isBusy"
                 size="small"
@@ -380,7 +380,7 @@
               type="warning"
               variant="tonal"
             >
-              {{ CONFIRM_TEXT[confirming] }}
+              {{ confirming === 'everything' && status.simShared ? CONFIRM_SHARED : CONFIRM_TEXT[confirming] }}
               <div class="demo-inline mt-2">
                 <v-btn
                   :id="`demo-${confirming === 'jobs' ? 'delete-all' : 'reset-everything'}-confirm-btn`"
@@ -401,7 +401,11 @@
                 </v-btn>
               </div>
             </v-alert>
-            <p class="text-caption text-medium-emphasis">
+            <p v-if="status.simShared" id="demo-reset-shared-note" class="text-caption text-medium-emphasis">
+              The simulated CollectionSpace is shared with Serena here, so it isn't reset: its records stay. To start it
+              afresh, stop it (docker compose -p fakecspace-shared down), then ./bmu up shared.
+            </p>
+            <p v-else class="text-caption text-medium-emphasis">
               Resetting the simulator also forgets the records earlier runs created in it. Reset everything puts the
               prototype back to how it starts.
             </p>
@@ -516,6 +520,9 @@ const CONFIRM_TEXT = {
   everything: 'Delete every job, draft, uploaded file and audit entry in the BMU, put the job schedule back to its default, and reset the '
     + 'simulated CollectionSpace and the upload speeds? This can\'t be undone. You stay signed in.'
 }
+// Reset everything's question when the simulator is shared with Serena (./bmu up shared): it isn't reset
+const CONFIRM_SHARED = 'Delete every job, draft, uploaded file and audit entry in the BMU, put the job schedule back to its default, and the '
+  + 'upload speeds? The simulated CollectionSpace, shared with Serena, isn\'t reset. This can\'t be undone. You stay signed in.'
 const objects = ref<{objectNumber: string, note: string, deleted: boolean, sensitivity?: unknown}[] | null>(null)
 const copied = ref('')
 

@@ -27,6 +27,8 @@ export interface DemoStatus {
   browserUploadMbps: number;
   cspaceUrl: string;
   alwaysRunTime: boolean;
+  /** The simulator is the one shared with Serena (./bmu up shared): Demo tools never reset it. */
+  simShared: boolean;
   sim: SimSettings | null;
   simError: string;
   /** Who is signed in, and their BMU role. */

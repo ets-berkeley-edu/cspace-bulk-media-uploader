@@ -23,6 +23,15 @@ def test_the_simulator_in_aws_is_not_a_real_collectionspace(api, services):
     assert api.get("/api/env").json()["realCollectionSpace"] is False
 
 
+def test_pahma_on_the_simulator_shared_with_serena_is_the_simulator(api, services):
+    """./bmu up shared: PAHMA's host name on fakecspace's shared network (fakecspace's compose.shared.yml)."""
+    from bmu.app import real_cspace
+    assert not real_cspace("http://pahma.fakecspace:8180")
+    services.settings.cspace_url = "http://pahma.fakecspace:8180"
+    assert services.settings.museums() == {"pahma": "http://pahma.fakecspace:8180"}  # http:// accepted
+    assert api.get("/api/env").json()["realCollectionSpace"] is False
+
+
 def test_the_session_cookie_name_is_a_setting(api, login, services):
     services.settings.cookie_name = "bmu_session_qa"  # two local environments on one host don't sign each other out
     login()

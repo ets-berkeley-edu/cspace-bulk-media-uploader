@@ -1,0 +1,18 @@
+# Shared mode (./bmu up shared; serena-fakecspace-questions F6, F7 in Serena's notes): the BMU without its own
+# simulator, using the one Serena can use too (cspace-fakecspace's compose.shared.yml, which ./bmu up shared starts
+# first). The web app and the worker join that simulator's network, fakecspace-shared, and reach PAHMA's
+# CollectionSpace as http://pahma.fakecspace:8180 (./bmu sets BMU_CSPACE_URL). Local only (F17).
+services:
+  fakecspace:
+    profiles: [own-simulator]   # not started: the shared one stands in
+
+  web:
+    depends_on: !override [dynamodb, s3]
+    networks: [default, fakecspace-shared]
+
+  worker:
+    networks: [default, fakecspace-shared]
+
+networks:
+  fakecspace-shared:
+    external: true

@@ -3,20 +3,21 @@
 #
 #   ./bmu up sim        local stack with the simulated CollectionSpace and Demo tools  → http://localhost:5173
 #   ./bmu up qa         local stack against a QA tenant, PAHMA's unless BMU_QA_TENANT (real records!) → http://localhost:5273
-#   ./bmu down sim|qa|all
+#   ./bmu up shared     local stack with the simulator Serena can use too (../cspace-fakecspace)  → http://localhost:5673
+#   ./bmu down sim|qa|shared|all
 #   ./bmu status        which environments are running, and their addresses
-#   ./bmu logs sim|qa [service]     follow the logs (services: web, worker, frontend, fakecspace, s3, dynamodb)
-#   ./bmu open sim|qa|aws|mockup|home
+#   ./bmu logs sim|qa|shared [service]     follow the logs (services: web, worker, frontend, fakecspace, s3, dynamodb)
+#   ./bmu open sim|qa|shared|aws|mockup|home
 #   ./bmu urls          every address, including the UI mockup and AWS
 #   ./bmu aws ...       deploy to AWS and look after it: ./bmu aws help (deploy/README.md)
 #   ./bmu test [pytest options]   the Selenium tests (bmut/) on their own stack, started afresh; --headed shows Chrome
 #   ./bmu test-down     stop the test stack
 #
-# Each local environment is its own Docker Compose project (bmu-sim, bmu-qa, bmu-test) with its own ports, data,
-# environment label (shown in the app's header) and session cookie, so they can run at once without signing each other
-# out. sim and qa need .env with BMU_SESSION_KEY_B64 and BMU_JOB_KEY_B64 (see README, Run it locally); the test stack
-# makes its own keys each run. Nothing here holds a password: in the QA environment you sign in with your own QA
-# account, in the browser.
+# Each local environment is its own Docker Compose project (bmu-sim, bmu-qa, bmu-shared, bmu-test) with its own ports,
+# data, environment label (shown in the app's header) and session cookie, so they can run at once without signing each
+# other out. sim, qa and shared need .env with BMU_SESSION_KEY_B64 and BMU_JOB_KEY_B64 (see README, Run it locally);
+# the test stack makes its own keys each run. Nothing here holds a password: in the QA environment you sign in with
+# your own QA account, in the browser.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -29,6 +30,10 @@ QA_CSPACE_URL="${BMU_QA_CSPACE_URL:-https://$QA_TENANT.qa.collectionspace.org}"
 AWS_ENV="${BMU_AWS_ENV:-personal-dev}"
 AWS_DEV_URL="${BMU_AWS_DEV_URL:-$(cat "deploy/environments/$AWS_ENV.url" 2>/dev/null || true)}"
 MOCKUP_FILE="docs/mockup/bmu-mockup.html"
+# Shared mode (Serena's serena-fakecspace-questions F6, F7): one simulator for the BMU and Serena, from a clone of
+# cspace-fakecspace beside this one (or FAKECSPACE_DIR), on the Docker network fakecspace-shared.
+FAKECSPACE_DIR="${FAKECSPACE_DIR:-../cspace-fakecspace}"
+SHARED_SIM_PORT="${FAKECSPACE_SHARED_PORT:-8680}"
 
 # Sets the variables docker-compose.yml reads, for one local environment.
 env_settings() {
@@ -38,7 +43,15 @@ env_settings() {
       export BMU_CSPACE_URL="http://fakecspace:8180" BMU_TENANT=pahma BMU_DEMO=true BMU_COOKIE_NAME=bmu_session
       export BMU_ENV_LABEL="Local · simulated CollectionSpace"
       export BMU_READER_USER=bmureader BMU_READER_PASSWORD=bmureader   # the simulator's read-only account, for interns' checks
-      export BMU_ALWAYS_RUN_TIME="${BMU_ALWAYS_RUN_TIME:-false}" ;;
+      export BMU_ALWAYS_RUN_TIME="${BMU_ALWAYS_RUN_TIME:-false}" BMU_SIM_SHARED=false ;;
+    shared)
+      # PAHMA on the simulator shared with Serena (docker-compose.shared.yml): no simulator of its own (BMU_SIM_PORT
+      # is unused), and Demo tools never reset the shared one (BMU_SIM_SHARED).
+      export BMU_UI_PORT=5673 BMU_API_PORT=8600 BMU_S3_PORT=9600 BMU_DYNAMODB_PORT=8601 BMU_SIM_PORT=8680
+      export BMU_CSPACE_URL="http://pahma.fakecspace:8180" BMU_TENANT=pahma BMU_DEMO=true BMU_COOKIE_NAME=bmu_session_shared
+      export BMU_ENV_LABEL="Local · simulator shared with Serena"
+      export BMU_READER_USER=bmureader BMU_READER_PASSWORD=bmureader
+      export BMU_ALWAYS_RUN_TIME="${BMU_ALWAYS_RUN_TIME:-false}" BMU_SIM_SHARED=true ;;
     qa)
       export BMU_UI_PORT=5273 BMU_API_PORT=8100 BMU_S3_PORT=9100 BMU_DYNAMODB_PORT=8101 BMU_SIM_PORT=8280
       [ -f "backend/bmu/tenants/$QA_TENANT.yaml" ] ||
@@ -48,7 +61,7 @@ env_settings() {
       # QA's read-only account for interns' checks, if you have one: set both in your shell, never in a file here.
       # Without them an intern's documents are checked with the intern's own sign-in.
       export BMU_READER_USER="${BMU_QA_READER_USER:-}" BMU_READER_PASSWORD="${BMU_QA_READER_PASSWORD:-}"
-      export BMU_ALWAYS_RUN_TIME="${BMU_ALWAYS_RUN_TIME:-false}" ;;
+      export BMU_ALWAYS_RUN_TIME="${BMU_ALWAYS_RUN_TIME:-false}" BMU_SIM_SHARED=false ;;
     test)
       # The Selenium tests' stack (bmut/README.md): the simulator on ports of its own, and every moment a run time, so
       # a submitted job runs at once. Its keys are made afresh each run (./bmu test), so it needs no .env.
@@ -56,16 +69,37 @@ env_settings() {
       export BMU_CSPACE_URL="http://fakecspace:8180" BMU_TENANT=pahma BMU_DEMO=true BMU_COOKIE_NAME=bmu_session_test
       export BMU_ENV_LABEL="Local · test stack"
       export BMU_READER_USER=bmureader BMU_READER_PASSWORD=bmureader
-      export BMU_ALWAYS_RUN_TIME=true ;;
-    *) echo "Unknown environment '$1': use sim or qa." >&2; exit 2 ;;
+      export BMU_ALWAYS_RUN_TIME=true BMU_SIM_SHARED=false ;;
+    *) echo "Unknown environment '$1': use sim, qa or shared." >&2; exit 2 ;;
   esac
 }
-ui_port() { case "$1" in sim) echo 5173 ;; qa) echo 5273 ;; test) echo 5573 ;; esac; }
+ui_port() { case "$1" in sim) echo 5173 ;; qa) echo 5273 ;; shared) echo 5673 ;; test) echo 5573 ;; esac; }
 
 compose() {  # compose <env> <args...>
   local env="$1"; shift
   env_settings "$env"
-  docker compose -p "bmu-$env" "$@"
+  local files=(-f docker-compose.yml)
+  [ "$env" = shared ] && files+=(-f docker-compose.shared.yml)
+  docker compose -p "bmu-$env" "${files[@]}" "$@"
+}
+
+shared_sim_running() { [ -n "$(docker compose -p fakecspace-shared ps -q --status running fakecspace 2>/dev/null)" ]; }
+# Starts the shared simulator unless it's running (./serena up shared may have started it), and seeds the BMU's samples
+# into PAHMA's store: once until it's reset, so seeding again changes nothing.
+start_shared_sim() {
+  if shared_sim_running; then
+    echo "The shared simulator is already running: http://localhost:$SHARED_SIM_PORT"
+  else
+    [ -f "$FAKECSPACE_DIR/compose.shared.yml" ] || {
+      echo "Shared mode needs a clone of cspace-fakecspace with compose.shared.yml at $FAKECSPACE_DIR:" >&2
+      echo "  git clone https://github.com/ets-berkeley-edu/cspace-fakecspace.git $FAKECSPACE_DIR   (or set FAKECSPACE_DIR)" >&2
+      exit 1; }
+    echo "Starting the shared simulator from $FAKECSPACE_DIR ($(git -C "$FAKECSPACE_DIR" describe --tags --always 2>/dev/null || echo unknown))"
+    docker compose -f "$FAKECSPACE_DIR/compose.shared.yml" -p fakecspace-shared up -d --build --wait
+  fi
+  curl -fsS -o /dev/null -X POST "http://localhost:$SHARED_SIM_PORT/pahma/_fake/seed" \
+    -H 'Content-Type: application/json' -d '{"set": "bmu"}' ||
+    { echo "Couldn't seed the BMU's samples in the shared simulator (http://localhost:$SHARED_SIM_PORT)." >&2; exit 1; }
 }
 
 open_url() {
@@ -83,6 +117,7 @@ case "$cmd" in
     env="${1:-sim}"
     env_settings "$env"
     [ -f .env ] || { echo "No .env yet: cp .env.example .env and put in the two keys (see README, Run it locally)." >&2; exit 1; }
+    [ "$env" = shared ] && start_shared_sim
     compose "$env" up -d --build
     port="$(ui_port "$env")"
     printf 'Waiting for http://localhost:%s ' "$port"
@@ -92,16 +127,20 @@ case "$cmd" in
     done
     echo "$BMU_ENV_LABEL is up: http://localhost:$port   (./bmu open $env)"
     [ "$env" = qa ] && echo "Careful: jobs run here create real records in $QA_CSPACE_URL, and they stay."
+    [ "$env" = shared ] && echo "Its records are in the shared simulator (http://localhost:$SHARED_SIM_PORT), for Serena too (./serena up shared)."
     exit 0 ;;
   down)
     env="${1:-}"
     case "$env" in
-      sim|qa) compose "$env" down ;;
-      all) for e in sim qa; do running "$e" && compose "$e" down; done; true ;;
-      *) echo "Usage: ./bmu down sim|qa|all" >&2; exit 2 ;;
-    esac ;;
+      sim|qa|shared) compose "$env" down ;;
+      all) for e in sim qa shared; do running "$e" && compose "$e" down; done; true ;;
+      *) echo "Usage: ./bmu down sim|qa|shared|all" >&2; exit 2 ;;
+    esac
+    if [[ "$env" =~ ^(shared|all)$ ]] && shared_sim_running; then
+      echo "The shared simulator is still running, for Serena. To stop it: docker compose -p fakecspace-shared down"
+    fi ;;
   status)
-    for e in sim qa; do
+    for e in sim qa shared; do
       if running "$e"; then echo "$e: running  http://localhost:$(ui_port "$e")"; else echo "$e: stopped  (./bmu up $e)"; fi
     done
     if [ -n "$AWS_DEV_URL" ]; then echo "aws ($AWS_ENV): $AWS_DEV_URL   (./bmu aws status checks it)"; else echo "aws ($AWS_ENV): not deployed yet (./bmu aws deploy)"; fi ;;
@@ -110,16 +149,17 @@ case "$cmd" in
     compose "$env" logs -f --tail 100 "$@" ;;
   open)
     case "${1:-home}" in
-      sim|qa) open_url "http://localhost:$(ui_port "$1")" ;;
+      sim|qa|shared) open_url "http://localhost:$(ui_port "$1")" ;;
       aws) if [ -n "$AWS_DEV_URL" ]; then open_url "$AWS_DEV_URL"; else echo "The AWS environment '$AWS_ENV' isn't deployed from this computer yet (./bmu aws deploy)." >&2; exit 1; fi ;;
       mockup) open_url "$PWD/$MOCKUP_FILE" ;;
       home) open_url "$PWD/docs/start.html" ;;
-      *) echo "Usage: ./bmu open sim|qa|aws|mockup|home" >&2; exit 2 ;;
+      *) echo "Usage: ./bmu open sim|qa|shared|aws|mockup|home" >&2; exit 2 ;;
     esac ;;
   urls)
     echo "UI mockup:              $PWD/$MOCKUP_FILE"
     echo "Local · simulator:      http://localhost:5173   (./bmu up sim)"
     echo "Local · QA ($QA_TENANT):   http://localhost:5273   (./bmu up qa)"
+    echo "Local · shared simulator: http://localhost:5673   (./bmu up shared; the simulator: http://localhost:$SHARED_SIM_PORT)"
     printf "%-24s%s\n" "AWS ($AWS_ENV):" "${AWS_DEV_URL:-not deployed yet (./bmu aws deploy)}"
     echo "Start page:             $PWD/docs/start.html   (./bmu open home)" ;;
   aws)
@@ -157,6 +197,6 @@ case "$cmd" in
   test-down)
     compose test down ;;
   help|-h|--help)
-    sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//' ;;
+    sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//' ;;
   *) echo "Unknown command '$cmd'. ./bmu help lists them." >&2; exit 2 ;;
 esac

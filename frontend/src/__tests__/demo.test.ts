@@ -9,7 +9,7 @@ const sim = {
   steps: ['media', 'upload', 'termRead'], people: ['Leslie Freund'], orgs: ['Phoebe A. Hearst Museum of Anthropology'],
   languages: {spa: 'Spanish'}, term_names: {LeslieFreund1: 'Leslie Freund'},
 }
-const status = (p: Partial<DemoStatus> = {}): DemoStatus => ({browserUploadMbps: 0, cspaceUrl: 'http://localhost:8180', alwaysRunTime: false,
+const status = (p: Partial<DemoStatus> = {}): DemoStatus => ({browserUploadMbps: 0, cspaceUrl: 'http://localhost:8180', alwaysRunTime: false, simShared: false,
   sim: {...sim}, simError: '', user: 'admin', role: 'staff',
   users: [{user: 'admin', about: 'Staff with every permission'}, {user: 'intern', about: 'Intern: no CollectionSpace permissions'},
           {user: 'reader', about: 'Neither BMU role: sign-in refused'}], ...p})
@@ -112,6 +112,21 @@ describe('Demo tools', () => {
     expect(calls.filter((c) => c.url === '/api/_demo/reset-everything' && c.method === 'POST')).toHaveLength(1)
     expect(w.emitted('jobsDeleted')![0][0]).toContain('Demo tools reset everything')
     expect(w.find('#demo-message').text()).toBe('Everything is reset: the prototype is as it starts.')
+  })
+
+  it('never resets a simulator shared with Serena, and says so', async () => {
+    stub((url) => ({body: url.includes('reset-everything') ? {items: 1, objects: 0} : status({simShared: true})}))
+    const w = mount(DemoPane)
+    await flushPromises()
+    expect(w.find('#demo-reset-sim-btn').exists()).toBe(false)
+    expect(w.find('#demo-reset-shared-note').text()).toContain('shared with Serena')
+    await w.find('#demo-reset-everything-btn').trigger('click')
+    expect(w.find('#demo-reset-everything-confirm').text()).toContain('isn\'t reset')
+    stub(() => ({body: status()}))
+    const own = mount(DemoPane)
+    await flushPromises()
+    expect(own.find('#demo-reset-sim-btn').exists()).toBe(true)
+    expect(own.find('#demo-reset-shared-note').exists()).toBe(false)
   })
 
   it('shows the server\'s reason when the reset is refused', async () => {
