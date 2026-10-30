@@ -289,7 +289,7 @@ class Worker:
 
     def sweep_expired_sign_ins(self) -> list[str]:
         """A queued job whose saved sign-in reached its time limit leaves the queue for Drafts (design: State
-        rules, Sign-in expired while waiting); anyone can submit it again with their own sign-in."""
+        rules, Sign-in expired while waiting); any staff member can submit it again with their own sign-in."""
         moved = []
         for j in self.storage.list_jobs(self.tenant.key):
             if j["status"] == "Queued" and j.get("credentialExpires") and j["credentialExpires"] < now():
@@ -372,6 +372,10 @@ class Worker:
                 continue
             if cur.get("s3Key") and cur["s3Key"] != orig.get("s3Key"):
                 self.storage.delete_object(cur["s3Key"])  # a replacement file added during the fix
+            if (orig.get("upload") or {}).get("s") == "done" and orig.get("s3Key") and not self.storage.head_object(orig["s3Key"]):
+                # its staged file is gone (removed while the fix was open, e.g. a retried upload): the restored row says so,
+                # and needs its file again, rather than pointing at a file that isn't there (review 7.4)
+                orig = {**orig, "upload": {"s": "failed", "reason": "missing"}, "thumbKey": None}
             self.storage.restore_row(job["id"], orig)
         added = [r for r in current.values() if r.get("addedInFix")]
         for r in added:
@@ -697,7 +701,10 @@ class Worker:
         self._where = "while reading the account's permissions before the first document"
         self._perms = self._read_permissions(client)
         self._object_found = {}
-        for row in self.storage.get_rows(job_id):
+        # Only the worker writes rows while the job runs, and run_row updates each row in this list as it goes, so the
+        # progress comes from it (design: Run duration and the UI, running totals), not from reading every row again
+        rows = self.storage.get_rows(job_id)
+        for row in rows:
             if not row.get("include") or (row.get("result") or {}).get("state") == "Done":
                 continue
             self.maybe_sweep()
@@ -715,7 +722,7 @@ class Worker:
                 e = (row.get("result") or {}).get("error") or {}
                 raise JobStop(err, f"Document {row['n']}, step {e.get('step', '?')}: {e.get('detail') or err}")
             self._where = f"at document {row['n']}, after its steps"
-            self._fenced_update(job_id, run_no, {"progress": _progress(self.storage.get_rows(job_id))})
+            self._fenced_update(job_id, run_no, {"progress": _progress(rows)})
         self._where = "while finishing the run"
         return ""
 

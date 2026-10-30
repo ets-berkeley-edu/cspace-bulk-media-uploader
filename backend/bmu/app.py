@@ -1198,8 +1198,11 @@ def _routes(app: FastAPI) -> None:
     def get_thumbnail(job_id: str, n: int, size: str = "small", sess: Session = Depends(current_session), s: Services = Depends(svc)):
         """A document's thumbnail, after checking the session and tenant: CollectionSpace's own derivative once
         the file is there (fetched with your credentials, so CollectionSpace's permissions apply, protected or
-        not), otherwise the staged thumbnail. The browser never gets an S3 URL."""
-        _job_or_404(s, sess, job_id)
+        not), otherwise the staged thumbnail. The browser never gets an S3 URL. Design (Roles, Intern access to a job):
+        an intern never sees the images of a staff-only job, only its text (review 7.5)."""
+        job = _job_or_404(s, sess, job_id)
+        if sess.role != "staff" and not job.get("internOpen"):
+            raise HTTPException(404, "No thumbnail.")
         row = s.storage.get_row(job_id, n) or _404()
         upload = ((row.get("result") or {}).get("steps") or {}).get("upload") or {}
         headers = {"Cache-Control": "private, max-age=300"}

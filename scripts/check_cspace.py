@@ -27,6 +27,7 @@ from bmu.sensitivity import evaluate as evaluate_sensitivity
 from bmu.cspace.payloads import group_xml, media_xml, object_xml, relation_xml
 from bmu.rows import new_row
 from bmu.tenant import AUTHORITY_REF, load_tenant
+from bmu.worker import _UploadProgress
 
 # 1x1 transparent PNG
 PNG = bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082")
@@ -190,7 +191,10 @@ def main():
     # Same order as the worker (design): Media first, then the file with PUT media/{csid}/blob.
     media = step("create Media (no blobCsid)", lambda: c.create_media(media_xml(t, row)))
     if media:
-        blob = step("attach file (PUT media/{csid}/blob)", lambda: c.upload_file(media, row["file"], io.BytesIO(PNG), "image/png"))
+        # Sent as the worker sends a staged file: through _UploadProgress, which has no seek, length or fileno, so the
+        # multipart body goes with chunked transfer encoding, as in production (review 7.14)
+        blob = step("attach file (PUT media/{csid}/blob, chunked like the worker)",
+                    lambda: c.upload_file(media, row["file"], _UploadProgress(io.BytesIO(PNG), len(PNG), lambda *_: None), "image/png"))
         blob_csid = step("read back the Media record's blobCsid", lambda: c.media_blob_csid(media))
         if blob_csid:  # the thumbnails the BMU shows once a file is in CollectionSpace (design: Thumbnails)
             step("fetch its Thumbnail derivative (GET blobs/{csid}/derivatives/Thumbnail/content)",

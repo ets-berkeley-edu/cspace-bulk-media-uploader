@@ -55,8 +55,8 @@ deployment is built (`deploy/README.md`); what it leaves for later is listed the
   worker fails that document before creating anything for it. **Reorder to avoid failures** (staff) puts the
   queue in an order where nothing fails, moving as few jobs as possible, after showing what will move. It changes
   places only: when a Run now, a run time or a hold decides the order, or no order works, it says so instead.
-- **Drafts:** every change is saved as it's made. Anyone in the tenant can open a draft, one person at a time,
-  with take-over. Drafts expire 30 days after they were last saved (7 if a document is a protected file).
+- **Drafts:** every change is saved as it's made. Anyone in the tenant can see a draft; staff can open any draft,
+  and interns only one that is open to interns, one person at a time, with take-over. Drafts expire 30 days after they were last saved (7 if a document is a protected file).
 - **Open to interns or staff only.** Each draft shows which it is. Staff switch it either way, with a checkbox on
   the Create / edit job page or a button on the draft's row; making a draft staff only ends an intern's editing of
   it. Each change is in the audit log ("Intern access changed").
@@ -405,7 +405,7 @@ python scripts/check_cspace.py --create                          # also creates 
   only the worker decrypt with the job key.
 - File uploads go directly from the browser to S3 with a write-only presigned POST for one key
   (`staging/<tenant>/<job>/<row>/<random>`), the file's size (at most 2 GB for now) and content type, for
-  15 minutes; set `BMU_S3_KMS_KEY_ID` in AWS to require SSE-KMS. The worker checks each file's real type from its
+  15 minutes; in AWS each museum's files use that museum's KMS key (`BMU_S3_KMS_KEY_IDS`, set by Terraform), and the bucket policy refuses any other. The worker checks each file's real type from its
   first bytes before streaming it to CollectionSpace. A staged file is deleted as soon as its upload to
   CollectionSpace succeeds; a protected file's staged upload is also removed 7 days after its job stopped. No
   presigned download URLs are given to anyone; thumbnails are served by the web app after checking the session.
@@ -425,7 +425,8 @@ python scripts/check_cspace.py --create                          # also creates 
   - An intern gets minimal answers: found or not, protected or not, and term names. Not why a file is protected,
     not an object's access notes, not a record's CSID, contents or images.
   - Every lookup is counted against the intern who caused it and logged, and each intern is limited to 20,000 an
-    hour (`BMU_READER_LOOKUPS_PER_HOUR`), so the BMU can't be used to trawl CollectionSpace.
+    hour (`BMU_READER_LOOKUPS_PER_HOUR`). That bounds how much an intern can look up, and the log records it, but it
+    doesn't stop someone from testing thousands of object numbers an hour (design doc, Roles).
   - Change the password every 90 days, and whenever a staff member who could read the secret leaves
     ([deploy/README.md](deploy/README.md)).
   - Locally the account comes from `BMU_READER_USER` and `BMU_READER_PASSWORD` (the simulator's `bmureader`).
