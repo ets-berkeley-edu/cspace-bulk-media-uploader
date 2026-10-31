@@ -60,7 +60,8 @@ npm run build:demo                          # build with Demo tools
 # Local environments (Docker)
 ./bmu up sim        # simulated CollectionSpace, Demo tools on → http://localhost:5173
 ./bmu up qa         # against the PAHMA QA tenant: creates real records → http://localhost:5273
-./bmu down sim|qa|all
+./bmu up shared     # the simulator shared with Serena (../cspace-fakecspace) → http://localhost:5673
+./bmu down sim|qa|shared|all
 ./bmu logs sim web  # services: web, worker, frontend, fakecspace, s3, dynamodb
 
 # Selenium tests (bmut/, Python 3.11, Docker and Chrome; bmut/README.md); CI's bmut job runs them too

@@ -288,15 +288,20 @@ the browser tab's title (orange when the CollectionSpace is a real server).
 | --- | --- | --- |
 | `./bmu up sim` | Local, simulated CollectionSpace, Demo tools on (sign in as `admin` / `admin`) | http://localhost:5173 |
 | `./bmu test` | The Selenium tests (`bmut/`) on a fresh local stack of their own, with the simulator; left running afterwards (`./bmu test-down` stops it) | http://localhost:5573 |
+| `./bmu up shared` | Local, like `sim`, but with the simulator shared with Serena (`./serena up shared`), so a file the BMU uploads can come out of Serena. Needs a clone of [cspace-fakecspace](https://github.com/ets-berkeley-edu/cspace-fakecspace) beside this one (or `FAKECSPACE_DIR`); starts its simulator if it isn't running (http://localhost:8680) | http://localhost:5673 |
 | `./bmu up qa` | Local, against the PAHMA QA tenant, with your own QA account; `BMU_QA_TENANT=ucjeps ./bmu up qa` uses UCJEPS QA instead. **Jobs create real records, which stay.** Demo tools off | http://localhost:5273 |
 | `./bmu aws deploy` | Deploys to AWS (default: Richard's personal account, against the PAHMA QA tenant; real records). See [deploy/README.md](deploy/README.md) | `https://….cloudfront.net` |
 | `./bmu open aws` | The AWS deployment, at the address `./bmu aws deploy` saved (or `BMU_AWS_DEV_URL`) | — |
 | `./bmu open mockup` | The UI mockup (`docs/mockup/bmu-mockup.html`) | — |
 | `./bmu open home` | A start page linking all of them (`docs/start.html`) | — |
 
-Also `./bmu status`, `./bmu logs sim|qa [service]`, `./bmu down sim|qa|all` and `./bmu urls`. Both local environments
-use the keys in `.env`; neither stores a password (`BMU_QA_TENANT` picks the QA museum, and `BMU_QA_CSPACE_URL` points
+Also `./bmu status`, `./bmu logs sim|qa|shared [service]`, `./bmu down sim|qa|shared|all` and `./bmu urls`. The local
+environments use the keys in `.env`; neither stores a password (`BMU_QA_TENANT` picks the QA museum, and `BMU_QA_CSPACE_URL` points
 the QA one at another server). Switching museums: `./bmu down qa` first, since the local tables keep the jobs.
+In `shared`, the BMU reaches PAHMA's store of the shared simulator as `http://pahma.fakecspace:8180` on the Docker
+network `fakecspace-shared` (`docker-compose.shared.yml`), and its samples are seeded there. Demo tools never reset
+that simulator, since a reset would empty Serena's records too: stop it (`docker compose -p fakecspace-shared down`)
+and start `./bmu up shared` again for a fresh one. `./bmu down shared` leaves it running, for Serena.
 Plain `docker compose up` still starts the simulator environment as before; the ports, label and cookie name are
 variables in `docker-compose.yml` (`BMU_UI_PORT`, `BMU_API_PORT`, `BMU_S3_PORT`, `BMU_DYNAMODB_PORT`, `BMU_SIM_PORT`,
 `BMU_ENV_LABEL`, `BMU_COOKIE_NAME`) with the simulator's values as defaults.

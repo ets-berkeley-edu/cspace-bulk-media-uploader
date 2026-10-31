@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from fakecspace.app import app as fake_app
+from fakecspace.app import stores
 
 
 @pytest.fixture
@@ -146,6 +147,26 @@ def test_reset_everything_clears_jobs_files_audit_and_schedule_and_keeps_the_sig
     assert len(fake.objects) == 14 and fake.seeded == ["bmu"]  # reset empty, then seeded again
     assert api.get("/api/me").status_code == 200  # still signed in
     assert new_job(api, "After")  # and the prototype works again
+
+
+def test_the_shared_simulator_is_never_reset(api, login, demo, add_uploaded, services, fake):
+    """./bmu up shared (BMU_SIM_SHARED): the simulator is Serena's too, and a reset would empty every museum's store."""
+    services.settings.sim_shared = True
+    login()
+    assert api.get("/api/_demo/status").json()["simShared"] is True
+    serenas = stores["cinefiles"].add("serena-1")  # a record Serena's fake ETL made
+    api.post("/api/_demo/sim/slow", json={"params": {"seconds": 2}})
+    r = api.post("/api/_demo/sim/reset", json={"params": {}})
+    assert r.status_code == 409 and "shared with Serena" in r.json()["detail"]
+    assert fake.delay == 2 and serenas.csid in stores["cinefiles"].media
+    job = new_job(api, "Ran")
+    add_uploaded(job, ["1-2345_a.jpg"])
+    media_before = len(fake.media)
+    r = api.post("/api/_demo/reset-everything")
+    assert r.status_code == 200, r.text
+    assert api.get("/api/jobs").json()["jobs"] == []  # the BMU's own data is gone
+    assert len(fake.media) == media_before and serenas.csid in stores["cinefiles"].media  # the simulator's isn't
+    assert len(fake.objects) == 14 and fake.seeded == ["bmu"]  # seeding again added nothing
 
 
 def test_reset_everything_is_refused_while_a_job_runs_and_against_a_real_server(api, login, demo, services):

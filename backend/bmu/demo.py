@@ -44,6 +44,9 @@ SIM_ACTIONS: dict[str, tuple[str, str]] = {
     "rename-language": ("POST", "/_fake/rename-language"),
     "reset": ("POST", "/_fake/reset"),
 }
+# With the simulator shared with Serena (BMU_SIM_SHARED), a reset would empty every museum's store, Serena's records too.
+SHARED_NO_RESET = ("The simulated CollectionSpace is shared with Serena here, so Demo tools don't reset it. "
+                   "To start it afresh: docker compose -p fakecspace-shared down, then ./bmu up shared.")
 
 # Sends the browser's upload on to S3: (url, headers, body) -> (status, content type, body).
 Forward = Callable[[str, dict[str, str], AsyncIterator[bytes]], Awaitable[tuple[int, str, bytes]]]
@@ -130,7 +133,8 @@ def register(app: FastAPI) -> None:
         except HTTPException:
             users = []
         return {"browserUploadMbps": s.demo.browser_upload_mbps, "cspaceUrl": s.settings.cspace_url,
-                "alwaysRunTime": s.settings.always_run_time, "sim": sim, "simError": sim_error,
+                "alwaysRunTime": s.settings.always_run_time, "simShared": s.settings.sim_shared,
+                "sim": sim, "simError": sim_error,
                 "user": sess.user, "role": sess.role, "users": users}
 
     @app.post("/api/_demo/browser-upload")
@@ -145,6 +149,8 @@ def register(app: FastAPI) -> None:
         """Pass one control on to the simulated CollectionSpace (see SIM_ACTIONS and the fakecspace package's README)."""
         if action not in SIM_ACTIONS:
             raise HTTPException(404, "Not Found")
+        if action == "reset" and s.settings.sim_shared:
+            raise HTTPException(409, SHARED_NO_RESET)
         method, path = SIM_ACTIONS[action]
         params = {k: v for k, v in body.params.items() if v is not None and v != ""}
         if action == "fail":
@@ -198,7 +204,8 @@ def register(app: FastAPI) -> None:
     @app.post("/api/_demo/reset-everything")
     def reset_everything(sess: Session = Depends(current_session), s: Services = Depends(demo_on)):
         """Put the prototype back to how it starts: every job, draft, file and audit entry deleted, the job schedule
-        back to its defaults, the simulated CollectionSpace reset and browser uploads at full speed. Whoever is signed
+        back to its defaults, the simulated CollectionSpace reset (not when it's shared with Serena: its samples are
+        only seeded again) and browser uploads at full speed. Whoever is signed
         in stays signed in. Only with the simulated CollectionSpace: against a real server the audit log is the record
         of what the BMU created there, and is never deleted. Refused while a job is running (the worker is writing)."""
         sim_call(s, "GET", "/_fake/settings")  # 502 with the reason unless the CollectionSpace is the simulator
@@ -209,8 +216,9 @@ def register(app: FastAPI) -> None:
         counts = s.storage.wipe_everything()
         s.queue_rows.clear()
         s.demo.browser_upload_mbps = 0.0
-        sim_call(s, "POST", "/_fake/reset")
-        seed_samples(s)
+        if not s.settings.sim_shared:  # the shared simulator is never reset from here (SHARED_NO_RESET)
+            sim_call(s, "POST", "/_fake/reset")
+        seed_samples(s)  # seeding again changes nothing until a reset
         log.info("demo: %s reset everything (%d items, %d objects)", sess.user, counts["items"], counts["objects"])
         return counts
 

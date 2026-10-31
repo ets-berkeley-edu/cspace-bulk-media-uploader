@@ -72,6 +72,9 @@ class Settings(BaseSettings):
     # Demo builds only: the Demo tools pane's endpoints (/api/_demo/...), which slow the browser's uploads, control the
     # simulated CollectionSpace and delete every job in the tenant. Off (404) unless BMU_DEMO=true; never in production.
     demo: bool = False
+    # The simulated CollectionSpace is the one shared with Serena (./bmu up shared; fakecspace's compose.shared.yml).
+    # Demo tools then never reset it: a reset empties every museum's store, Serena's records included. Env BMU_SIM_SHARED.
+    sim_shared: bool = False
 
     # The read-only CollectionSpace account that checks an intern's drafts (design: Roles; bmu/reader.py). In AWS:
     # the id of a Secrets Manager secret holding {"username": ..., "password": ...}. Locally: the two settings
@@ -117,8 +120,9 @@ class Settings(BaseSettings):
         return self.protected_draft_days if (job or {}).get("protectedCount") else self.draft_days
 
 
-# The simulated CollectionSpace's host names (the fakecspace package): locally, in Docker and in the tests.
-SIMULATOR_HOSTS = {"localhost", "127.0.0.1", "fakecspace", "fake"}
+# The simulated CollectionSpace's host names (the fakecspace package): locally, in Docker and in the tests; and PAHMA's
+# on the simulator shared with Serena (./bmu up shared).
+SIMULATOR_HOSTS = {"localhost", "127.0.0.1", "fakecspace", "fake", "pahma.fakecspace"}
 
 
 @lru_cache

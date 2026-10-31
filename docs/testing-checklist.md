@@ -589,6 +589,27 @@ so not on the T-Mobile hotspot, which gives no IPv4).
   `15-1240_1.jpg` finds its Object (the samples were seeded), and an intern's checks work (the `bmureader` secret).
 - [ ] On the pull request, the `bmut` job passes: the Selenium tests run against the package's simulator.
 
+## 21. Shared mode, with Serena (30 October 2026; 20 minutes)
+
+Branch `feature/shared-simulator`. `./bmu up shared` uses the simulator shared with Serena (cspace-fakecspace's
+`compose.shared.yml`, merged in its PR #6: a clone of its `main` beside this one, `git pull` first) in place of one
+of its own. Serena's side is its testing checklist section 53. Start with `docker compose -p fakecspace-shared down`.
+
+- [ ] **1. It starts the simulator.** `./bmu up shared` says "Starting the shared simulator from ../cspace-fakecspace",
+  then the BMU is up at http://localhost:5673 with the label "Local · simulator shared with Serena". `./bmu status`
+  lists `shared`.
+- [ ] **2. Seeded.** Demo tools' sample objects list the 14 Objects. `./bmu up shared` again says the simulator is
+  already running, and the objects are still 14 (not 28).
+- [ ] **3. A job runs.** A job with `15-1240_1.jpg`: Completed, and `curl -s localhost:8680/_fake/media` lists its
+  Media record with a Blob.
+- [ ] **4. No reset.** Demo tools have no "Reset simulated CollectionSpace", and say why under the Reset box. Reset
+  everything's question says the simulator isn't reset; after it, the job is gone but its Media record is still in
+  `localhost:8680/_fake/media`.
+- [ ] **5. Through Serena.** `./serena up shared` (cspace-media-server) says the simulator is already running. In
+  Serena's admin app, Manual refresh for PAHMA, "Make one from the simulator": the BMU's record is listed. Apply, then
+  the image comes out of Serena.
+- [ ] **6. Down.** `./bmu down shared` says the shared simulator is still running; `./bmu up sim` still works beside it.
+
 ## 22. CI's sign-in to ECR Public (31 October 2026; 15 minutes, signed in to the personal account)
 
 Branch `feature/ecr-public-sign-in`. The `bmut` job signs in to ECR Public before pulling base images
