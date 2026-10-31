@@ -592,8 +592,8 @@ so not on the T-Mobile hotspot, which gives no IPv4).
 ## 21. Shared mode, with Serena (30 October 2026; 20 minutes)
 
 Branch `feature/shared-simulator`. `./bmu up shared` uses the simulator shared with Serena (cspace-fakecspace's
-`compose.shared.yml`, its `feature/shared-mode` branch until that merges, in a clone beside this one) in place of one of
-its own. Serena's side is its testing checklist section 53. Start with `docker compose -p fakecspace-shared down`.
+`compose.shared.yml`, merged in its PR #6: a clone of its `main` beside this one, `git pull` first) in place of one
+of its own. Serena's side is its testing checklist section 53. Start with `docker compose -p fakecspace-shared down`.
 
 - [ ] **1. It starts the simulator.** `./bmu up shared` says "Starting the shared simulator from ../cspace-fakecspace",
   then the BMU is up at http://localhost:5673 with the label "Local · simulator shared with Serena". `./bmu status`
