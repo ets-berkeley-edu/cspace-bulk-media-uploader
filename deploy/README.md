@@ -24,6 +24,7 @@ prototype: the image is built from this repository and runs on ECS Fargate. Demo
 | `./bmu aws allow-my-ip` | Adds this computer's current address to the allowlist, and applies it. |
 | `./bmu aws reader-secret [museum]` | Sets or changes the sign-in of a museum's read-only CollectionSpace account, which checks its interns' drafts. It asks for the user name and password; see below. The museum can be left out when the environment serves only one. |
 | `./bmu aws destroy` | Deletes everything in AWS for the environment, data included. It asks for the environment's name first. |
+| `./bmu aws ci-role` | Once per account: the role CI assumes to sign in to ECR Public (see "CI's sign-in to ECR Public" below). Prints the command that sets the repository's `ECR_PUBLIC_ROLE_ARN` variable. |
 
 **Picking the environment.** Add `--env NAME`, or set `BMU_AWS_ENV`. The default is `personal-dev`.
 
@@ -254,8 +255,9 @@ costs.
 
 ## Terraform
 
-- **Two configurations.** `registry` (the image repository) and `app` (everything else). The image has to be
-  pushed between them, so they are applied in turn.
+- **Two configurations per environment.** `registry` (the image repository) and `app` (everything else). The image
+  has to be pushed between them, so they are applied in turn. A third, `ci`, is once per account (CI's sign-in to
+  ECR Public, above).
 - **Versions.** Terraform 1.10 or later and the AWS provider 6.x. `.terraform.lock.hcl` in each folder pins the
   exact provider version (6.67.0 now) for Macs and Linux.
 - **State.** Terraform's record of what it created lives in S3, in the same account:
@@ -309,6 +311,26 @@ it.
 If the UCB account requires a custom domain, a different network layout, existing VPCs or a shared state
 bucket, those become variables in `app/variables.tf` or settings in `deploy/aws.sh`.
 
+## CI's sign-in to ECR Public
+
+The Dockerfiles' base images come from Amazon ECR Public. Anonymous pulls there are limited per address, and GitHub's
+shared runners can run out ("429 Too Many Requests: Data limit exceeded"), which fails the `bmut` job before any test
+runs. Signed-in pulls have a much higher limit, so the `bmut` job signs in first when the repository has the Actions
+variable `ECR_PUBLIC_ROLE_ARN`:
+
+- **The role** (`deploy/terraform/ci`): `bmu-ci-ecr-public-pull`, which GitHub Actions assumes through OIDC (no stored
+  key). Only workflows of this repository can assume it (`repo:ets-berkeley-edu/cspace-bulk-media-uploader:*`), and
+  it can do nothing but get an ECR Public pull token (`ecr-public:GetAuthorizationToken`,
+  `sts:GetServiceBearerToken`). Sessions last an hour at most. It costs nothing.
+- **Creating it**, once per account, with the environment's sign-in (`personal-dev`'s account for now; move it with
+  the environments): `./bmu aws ci-role`. It uses the account's GitHub OIDC provider if it already has one, and
+  otherwise creates it. State: `s3://bmu-tfstate-<account>-<region>/bmu/ci/ci.tfstate`.
+- **The variable.** The command prints `gh variable set ECR_PUBLIC_ROLE_ARN ...`; run it. It's a variable, not a
+  secret, but it isn't committed: it holds the account number, and the repository is public.
+- **Without it** (before set-up, in a fork, or on a fork's pull request, which gets no OIDC token) the job pulls
+  without signing in, as before.
+- **Serena** can use the same role: add its repository to `repositories` in `deploy/terraform/ci/main.tf`.
+
 ## Checking the Terraform code
 
 CI (the `terraform` job in `.github/workflows/ci.yml`) runs the first three on every pull request and every push
@@ -319,7 +341,7 @@ to `main`, with the Terraform version pinned there. None of them needs an AWS si
 - **`terraform validate`.** It checks every resource and argument against the provider.
 - **`terraform test`.** In `deploy/terraform/app`. It plans against a simulated AWS provider and checks names,
   the paused state, the allowlist, data protection, each museum's key and secret, and that bad input is refused
-  (`tests/app.tftest.hcl`).
+  (`tests/app.tftest.hcl`). In `deploy/terraform/ci`, the same for CI's ECR Public role (`tests/ci.tftest.hcl`).
 
 To run `validate` and `test` on your computer, use a separate, empty Terraform folder (`TF_DATA_DIR`). A folder
 that `./bmu aws` has already initialized points at the environment's state in S3, and `init -backend=false` would
@@ -329,6 +351,8 @@ still try to read it (and fail with a 403 when you aren't signed in):
 (cd deploy/terraform/registry && export TF_DATA_DIR="$(mktemp -d)" &&
   terraform init -backend=false -lockfile=readonly && terraform validate)
 (cd deploy/terraform/app && export TF_DATA_DIR="$(mktemp -d)" &&
+  terraform init -backend=false -lockfile=readonly && terraform validate && terraform test)
+(cd deploy/terraform/ci && export TF_DATA_DIR="$(mktemp -d)" &&
   terraform init -backend=false -lockfile=readonly && terraform validate && terraform test)
 ```
 - **App checks.** `backend/tests/test_deploy.py` checks that the Terraform code matches the app: tables,
