@@ -10,7 +10,7 @@ import vueParser from 'vue-eslint-parser'
 //   - vue/no-v-html is an error here. The BMU shows text that comes from CollectionSpace and from file names;
 //     it is only ever rendered as text.
 //   - BOA's scoped-CSS plugin and @vue/eslint-config-typescript are left out: each brings in packages that
-//     `npm audit` reports, and the BMU keeps `npm audit` clean.
+//     `npm audit` reports, and the BMU keeps `npm audit` clean (scripts/audit.js, audit-allowlist.json).
 const vueLanguageOptions = {
   globals: {
     ...globals.node,
