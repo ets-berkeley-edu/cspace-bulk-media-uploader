@@ -319,7 +319,9 @@ runs. Signed-in pulls have a much higher limit, so the `bmut` job signs in first
 variable `ECR_PUBLIC_ROLE_ARN`:
 
 - **The role** (`deploy/terraform/ci`): `bmu-ci-ecr-public-pull`, which GitHub Actions assumes through OIDC (no stored
-  key). Only workflows of this repository can assume it (`repo:ets-berkeley-edu/cspace-bulk-media-uploader:*`), and
+  key). Only workflows of this repository can assume it: the organization uses GitHub's immutable OIDC subjects, so
+  the trust names the repository by its IDs (`repo:ets-berkeley-edu@283538/cspace-bulk-media-uploader@1391463041:*`;
+  `gh api repos/OWNER/REPO/actions/oidc/customization/sub` prints a repository's), and
   it can do nothing but get an ECR Public pull token (`ecr-public:GetAuthorizationToken`,
   `sts:GetServiceBearerToken`). Sessions last an hour at most. It costs nothing.
 - **Creating it**, once per account, with the environment's sign-in (`personal-dev`'s account for now; move it with
@@ -328,8 +330,8 @@ variable `ECR_PUBLIC_ROLE_ARN`:
 - **The variable.** The command prints `gh variable set ECR_PUBLIC_ROLE_ARN ...`; run it. It's a variable, not a
   secret, but it isn't committed: it holds the account number, and the repository is public.
 - **Without it** (before set-up, in a fork, or on a fork's pull request, which gets no OIDC token) the job pulls
-  without signing in, as before.
-- **Serena** can use the same role: add its repository to `repositories` in `deploy/terraform/ci/main.tf`.
+  without signing in, as before. A failed sign-in does the same: the job goes on, and the sign-in step shows why.
+- **Serena** can use the same role: add its subject prefix to `repositories` in `deploy/terraform/ci/main.tf`.
 
 ## Checking the Terraform code
 

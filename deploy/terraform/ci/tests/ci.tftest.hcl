@@ -24,7 +24,7 @@ run "the_role_trusts_only_this_repository_and_can_only_get_a_pull_token" {
   command = plan
 
   assert {
-    condition     = local.allowed_subject == ["repo:ets-berkeley-edu/cspace-bulk-media-uploader:*"]
+    condition     = local.allowed_subject == ["repo:ets-berkeley-edu@283538/cspace-bulk-media-uploader@1391463041:*"]
     error_message = "The role must trust only the BMU's repository."
   }
 
@@ -56,7 +56,17 @@ run "a_wildcard_repository_is_refused" {
   command = plan
 
   variables {
-    repositories = ["ets-berkeley-edu/*"]
+    repositories = ["repo:ets-berkeley-edu@283538/*"]
+  }
+
+  expect_failures = [var.repositories]
+}
+
+run "a_subject_without_ids_is_refused" {
+  command = plan
+
+  variables {
+    repositories = ["repo:ets-berkeley-edu/cspace-bulk-media-uploader"]
   }
 
   expect_failures = [var.repositories]

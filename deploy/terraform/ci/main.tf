@@ -46,13 +46,18 @@ variable "region" {
 }
 
 variable "repositories" {
-  description = "GitHub repositories (owner/name) whose workflows may assume the role, on any branch or pull request."
+  description = <<-EOT
+    The GitHub repositories whose workflows may assume the role, on any branch or pull request, as their OIDC tokens'
+    subject prefix. ets-berkeley-edu uses immutable subjects, which name the owner and repository with their IDs, so a
+    rename or a new repository by an old name doesn't match: gh api repos/OWNER/REPO/actions/oidc/customization/sub
+    prints a repository's (sub_claim_prefix). The IDs are public.
+  EOT
   type        = list(string)
-  default     = ["ets-berkeley-edu/cspace-bulk-media-uploader"]
+  default     = ["repo:ets-berkeley-edu@283538/cspace-bulk-media-uploader@1391463041"]
 
   validation {
-    condition     = length(var.repositories) > 0 && alltrue([for r in var.repositories : can(regex("^ets-berkeley-edu/[A-Za-z0-9._-]+$", r))])
-    error_message = "repositories must name at least one ets-berkeley-edu repository, as owner/name with no wildcard."
+    condition     = length(var.repositories) > 0 && alltrue([for r in var.repositories : can(regex("^repo:ets-berkeley-edu@283538/[A-Za-z0-9._-]+@[0-9]+$", r))])
+    error_message = "repositories must list at least one ets-berkeley-edu repository's subject prefix, repo:ets-berkeley-edu@283538/NAME@ID, with no wildcard."
   }
 }
 
@@ -65,7 +70,7 @@ variable "create_oidc_provider" {
 locals {
   oidc_url        = "https://token.actions.githubusercontent.com"
   oidc_provider   = var.create_oidc_provider ? aws_iam_openid_connect_provider.github[0].arn : data.aws_iam_openid_connect_provider.github[0].arn
-  allowed_subject = [for r in var.repositories : "repo:${r}:*"]
+  allowed_subject = [for r in var.repositories : "${r}:*"]
 }
 
 resource "aws_iam_openid_connect_provider" "github" {
