@@ -7,6 +7,7 @@
   Terraform state for that environment's name (check_not_someone_elses);
 - the simulated CollectionSpace (SIMULATED_CSPACE=true): its address, label, image and read-only account;
 - the read-only accounts' secrets, one per museum (reader-secret MUSEUM, status).
+- ci-role: CI's ECR Public role, with the account's GitHub OIDC provider created or reused.
 """
 import json
 import os
@@ -29,6 +30,7 @@ case "$*" in
   *"dynamodb query"*) printf '%s\n' "$@" > "$FAKE_LOG_DIR/dynamodb-query"; echo "${FAKE_UNFINISHED_JOBS:-0}" ;;
   *"secretsmanager describe-secret"*)
     case "$*" in *LastChangedDate*) echo "2026-10-07T12:00:00" ;; *) echo "${FAKE_SECRET_VERSIONS-0}" ;; esac ;;
+  *"iam list-open-id-connect-providers"*) echo "${FAKE_OIDC_PROVIDERS:-}" ;;
   *"secretsmanager put-secret-value"*)
     printf '%s\n' "$@" | grep -A1 -x -e --secret-id | tail -1 > "$FAKE_LOG_DIR/secret-id"
     cat > "$FAKE_LOG_DIR/secret" ;;
@@ -49,6 +51,8 @@ case "$*" in
   *"output -raw fakecspace_repository_url"*) echo "repo/bmu-dev-fakecspace" ;;
   *"output -raw repository_url"*) echo "repo/bmu-dev" ;;
   *"output -raw url"*) echo "https://bmu.example.invalid" ;;
+  *"output -raw role_arn"*) echo "arn:aws:iam::$FAKE_ACCOUNT:role/bmu-ci-ecr-public-pull" ;;
+  *"state list"*) echo "${FAKE_CI_STATE:-}" ;;
   *" plan "*|*" apply "*|*" destroy "*)
     printf '%s\n' "$@" > "$FAKE_LOG_DIR/terraform-$(printf '%s\n' "$@" | grep -m1 -x -E 'plan|apply|destroy')-${1#-chdir=deploy/terraform/}"
     [ "$2" != plan ] || echo "PLANNED tenants=$(printf '%s\n' "$@" | sed -n 's/^tenants=//p')" ;;
@@ -461,3 +465,31 @@ def test_https_to_the_load_balancer_needs_both_settings(tree):
     assert r.returncode == 0, r.stderr
     args = tf_args(tree, "plan-app")
     assert args["origin_domain"] == "bmu-dev-origin.example.berkeley.edu" and args["origin_certificate_arn"] == arn
+
+
+# ---- ci-role: the role CI assumes to sign in to ECR Public (deploy/terraform/ci) -----------------------------------
+def test_ci_role_creates_the_oidc_provider_when_the_account_has_none_and_prints_the_variable_command(tree):
+    write_env(tree)
+    r = run(tree, "ci-role")
+    assert r.returncode == 0, r.stderr
+    apply = (tree / "log" / "terraform-apply-ci").read_text().splitlines()
+    assert f"account_id={ACCOUNT}" in "\n".join(apply) and "-var=create_oidc_provider=true" in apply
+    assert "gh variable set ECR_PUBLIC_ROLE_ARN --repo ets-berkeley-edu/cspace-bulk-media-uploader" in r.stdout
+    assert f"arn:aws:iam::{ACCOUNT}:role/bmu-ci-ecr-public-pull" in r.stdout
+
+
+def test_ci_role_uses_an_oidc_provider_the_account_already_has(tree):
+    write_env(tree)
+    existing = f"arn:aws:iam::{ACCOUNT}:oidc-provider/token.actions.githubusercontent.com"
+    r = run(tree, "ci-role", oidc_providers=existing)
+    assert r.returncode == 0, r.stderr
+    assert "-var=create_oidc_provider=false" in (tree / "log" / "terraform-apply-ci").read_text().splitlines()
+    assert "already has GitHub's OIDC provider" in r.stdout
+
+
+def test_ci_role_keeps_an_oidc_provider_its_own_state_created(tree):
+    write_env(tree)
+    existing = f"arn:aws:iam::{ACCOUNT}:oidc-provider/token.actions.githubusercontent.com"
+    r = run(tree, "ci-role", oidc_providers=existing, ci_state="aws_iam_openid_connect_provider.github[0]")
+    assert r.returncode == 0, r.stderr
+    assert "-var=create_oidc_provider=true" in (tree / "log" / "terraform-apply-ci").read_text().splitlines()

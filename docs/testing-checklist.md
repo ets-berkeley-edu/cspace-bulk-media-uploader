@@ -589,6 +589,21 @@ so not on the T-Mobile hotspot, which gives no IPv4).
   `15-1240_1.jpg` finds its Object (the samples were seeded), and an intern's checks work (the `bmureader` secret).
 - [ ] On the pull request, the `bmut` job passes: the Selenium tests run against the package's simulator.
 
+## 22. CI's sign-in to ECR Public (31 October 2026; 15 minutes, signed in to the personal account)
+
+Branch `feature/ecr-public-sign-in`. The `bmut` job signs in to ECR Public before pulling base images
+(deploy/README.md, "CI's sign-in to ECR Public").
+
+- [ ] **1. Create the role.** `aws sso login --profile bmu-personal`, then `./bmu aws ci-role`: the plan creates the
+  role `bmu-ci-ecr-public-pull`, its policy and (unless the account has one) GitHub's OIDC provider, and nothing else.
+  Type `yes`. It prints a `gh variable set ECR_PUBLIC_ROLE_ARN ...` command.
+- [ ] **2. Set the variable.** Run that command; `gh variable list` shows `ECR_PUBLIC_ROLE_ARN`.
+- [ ] **3. CI signs in.** Re-run the pull request's `bmut` job: "Sign in to AWS for ECR Public" and "Sign in to ECR
+  Public" pass, and the images build.
+- [ ] **4. Nothing more.** In the IAM console, the role's trust names only this repository, and its one policy has
+  only `ecr-public:GetAuthorizationToken` and `sts:GetServiceBearerToken`.
+- [ ] **5. Again changes nothing.** `./bmu aws ci-role` a second time: "No changes".
+
 ## Not tests, but still open
 
 - The design doc's "For Richard to address" list (from the October 3 comparison of the doc with the prototype).
