@@ -77,7 +77,7 @@ CI (`.github/workflows/ci.yml`) runs `pytest -q`, then `npm run lint`, `typechec
 services' logs). It signs in to ECR Public first with the role in `deploy/terraform/ci` when the repository has the
 Actions variable `ECR_PUBLIC_ROLE_ARN` (deploy/README.md, "CI's sign-in to ECR Public"); never commit that ARN. After
 changing a `.tf` file, run `terraform fmt -recursive deploy/terraform`.
-`.github/workflows/audit.yml` repeats the audit, with `npm audit`, every Monday.
+`.github/workflows/audit.yml` repeats the audit every Monday.
 A pull request that changes only documentation (`docs/`, `*.md`, `LICENSE`, issue/PR templates) skips `backend`,
 `frontend`, `bmut` and `terraform`; the `changes` job decides, and a skipped job counts as passing. `dependencies` and
 `.github/workflows/security.yml` (`gitleaks` over the whole history, and `npm audit`) run on every pull request and
@@ -171,7 +171,10 @@ Built like the team's other apps (BOA, Damien, Diablo); `README.md`, Frontend, h
 - Nothing clickable is smaller than 24 pixels: no `size="x-small"` or `density="compact"` on a button (column
   headings set their own height). Keyboard focus is a solid outline, set in `bmu-global.css`.
 - A list that loads from the server shows "Loading…" until the first answer, never its empty message.
-- `npm audit` stays clean; don't add a package that breaks it.
+- `npm audit` stays clean; don't add a package that breaks it. CI runs it through `frontend/scripts/audit.js`, which
+  fails on any advisory not in `frontend/audit-allowlist.json`, on an entry past its review date, and on an entry no
+  longer reported. Add an entry only for an advisory with no usable fix, with the reason it can't reach production and
+  a review date a month or so out.
 
 ### Tests
 
