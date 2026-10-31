@@ -116,12 +116,34 @@ jobs:
     if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # id-token: an OIDC token for the ECR Public sign-in below, and nothing else; GitHub gives none to a fork's pull
+    # request, which then pulls without signing in.
+    permissions: { contents: read, id-token: write }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         id: python
         with: { python-version-file: .python-version }
+      # Signed-in pulls from ECR Public (the Dockerfiles' base images) have a far higher limit than anonymous ones,
+      # which GitHub's shared runner addresses run out of (429 "Data limit exceeded"). The role (deploy/terraform/ci,
+      # ./bmu aws ci-role) can only get a pull token. Its ARN is the repository's Actions variable ECR_PUBLIC_ROLE_ARN,
+      # not committed because it holds the account number; without it, or on a fork's pull request, these are skipped.
+      # A failed sign-in doesn't fail the job: the pulls are then anonymous, as before, and the step shows the error.
+      - name: Sign in to AWS for ECR Public
+        id: aws
+        continue-on-error: true
+        if: vars.ECR_PUBLIC_ROLE_ARN != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.ECR_PUBLIC_ROLE_ARN }}
+          role-session-name: bmut-${{ github.run_id }}
+          aws-region: us-east-1   # ECR Public's sign-in is in us-east-1 only
+      - name: Sign in to ECR Public
+        if: steps.aws.outcome == 'success'
+        continue-on-error: true
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+        with: { registry-type: public }
       - name: ./bmu test
         env:
           BMUT_PYTHON: ${{ steps.python.outputs.python-path }}
@@ -169,6 +191,12 @@ jobs:
           terraform validate
       - name: Validate and test the app's configuration
         working-directory: deploy/terraform/app
+        run: |
+          terraform init -backend=false -lockfile=readonly
+          terraform validate
+          terraform test
+      - name: Validate and test CI's ECR Public role
+        working-directory: deploy/terraform/ci
         run: |
           terraform init -backend=false -lockfile=readonly
           terraform validate

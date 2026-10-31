@@ -12,6 +12,8 @@
 #                           nothing is shown or saved here)
 #   ./bmu aws destroy       delete everything in AWS for this environment, data included (asks first)
 #   ./bmu aws init          point Terraform at this environment's state, to run terraform commands yourself
+#   ./bmu aws ci-role       once per account: the role CI assumes to sign in to ECR Public (deploy/terraform/ci);
+#                           prints the gh command that sets the repository's ECR_PUBLIC_ROLE_ARN variable
 #
 # Which environment: --env NAME or BMU_AWS_ENV (default personal-dev). Its settings are in
 # deploy/environments/NAME.conf; NAME.local.conf (not committed) holds the account number and allowed addresses.
@@ -530,6 +532,34 @@ destroy() {
   echo "The Terraform state bucket s3://$STATE_BUCKET is kept; it holds the (now empty) state and its history."
 }
 
+# The role GitHub Actions assumes to sign in to ECR Public (deploy/terraform/ci): once per account, whichever
+# environment's settings pick the account. Uses the account's GitHub OIDC provider if it already has one that this
+# state doesn't manage, rather than creating a second (IAM allows one per URL).
+CI_REPOSITORY=ets-berkeley-edu/cspace-bulk-media-uploader
+ci_role() {
+  prepare
+  tf ci init -input=false -reconfigure \
+    -backend-config="bucket=$STATE_BUCKET" -backend-config="key=bmu/ci/ci.tfstate" \
+    -backend-config="region=$AWS_REGION" -backend-config="use_lockfile=true" >/dev/null ||
+    die "terraform init failed for ci. Run it yourself to see why: terraform -chdir=$TF_DIR/ci init"
+  local create=true
+  if ! tf ci state list 2>/dev/null | grep -q '^aws_iam_openid_connect_provider\.github'; then
+    if aws_ iam list-open-id-connect-providers --query 'OpenIDConnectProviderList[].Arn' --output text |
+        grep -q 'oidc-provider/token\.actions\.githubusercontent\.com'; then
+      create=false
+      echo "The account already has GitHub's OIDC provider: using it."
+    fi
+  fi
+  # shellcheck disable=SC2046
+  tf ci apply -input=false $(approve) -var="account_id=$ACCOUNT_ID" -var="region=$AWS_REGION" \
+    -var="create_oidc_provider=$create"
+  local arn; arn="$(tf ci output -raw role_arn)"
+  echo
+  echo "Now set the repository's Actions variable (a variable, not a secret: it isn't committed only because it holds"
+  echo "the account number). CI's bmut job then signs in to ECR Public before pulling base images:"
+  echo "  gh variable set ECR_PUBLIC_ROLE_ARN --repo $CI_REPOSITORY --body '$arn'"
+}
+
 case "$CMD" in
   deploy) deploy ;;
   plan) plan ;;
@@ -554,6 +584,7 @@ case "$CMD" in
   init) prepare; tf registry init -reconfigure -backend-config="bucket=$STATE_BUCKET" -backend-config="key=bmu/$BMU_ENV_NAME/registry.tfstate" -backend-config="region=$AWS_REGION" -backend-config="use_lockfile=true"
         tf app init -reconfigure -backend-config="bucket=$STATE_BUCKET" -backend-config="key=bmu/$BMU_ENV_NAME/app.tfstate" -backend-config="region=$AWS_REGION" -backend-config="use_lockfile=true" ;;
   reader-secret) reader_secret "${1:-}" ;;
+  ci-role) ci_role ;;
   destroy) destroy ;;
   help|-h|--help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0" ;;
   *) die "Unknown command '$CMD'. ./bmu aws help lists them." ;;

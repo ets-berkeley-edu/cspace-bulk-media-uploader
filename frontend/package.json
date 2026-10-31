@@ -12,7 +12,8 @@
     "test": "vitest run",
     "typecheck": "vue-tsc --noEmit",
     "lint": "eslint .",
-    "lint-fix": "eslint . --fix"
+    "lint-fix": "eslint . --fix",
+    "audit-check": "node scripts/audit.js"
   },
   "dependencies": {
     "@mdi/js": "7.4.47",
