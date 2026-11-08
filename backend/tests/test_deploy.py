@@ -314,7 +314,11 @@ def test_each_museum_in_the_settings_has_a_configuration():
     for conf in (DEPLOY / "environments").glob("*.conf"):
         if conf.name.endswith(".local.conf"):
             continue  # never read: not committed, and may hold an account number
-        line = next(l for l in conf.read_text().splitlines() if l.startswith("CSPACE_TENANTS="))
+        lines = conf.read_text().splitlines()
+        if any(l.startswith("SIMULATED_CSPACE=true") for l in lines):
+            line = "CSPACE_TENANTS=pahma=simulator"  # the simulator is PAHMA alone (deploy/aws.sh); CSPACE_TENANTS is ignored
+        else:
+            line = next(l for l in lines if l.startswith("CSPACE_TENANTS="))
         for entry in line.split("=", 1)[1].strip('"').split():
             museum = entry.split("=", 1)[0]
             assert (Path(appmod.__file__).parent / "tenants" / f"{museum}.yaml").exists(), (conf.name, museum)
@@ -351,3 +355,16 @@ def test_the_deployer_policy_names_no_account_or_network_and_limits_writes_to_th
             assert r == "*" or "bmu-" in r or ":log-group:/bmu/" in r or r.endswith((":vpc/*", ":route-table/*", ":security-group/*",
                     ":security-group-rule/*", ":vpc-endpoint/*", ":distribution/*", ":vpcorigin/*", ":key/*")), (st["Sid"], r)
     assert _local("versions.tf", "name") == "bmu-${var.env_name}"  # every name the policy allows starts bmu-
+
+
+def test_the_rehearsal_gets_the_parts_operations_attaches_and_never_museum_data(capsys):
+    sp = _split_policy()
+    assert sp.main(["--json"]) == 0
+    printed = json.loads(capsys.readouterr().out)
+    assert [json.loads(p) for p in printed] == sp.split(json.loads(sp.POLICY.read_text()))
+    for conf in (DEPLOY / "environments").glob("*.conf"):
+        text = conf.read_text()
+        if not conf.name.endswith(".local.conf") and re.search(r"^REHEARSAL=true", text, re.M):
+            assert re.search(r"^SIMULATED_CSPACE=true", text, re.M) and not re.search(r"^PROTECT_DATA=true", text, re.M), conf.name
+            profile = re.search(r"^AWS_PROFILE=(\S+)", text, re.M).group(1)
+            assert profile != re.search(r"^ADMIN_PROFILE=(\S+)", text, re.M).group(1)  # the deployer isn't the administrator

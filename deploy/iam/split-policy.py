@@ -2,6 +2,8 @@
 
     python3 deploy/iam/split-policy.py           # writes deploy/iam/out/bmu-deployer-policy-part<N>.json
     python3 deploy/iam/split-policy.py --check   # only checks that it fits
+    python3 deploy/iam/split-policy.py --json    # prints the parts as a JSON list of documents, for ./bmu aws
+                                                 # rehearsal-vpc (deploy/terraform/rehearsal, policy_parts)
 
 bmu-deployer-policy.json is the only copy of the policy: the parts are always made from it, never stored (out/ isn't
 committed). A customer managed policy holds at most 6,144 characters, whitespace not counted, and a role at most 10
@@ -54,6 +56,9 @@ def _doc(policy: dict, statements: list[dict]) -> dict:
 def main(argv: list[str]) -> int:
     policy = json.loads(POLICY.read_text())
     parts = split(policy)
+    if "--json" in argv:
+        print(json.dumps([json.dumps(p, separators=(",", ":")) for p in parts]))
+        return 0
     print(f"{POLICY.name}: {size(policy)} characters, in {len(parts)} parts of at most {LIMIT}:")
     if "--check" not in argv:
         OUT.mkdir(exist_ok=True)

@@ -201,3 +201,9 @@ jobs:
           terraform init -backend=false -lockfile=readonly
           terraform validate
           terraform test
+      - name: Validate and test the deployer rehearsal
+        working-directory: deploy/terraform/rehearsal
+        run: |
+          terraform init -backend=false -lockfile=readonly
+          terraform validate
+          terraform test
