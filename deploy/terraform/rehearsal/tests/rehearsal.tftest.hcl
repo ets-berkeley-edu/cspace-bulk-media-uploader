@@ -79,7 +79,7 @@ run "a_deployer_with_only_the_policys_parts" {
 
   assert {
     condition     = aws_iam_role.deployer.max_session_duration == 3600
-    error_message = "Sessions of an hour, as rtl-BmuDeployer's (role chaining allows no more)."
+    error_message = "Sessions of an hour, as rtl-BmuQaDeployer's (role chaining allows no more)."
   }
 }
 
