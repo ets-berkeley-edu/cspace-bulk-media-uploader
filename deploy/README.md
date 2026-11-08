@@ -6,6 +6,8 @@ prototype: the image is built from this repository and runs on ECS Fargate. Demo
 - **One environment per account.** Each environment has a settings file in `deploy/environments/`.
   - `personal-dev.conf` is Richard's personal account and the default.
   - `ucb-dev.conf` is the UC Berkeley account. It is ready to fill in but not set up yet.
+  - `personal-rehearsal.conf` rehearses the UC Berkeley deployment in the personal account ("Rehearsing the deploy
+    in your own account" below).
 - **Infrastructure as code.** Everything is created by Terraform (`deploy/terraform/`), so nothing has to be
   clicked together in the console, and the whole environment can be deleted and created again.
 - **No keys or passwords in files.** You sign in with IAM Identity Center (`aws sso login`). The app's own
@@ -24,6 +26,7 @@ prototype: the image is built from this repository and runs on ECS Fargate. Demo
 | `./bmu aws allow-my-ip` | Adds this computer's current address to the allowlist, and applies it. |
 | `./bmu aws reader-secret [museum]` | Sets or changes the sign-in of a museum's read-only CollectionSpace account, which checks its interns' drafts. It asks for the user name and password; see below. The museum can be left out when the environment serves only one. |
 | `./bmu aws destroy` | Deletes everything in AWS for the environment, data included. It asks for the environment's name first. |
+| `./bmu aws rehearsal-vpc [destroy]` | A rehearsal environment only (`REHEARSAL=true`): makes, or deletes, what Operations provides in UC Berkeley's account, a VPC with a NAT gateway and a deployer role with only the deployer policy, signed in as the account's administrator. See "Rehearsing the deploy in your own account". |
 | `./bmu aws ci-role` | Once per account: the role CI assumes to sign in to ECR Public (see "CI's sign-in to ECR Public" below). Prints the command that sets the repository's `ECR_PUBLIC_ROLE_ARN` variable. |
 
 **Picking the environment.** Add `--env NAME`, or set `BMU_AWS_ENV`. The default is `personal-dev`.
@@ -257,7 +260,7 @@ costs.
 
 - **Two configurations per environment.** `registry` (the image repository) and `app` (everything else). The image
   has to be pushed between them, so they are applied in turn. A third, `ci`, is once per account (CI's sign-in to
-  ECR Public, above).
+  ECR Public, above), and a fourth, `rehearsal`, only for a rehearsal in a personal account (above).
 - **Versions.** Terraform 1.10 or later and the AWS provider 6.x. `.terraform.lock.hcl` in each folder pins the
   exact provider version (6.67.0 now) for Macs and Linux.
 - **State.** Terraform's record of what it created lives in S3, in the same account:
@@ -341,6 +344,32 @@ CREATE_GATEWAY_ENDPOINTS=false               # true only if the VPC has no S3 an
   create or change a VPC, subnets, routes or gateways. Without the WAF: the policy allows only us-west-2, and the
   BMU's WAF is in us-east-1 (`deploy/iam/README.md`, Not covered).
 
+## Rehearsing the deploy in your own account
+
+Before Operations attaches the deployer policy, the deploy can be tried in a personal account as a role with only
+that policy, so that a missing permission shows up there, not as a round trip with Operations. The environment
+`personal-rehearsal` (`REHEARSAL=true`) is that rehearsal: the simulated CollectionSpace only, deployed into a VPC like
+Operations', as the deployer.
+
+1. **What Operations provides.** Sign in as the account's administrator (`aws sso login --profile bmu-personal`), then
+   `./bmu aws rehearsal-vpc --env personal-rehearsal`. Terraform (`deploy/terraform/rehearsal`, state
+   `bmu/devqar/rehearsal.tfstate`) makes a VPC with two public and two private subnets and a NAT gateway, and the role
+   `rehearsal-devqar-deployer` with the policy's parts as managed policies, exactly as `deploy/iam/split-policy.py`
+   makes them for Operations. It saves `VPC_ID` and `APP_SUBNET_IDS` in `personal-rehearsal.local.conf` and prints the
+   deployer's profile for `~/.aws/config` (`bmu-rehearsal-deploy`, which signs in through `bmu-personal`, then
+   takes the role).
+2. **The deploy, as the deployer.** `./bmu aws deploy --env personal-rehearsal`. Everything `./bmu aws` does for this
+   environment, but `rehearsal-vpc`, uses the deployer's profile. Its sessions last an hour (role chaining), like
+   `rtl-BmuDeployer`'s; a deploy that outlasts one fails with an expired token and continues when run again.
+3. **Each `AccessDenied`** is the policy's: fix `deploy/iam/bmu-deployer-policy.json`, run
+   `./bmu aws rehearsal-vpc --env personal-rehearsal` again (it updates the role's policies), and continue the deploy.
+4. **Afterwards**, `./bmu aws destroy --env personal-rehearsal` (as the deployer), then
+   `./bmu aws rehearsal-vpc --env personal-rehearsal destroy` (refused while the BMU is still deployed).
+
+It costs about $3 a day while it exists, mostly the NAT gateway, which bills even while the BMU is paused. The role's
+name and its policies' don't start with `bmu-`: the policy lets the deployer change `bmu-*` roles. Applying the rehearsal
+is the administrator's alone; the deployer can't change its own role.
+
 ## CI's sign-in to ECR Public
 
 The Dockerfiles' base images come from Amazon ECR Public. Anonymous pulls there are limited per address, and GitHub's
@@ -385,6 +414,8 @@ still try to read it (and fail with a 403 when you aren't signed in):
 (cd deploy/terraform/app && export TF_DATA_DIR="$(mktemp -d)" &&
   terraform init -backend=false -lockfile=readonly && terraform validate && terraform test)
 (cd deploy/terraform/ci && export TF_DATA_DIR="$(mktemp -d)" &&
+  terraform init -backend=false -lockfile=readonly && terraform validate && terraform test)
+(cd deploy/terraform/rehearsal && export TF_DATA_DIR="$(mktemp -d)" &&
   terraform init -backend=false -lockfile=readonly && terraform validate && terraform test)
 ```
 - **App checks.** `backend/tests/test_deploy.py` checks that the Terraform code matches the app: tables,

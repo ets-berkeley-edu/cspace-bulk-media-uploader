@@ -88,6 +88,14 @@ can create security groups and their rules, and the S3 and DynamoDB gateway endp
   `VPC_ID` and `APP_SUBNET_IDS` in the environment's `.local.conf` (never committed); and whether the VPC already has
   S3 and DynamoDB gateway endpoints on those subnets' route tables (`CREATE_GATEWAY_ENDPOINTS`).
 
+## Rehearsed in a personal account first
+
+`../terraform/rehearsal` makes a role with only this policy, attached as the same parts, and `./bmu aws` deploys the
+BMU as that role into a VPC like Operations' in a personal account, with the simulated CollectionSpace
+(`../README.md`, Rehearsing the deploy in your own account; `docs/testing-checklist.md`, section 24). What it can't
+show: guardrails of UC Berkeley's account (service control policies, a permissions boundary), and anything already in
+that account, such as the service-linked roles.
+
 ## When a deploy fails with `AccessDenied`
 
 Note the action and resource in `docs/testing-checklist.md` (the section for the deploy into an existing VPC). The fix

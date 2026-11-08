@@ -657,6 +657,41 @@ Steps 1 and 2 in the personal account (15 minutes); steps 3 to 8 in UC Berkeley'
 - [ ] **8. Destroy** (if that's the plan for this first deployment). `./bmu aws destroy --env <env>`: it finishes
   without stopping at the VPC, and the VPC console no longer lists anything tagged `project=bmu`.
 
+## 24. The deployer rehearsal (8 November 2026; about 1½ hours, in the personal account)
+
+Branch `feature/deployer-rehearsal`. The BMU deployed into a VPC like Operations', as a role with only the deployer
+policy (deploy/README.md, "Rehearsing the deploy in your own account"), so that missing permissions are found before
+Operations attaches it. Every command from `cd ~/dev/src/rtl/cspace-bulk-media-uploader`. Note here every
+`AccessDenied`: the action, the resource, and the fix to `deploy/iam/bmu-deployer-policy.json`.
+
+- [ ] **1. What Operations provides.** `aws sso login --profile bmu-personal`, then
+  `./bmu aws rehearsal-vpc --env personal-rehearsal`. The first time it asks to confirm the account (yes). Expected:
+  Terraform's plan lists a VPC, four subnets, an internet gateway, an Elastic IP, a NAT gateway, two route tables and
+  four associations, the role `rehearsal-devqar-deployer`, and three policies `rehearsal-devqar-deployer-1` to `-3` with
+  their attachments; nothing named `bmu-`. Type `yes`. It then prints a `[profile bmu-rehearsal-deploy]` section.
+- [ ] **2. The deployer's profile.** Add that section to `~/.aws/config`. Check:
+  `aws sts get-caller-identity --profile bmu-rehearsal-deploy` shows an `assumed-role/rehearsal-devqar-deployer/…` ARN.
+- [ ] **3. Deploy as the deployer.** `./bmu aws deploy --env personal-rehearsal`. Expected: the image is built and
+  pushed, Terraform plans the BMU with no VPC or subnets of its own, two gateway endpoints
+  (`CREATE_GATEWAY_ENDPOINTS=true`) and the simulator, and after `yes` (15 to 25 minutes) it prints the address. Note
+  any `AccessDenied` (then step 4). In particular: the load balancer's security group rule naming CloudFront's prefix
+  list, and the gateway endpoints on the VPC's route table.
+- [ ] **4. If something was denied.** Add the permission to the policy, run
+  `./bmu aws rehearsal-vpc --env personal-rehearsal` (as administrator; the plan changes only the policies), then step 3
+  again; Terraform continues where it stopped. `python3 deploy/iam/split-policy.py --check` still fits in three parts.
+- [ ] **5. The app, as Serena's #197 taught.** From this computer: sign in as `admin`, make a job with a file, submit
+  it (it runs at once: `ALWAYS_RUN_TIME=true`), see it finish; sign in as `intern` and open a draft (the languages list
+  loads). Meanwhile `./bmu aws logs web --env personal-rehearsal` and `worker` show no `AccessDenied` (the app's own
+  roles, not the deployer's).
+- [ ] **6. Day-to-day commands as the deployer.** `./bmu aws status`, `pause`, `resume`, `allow-my-ip` and
+  `logs fakecspace`, each with `--env personal-rehearsal`: none is denied.
+- [ ] **7. Destroy as the deployer.** `./bmu aws destroy --env personal-rehearsal`: it finishes (run it again if it
+  stops while CloudFront lets go of the VPC origin), with no `AccessDenied`.
+- [ ] **8. Remove the rehearsal.** `aws sso login --profile bmu-personal` if needed, then
+  `./bmu aws rehearsal-vpc --env personal-rehearsal destroy`; type `yes`. `personal-rehearsal.local.conf` no longer
+  has `VPC_ID`; the `[profile bmu-rehearsal-deploy]` section can be removed from `~/.aws/config`.
+- [ ] **9. The result.** If the policy changed, commit it (with these notes) before the ask goes to Operations.
+
 ## Not tests, but still open
 
 - The design doc's "For Richard to address" list (from the October 3 comparison of the doc with the prototype).

@@ -14,6 +14,9 @@
 #   ./bmu aws init          point Terraform at this environment's state, to run terraform commands yourself
 #   ./bmu aws ci-role       once per account: the role CI assumes to sign in to ECR Public (deploy/terraform/ci);
 #                           prints the gh command that sets the repository's ECR_PUBLIC_ROLE_ARN variable
+#   ./bmu aws rehearsal-vpc [destroy]   a rehearsal environment only (REHEARSAL=true), in your own account: make (or
+#                           delete) what Operations provides in UC Berkeley's account, a VPC with a NAT gateway and a
+#                           deployer role with only deploy/iam/bmu-deployer-policy.json, as ADMIN_PROFILE
 #
 # Which environment: --env NAME or BMU_AWS_ENV (default personal-dev). Its settings are in
 # deploy/environments/NAME.conf; NAME.local.conf (not committed) holds the account number and allowed addresses.
@@ -56,7 +59,7 @@ load_env() {
   [ -f "$CONF" ] || die "No settings for environment '$ENV' ($CONF). Environments: $(ls "$ENV_DIR" | sed -n 's/\.conf$//p' | grep -v '\.local$' | tr '\n' ' ')"
   ACCOUNT_ID="" ALLOWED_CIDRS="" SIMULATED_CSPACE="" ENV_LABEL="" CSPACE_TENANTS="" TENANT="" CSPACE_URL=""
   WAF_ENABLED="" ORIGIN_DOMAIN="" ORIGIN_CERTIFICATE_ARN=""
-  VPC_ID="" APP_SUBNET_IDS="" LB_SUBNET_IDS="" CREATE_GATEWAY_ENDPOINTS=""
+  VPC_ID="" APP_SUBNET_IDS="" LB_SUBNET_IDS="" CREATE_GATEWAY_ENDPOINTS="" REHEARSAL="" ADMIN_PROFILE=""
   # shellcheck disable=SC1090
   . "$CONF"
   local conf_label="$ENV_LABEL"
@@ -64,6 +67,10 @@ load_env() {
   [ -f "$LOCAL" ] && . "$LOCAL"
   : "${AWS_PROFILE:?set AWS_PROFILE in $CONF}" "${AWS_REGION:?set AWS_REGION in $CONF}" "${BMU_ENV_NAME:?set BMU_ENV_NAME in $CONF}"
   NAME="bmu-$BMU_ENV_NAME"   # the cluster's name and the prefix of every resource
+  # A rehearsal's VPC and deployer are the account administrator's to make: the deployer can't make itself.
+  DEPLOYER_PROFILE="$AWS_PROFILE"
+  case "${REHEARSAL:=false}" in true|false) ;; *) die "REHEARSAL must be true or false ($CONF)." ;; esac
+  [ "$CMD" != rehearsal-vpc ] || [ -z "$ADMIN_PROFILE" ] || AWS_PROFILE="$ADMIN_PROFILE"
   case "${SIMULATED_CSPACE:=false}" in true|false) ;; *) die "SIMULATED_CSPACE must be true or false ($CONF, $LOCAL)." ;; esac
   if [ "$SIMULATED_CSPACE" = true ]; then
     [ "${PROTECT_DATA:-false}" != true ] ||
@@ -82,7 +89,11 @@ load_env() {
   ! grep -Eq '^[[:space:]]*(VPC_ID|APP_SUBNET_IDS|LB_SUBNET_IDS)=' "$CONF" ||
     die "Put VPC_ID, APP_SUBNET_IDS and LB_SUBNET_IDS in $LOCAL, which isn't committed, not in $CONF."
   case "${CREATE_GATEWAY_ENDPOINTS:=false}" in true|false) ;; *) die "CREATE_GATEWAY_ENDPOINTS must be true or false ($LOCAL)." ;; esac
-  if [ -n "$VPC_ID" ]; then
+  if [ "$CMD" = rehearsal-vpc ]; then
+    :   # it makes the VPC, and saves VPC_ID and APP_SUBNET_IDS
+  elif [ "$REHEARSAL" = true ] && [ -z "$VPC_ID" ]; then
+    die "'$ENV' is a rehearsal: first ./bmu aws rehearsal-vpc --env $ENV (it makes the VPC and the deployer, as $ADMIN_PROFILE)."
+  elif [ -n "$VPC_ID" ]; then
     [ -n "$APP_SUBNET_IDS" ] || die "VPC_ID needs APP_SUBNET_IDS: the VPC's private subnets for the tasks, in two zones ($LOCAL)."
   else
     [ -z "$APP_SUBNET_IDS$LB_SUBNET_IDS" ] && [ "$CREATE_GATEWAY_ENDPOINTS" = false ] ||
@@ -230,12 +241,12 @@ ensure_state_bucket() {
   aws_ s3api put-bucket-tagging --bucket "$STATE_BUCKET" --tagging 'TagSet=[{Key=project,Value=bmu}]'
 }
 
-tf() {  # tf registry|app <terraform arguments>
+tf() {  # tf registry|app|ci|rehearsal <terraform arguments>
   local part="$1"; shift
   terraform -chdir="$TF_DIR/$part" "$@"
 }
 
-tf_init() {  # tf_init registry|app: point Terraform at this environment's state (the lock is a file beside it)
+tf_init() {  # tf_init registry|app|rehearsal: point Terraform at this environment's state (the lock is a file beside it)
   tf "$1" init -input=false -reconfigure \
     -backend-config="bucket=$STATE_BUCKET" -backend-config="key=bmu/$BMU_ENV_NAME/$1.tfstate" \
     -backend-config="region=$AWS_REGION" -backend-config="use_lockfile=true" >/dev/null ||
@@ -547,6 +558,71 @@ destroy() {
   echo "The Terraform state bucket s3://$STATE_BUCKET is kept; it holds the (now empty) state and its history."
 }
 
+# ---- the deployer rehearsal ----------------------------------------------------------------------------------------
+# A rehearsal deploys the BMU in a developer's own account as a role with only the deployer policy, before Operations
+# attaches it in UC Berkeley's account (docs/testing-checklist.md, section 24). What Operations provides there, the VPC
+# and that role, comes from deploy/terraform/rehearsal, applied as the account's administrator (ADMIN_PROFILE), never as
+# the deployer. The role gets the policy's parts exactly as Operations attaches them (deploy/iam/split-policy.py).
+state_has_resources() {  # state_has_resources KEY: whether this environment's KEY.tfstate holds any resource
+  aws_ s3 cp "s3://$STATE_BUCKET/bmu/$BMU_ENV_NAME/$1.tfstate" - 2>/dev/null |
+    python3 -c 'import json, sys; sys.exit(0 if json.load(sys.stdin).get("resources") else 1)' 2>/dev/null
+}
+
+remove_local() {  # remove_local KEY: take one setting out of the environment's .local.conf
+  [ -f "$LOCAL" ] || return 0
+  local tmp; tmp="$(mktemp)"
+  grep -v "^$1=" "$LOCAL" > "$tmp" || true
+  mv "$tmp" "$LOCAL"
+}
+
+rehearsal_vpc() {  # rehearsal_vpc [destroy]
+  load_env
+  [ "$REHEARSAL" = true ] ||
+    die "'$ENV' isn't a rehearsal (REHEARSAL=true in $CONF): in UC Berkeley's account, Operations provides the VPC and the deployer."
+  [ "$SIMULATED_CSPACE" = true ] && [ "${PROTECT_DATA:-false}" = false ] ||
+    die "A rehearsal uses the simulated CollectionSpace only, with PROTECT_DATA=false ($CONF): no museum data in a personal account."
+  [ -n "$ADMIN_PROFILE" ] || die "Set ADMIN_PROFILE in $CONF: the account's administrator profile."
+  [ "$ADMIN_PROFILE" != "$DEPLOYER_PROFILE" ] || die "ADMIN_PROFILE and AWS_PROFILE must differ in $CONF: AWS_PROFILE is the deployer."
+  local key role parts
+  check_account; need_terraform; ensure_state_bucket
+  tf_init rehearsal
+  parts="$(python3 deploy/iam/split-policy.py --json)" || die "deploy/iam/split-policy.py couldn't split the policy."
+  local vars=(-var "account_id=$ACCOUNT_ID" -var "region=$AWS_REGION" -var "env_name=$BMU_ENV_NAME" -var "policy_parts=$parts")
+  case "${1:-}" in
+    "") ;;
+    destroy)
+      for key in app registry; do
+        ! state_has_resources "$key" ||
+          die "'$ENV' is still deployed (bmu/$BMU_ENV_NAME/$key.tfstate): ./bmu aws destroy --env $ENV first, as the deployer."
+      done
+      echo "This deletes the rehearsal's VPC, NAT gateway and deployer role in account $ACCOUNT_ID. Terraform asks first."
+      # shellcheck disable=SC2046
+      tf rehearsal destroy -input=false $(approve) "${vars[@]}"
+      for key in VPC_ID APP_SUBNET_IDS; do remove_local "$key"; done
+      echo "Done. The [profile $DEPLOYER_PROFILE] section in ~/.aws/config can go too."
+      return ;;
+    *) die "./bmu aws rehearsal-vpc [destroy]" ;;
+  esac
+  echo "Terraform shows its plan (a VPC, two public and two private subnets, a NAT gateway, and the deployer role with"
+  echo "the policy's parts) and asks."
+  # shellcheck disable=SC2046
+  tf rehearsal apply -input=false $(approve) "${vars[@]}"
+  save_local VPC_ID "$(tf rehearsal output -raw vpc_id)"
+  save_local APP_SUBNET_IDS "$(tf rehearsal output -raw app_subnet_ids)"
+  echo "Saved VPC_ID and APP_SUBNET_IDS in $LOCAL."
+  role="$(tf rehearsal output -raw deployer_role_arn)"
+  if [ "$(aws configure get role_arn --profile "$DEPLOYER_PROFILE" 2>/dev/null || true)" = "$role" ]; then
+    echo "The deployer's profile $DEPLOYER_PROFILE is in ~/.aws/config."
+  else
+    echo
+    echo "Add the deployer's profile to ~/.aws/config (it signs in through $ADMIN_PROFILE, then takes the role):"
+    echo
+    printf '[profile %s]\nrole_arn = %s\nsource_profile = %s\nregion = %s\n' "$DEPLOYER_PROFILE" "$role" "$ADMIN_PROFILE" "$AWS_REGION"
+    echo
+  fi
+  echo "Next: ./bmu aws deploy --env $ENV   (as the deployer: note every AccessDenied, checklist section 24)"
+}
+
 # The role GitHub Actions assumes to sign in to ECR Public (deploy/terraform/ci): once per account, whichever
 # environment's settings pick the account. Uses the account's GitHub OIDC provider if it already has one that this
 # state doesn't manage, rather than creating a second (IAM allows one per URL).
@@ -600,6 +676,7 @@ case "$CMD" in
         tf app init -reconfigure -backend-config="bucket=$STATE_BUCKET" -backend-config="key=bmu/$BMU_ENV_NAME/app.tfstate" -backend-config="region=$AWS_REGION" -backend-config="use_lockfile=true" ;;
   reader-secret) reader_secret "${1:-}" ;;
   ci-role) ci_role ;;
+  rehearsal-vpc) rehearsal_vpc "${1:-}" ;;
   destroy) destroy ;;
   help|-h|--help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0" ;;
   *) die "Unknown command '$CMD'. ./bmu aws help lists them." ;;
