@@ -1,6 +1,16 @@
 output "url" {
   description = "The BMU's address."
-  value       = "https://${aws_cloudfront_distribution.main.domain_name}"
+  value       = "https://${local.app_domain}"
+}
+
+output "front_door" {
+  description = "cloudfront or alb, for ./bmu aws, which refuses to change a deployed environment's front door (deploy/aws.sh, check_front_door)."
+  value       = var.front_door
+}
+
+output "domain_name" {
+  description = "With front_door alb: the BMU's name, whose DNS record points at alb_dns_name. Empty with cloudfront."
+  value       = var.domain_name
 }
 
 output "cluster_name" {
@@ -61,6 +71,6 @@ output "reader_secrets" {
 }
 
 output "alb_dns_name" {
-  description = "The internal load balancer's DNS name: the target of origin_domain's CNAME (HTTPS to the load balancer)."
+  description = "The load balancer's DNS name: the target of domain_name's DNS record (front_door alb; Operations adds it), or of origin_domain's CNAME (cloudfront, HTTPS to the internal load balancer)."
   value       = aws_lb.main.dns_name
 }

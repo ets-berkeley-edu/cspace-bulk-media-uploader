@@ -7,7 +7,6 @@
       "NotAction": [
         "iam:*",
         "sts:*",
-        "cloudfront:*",
         "route53:*",
         "ce:*",
         "organizations:Describe*"
@@ -25,10 +24,10 @@
       "Sid": "ReadMetadata",
       "Effect": "Allow",
       "Action": [
-        "cloudfront:DescribeFunction",
-        "cloudfront:DescribeKeyValueStore",
-        "cloudfront:Get*",
-        "cloudfront:List*",
+        "acm:DescribeCertificate",
+        "acm:GetCertificate",
+        "acm:ListCertificates",
+        "acm:ListTagsForCertificate",
         "cloudwatch:Describe*",
         "cloudwatch:GetMetricData",
         "cloudwatch:GetMetricStatistics",
@@ -64,7 +63,11 @@
         "secretsmanager:ListSecrets",
         "servicediscovery:Get*",
         "servicediscovery:List*",
-        "sts:GetCallerIdentity"
+        "sts:GetCallerIdentity",
+        "wafv2:CheckCapacity",
+        "wafv2:Describe*",
+        "wafv2:Get*",
+        "wafv2:List*"
       ],
       "Resource": "*"
     },
@@ -280,6 +283,16 @@
       }
     },
     {
+      "Sid": "LoadBalancerWebAcl",
+      "Effect": "Allow",
+      "Action": [
+        "elasticloadbalancing:SetWebAcl"
+      ],
+      "Resource": [
+        "arn:aws:elasticloadbalancing:us-west-2:*:loadbalancer/app/bmu-*/*"
+      ]
+    },
+    {
       "Sid": "ContainersRegister",
       "Effect": "Allow",
       "Action": [
@@ -343,37 +356,15 @@
       ]
     },
     {
-      "Sid": "CloudFrontFiles",
+      "Sid": "CertificateCreateTagged",
       "Effect": "Allow",
       "Action": [
-        "cloudfront:CreateFunction",
-        "cloudfront:CreateKeyGroup",
-        "cloudfront:CreateOriginAccessControl",
-        "cloudfront:CreatePublicKey",
-        "cloudfront:CreateResponseHeadersPolicy",
-        "cloudfront:DeleteFunction",
-        "cloudfront:DeleteKeyGroup",
-        "cloudfront:DeleteOriginAccessControl",
-        "cloudfront:DeletePublicKey",
-        "cloudfront:DeleteResponseHeadersPolicy",
-        "cloudfront:PublishFunction",
-        "cloudfront:UpdateFunction",
-        "cloudfront:UpdateKeyGroup",
-        "cloudfront:UpdateOriginAccessControl",
-        "cloudfront:UpdatePublicKey",
-        "cloudfront:UpdateResponseHeadersPolicy"
+        "acm:AddTagsToCertificate",
+        "acm:RequestCertificate"
       ],
-      "Resource": "*"
-    },
-    {
-      "Sid": "CloudFrontDistributionCreateTagged",
-      "Effect": "Allow",
-      "Action": [
-        "cloudfront:CreateDistribution",
-        "cloudfront:CreateDistributionWithTags",
-        "cloudfront:TagResource"
+      "Resource": [
+        "arn:aws:acm:us-west-2:*:certificate/*"
       ],
-      "Resource": "arn:aws:cloudfront::*:distribution/*",
       "Condition": {
         "StringEquals": {
           "aws:RequestTag/project": "bmu"
@@ -381,14 +372,16 @@
       }
     },
     {
-      "Sid": "CloudFrontDistributionTagged",
+      "Sid": "CertificateTagged",
       "Effect": "Allow",
       "Action": [
-        "cloudfront:DeleteDistribution",
-        "cloudfront:UntagResource",
-        "cloudfront:UpdateDistribution"
+        "acm:DeleteCertificate",
+        "acm:RemoveTagsFromCertificate",
+        "acm:UpdateCertificateOptions"
       ],
-      "Resource": "arn:aws:cloudfront::*:distribution/*",
+      "Resource": [
+        "arn:aws:acm:us-west-2:*:certificate/*"
+      ],
       "Condition": {
         "StringEquals": {
           "aws:ResourceTag/project": "bmu"
@@ -396,32 +389,36 @@
       }
     },
     {
-      "Sid": "CloudFrontFunctionTags",
+      "Sid": "Waf",
       "Effect": "Allow",
       "Action": [
-        "cloudfront:TagResource",
-        "cloudfront:UntagResource"
+        "wafv2:AssociateWebACL",
+        "wafv2:CreateWebACL",
+        "wafv2:DeleteLoggingConfiguration",
+        "wafv2:DeleteWebACL",
+        "wafv2:DisassociateWebACL",
+        "wafv2:PutLoggingConfiguration",
+        "wafv2:TagResource",
+        "wafv2:UntagResource",
+        "wafv2:UpdateWebACL"
       ],
-      "Resource": "arn:aws:cloudfront::*:function/bmu-*"
+      "Resource": [
+        "arn:aws:wafv2:us-west-2:*:regional/webacl/bmu-*/*",
+        "arn:aws:wafv2:us-west-2:*:regional/managedruleset/*/*",
+        "arn:aws:elasticloadbalancing:us-west-2:*:loadbalancer/app/bmu-*/*"
+      ]
     },
     {
-      "Sid": "CloudFrontVpcOrigin",
+      "Sid": "WafLogDelivery",
       "Effect": "Allow",
       "Action": [
-        "cloudfront:CreateVpcOrigin",
-        "cloudfront:DeleteVpcOrigin",
-        "cloudfront:UpdateVpcOrigin"
+        "logs:CreateLogDelivery",
+        "logs:DeleteLogDelivery",
+        "logs:DeleteResourcePolicy",
+        "logs:PutResourcePolicy",
+        "logs:UpdateLogDelivery"
       ],
       "Resource": "*"
-    },
-    {
-      "Sid": "CloudFrontVpcOriginTags",
-      "Effect": "Allow",
-      "Action": [
-        "cloudfront:TagResource",
-        "cloudfront:UntagResource"
-      ],
-      "Resource": "arn:aws:cloudfront::*:vpcorigin/*"
     },
     {
       "Sid": "Logs",
@@ -445,7 +442,8 @@
         "logs:UntagResource"
       ],
       "Resource": [
-        "arn:aws:logs:*:*:log-group:/bmu/*"
+        "arn:aws:logs:*:*:log-group:/bmu/*",
+        "arn:aws:logs:*:*:log-group:aws-waf-logs-bmu-*"
       ]
     },
     {
@@ -662,8 +660,7 @@
         "StringEquals": {
           "iam:AWSServiceName": [
             "ecs.amazonaws.com",
-            "elasticloadbalancing.amazonaws.com",
-            "vpcorigin.cloudfront.amazonaws.com"
+            "elasticloadbalancing.amazonaws.com"
           ]
         }
       }

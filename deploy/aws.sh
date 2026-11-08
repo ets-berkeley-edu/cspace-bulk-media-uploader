@@ -2,6 +2,8 @@
 # ./bmu aws — deploy the BMU to AWS and look after it. Run through ./bmu (./bmu aws help).
 #
 #   ./bmu aws deploy        build the image, push it, then show Terraform's plan and apply it; prints the address
+#                           (with FRONT_DOOR=alb, first the certificate's DNS record while it isn't issued, and at the
+#                           end the load balancer that DOMAIN_NAME's DNS record must point at)
 #   ./bmu aws plan          show what a deploy of the running image would change, without changing anything
 #   ./bmu aws status        the services' tasks, the image they run, the allowed addresses and the museums
 #   ./bmu aws url           the address
@@ -15,8 +17,8 @@
 #   ./bmu aws ci-role       once per account: the role CI assumes to sign in to ECR Public (deploy/terraform/ci);
 #                           prints the gh command that sets the repository's ECR_PUBLIC_ROLE_ARN variable
 #   ./bmu aws rehearsal-vpc [destroy]   a rehearsal environment only (REHEARSAL=true), in your own account: make (or
-#                           delete) what Operations provides in UC Berkeley's account, a VPC with a NAT gateway and a
-#                           deployer role with only deploy/iam/bmu-deployer-policy.json, as ADMIN_PROFILE
+#                           delete) what Operations provides in UC Berkeley's account, a VPC with public subnets and a
+#                           NAT gateway and a deployer role with only deploy/iam/bmu-deployer-policy.json, as ADMIN_PROFILE
 #
 # Which environment: --env NAME or BMU_AWS_ENV (default personal-dev). Its settings are in
 # deploy/environments/NAME.conf; NAME.local.conf (not committed) holds the account number and allowed addresses.
@@ -30,6 +32,11 @@
 # one, for PAHMA alone. A deployed museum's CollectionSpace server never changes; a museum can be added, and removed
 # once it has no unfinished jobs (check_museums). The first use of an environment on a computer asks first if the
 # account already has one by that name (check_not_someone_elses).
+# FRONT_DOOR (deploy/terraform/app/variables.tf, front_door): cloudfront (the default; a personal account) or alb (UC
+# Berkeley's account: an internet-facing load balancer on DOMAIN_NAME with an ACM certificate, which Operations
+# validates with a DNS record that deploy prints, and a regional WAF). A deployed environment's front door never
+# changes (check_front_door). REQUIRE_CLEAN=true deploys only from a clean checkout whose HEAD is on origin/main
+# (check_clean).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -58,7 +65,8 @@ load_env() {
   URL_FILE="$ENV_DIR/$ENV.url"
   [ -f "$CONF" ] || die "No settings for environment '$ENV' ($CONF). Environments: $(ls "$ENV_DIR" | sed -n 's/\.conf$//p' | grep -v '\.local$' | tr '\n' ' ')"
   ACCOUNT_ID="" ALLOWED_CIDRS="" SIMULATED_CSPACE="" ENV_LABEL="" CSPACE_TENANTS="" TENANT="" CSPACE_URL=""
-  WAF_ENABLED="" ORIGIN_DOMAIN="" ORIGIN_CERTIFICATE_ARN=""
+  WAF_ENABLED="" ORIGIN_DOMAIN="" ORIGIN_CERTIFICATE_ARN="" FRONT_DOOR="" DOMAIN_NAME="" CERTIFICATE_ARN=""
+  REQUIRE_CLEAN="" WAF_MANAGED_RULES=""
   VPC_ID="" APP_SUBNET_IDS="" LB_SUBNET_IDS="" CREATE_GATEWAY_ENDPOINTS="" REHEARSAL="" ADMIN_PROFILE=""
   # shellcheck disable=SC1090
   . "$CONF"
@@ -80,14 +88,25 @@ load_env() {
   else
     read_museums
   fi
-  # The WAF (deploy/terraform/app/waf.tf) comes with protected data unless the settings say otherwise.
-  case "${WAF_ENABLED:=${PROTECT_DATA:-false}}" in true|false) ;; *) die "WAF_ENABLED must be true or false ($CONF, $LOCAL)." ;; esac
+  case "${FRONT_DOOR:=cloudfront}" in cloudfront|alb) ;; *) die "FRONT_DOOR must be cloudfront or alb ($CONF)." ;; esac
+  case "${REQUIRE_CLEAN:=false}" in true|false) ;; *) die "REQUIRE_CLEAN must be true or false ($CONF)." ;; esac
+  case "${WAF_MANAGED_RULES:=count}" in count|block) ;; *) die "WAF_MANAGED_RULES must be count or block ($CONF, $LOCAL)." ;; esac
+  # The WAF (deploy/terraform/app/waf.tf), on the load balancer with FRONT_DOOR=alb only, comes with protected data
+  # unless the settings say otherwise.
+  if [ "$FRONT_DOOR" = alb ]; then : "${WAF_ENABLED:=${PROTECT_DATA:-false}}"; else : "${WAF_ENABLED:=false}"; fi
+  case "$WAF_ENABLED" in true|false) ;; *) die "WAF_ENABLED must be true or false ($CONF, $LOCAL)." ;; esac
+  [ "$WAF_ENABLED" = false ] || [ "$FRONT_DOOR" = alb ] ||
+    die "WAF_ENABLED=true needs FRONT_DOOR=alb ($CONF, $LOCAL): the WAF is on the load balancer, and a CloudFront environment has none."
   # HTTPS from CloudFront to the load balancer: both settings, or neither (variables.tf, origin_domain).
   [ -z "$ORIGIN_DOMAIN" ] && [ -z "$ORIGIN_CERTIFICATE_ARN" ] || { [ -n "$ORIGIN_DOMAIN" ] && [ -n "$ORIGIN_CERTIFICATE_ARN" ]; } ||
     die "Set ORIGIN_DOMAIN and ORIGIN_CERTIFICATE_ARN together, or neither ($CONF, $LOCAL)."
-  # An existing VPC (deploy/terraform/app/network.tf): its IDs identify the account's network, so only in .local.conf.
-  ! grep -Eq '^[[:space:]]*(VPC_ID|APP_SUBNET_IDS|LB_SUBNET_IDS)=' "$CONF" ||
-    die "Put VPC_ID, APP_SUBNET_IDS and LB_SUBNET_IDS in $LOCAL, which isn't committed, not in $CONF."
+  [ -z "$ORIGIN_DOMAIN" ] || [ "$FRONT_DOOR" = cloudfront ] ||
+    die "ORIGIN_DOMAIN and ORIGIN_CERTIFICATE_ARN are for FRONT_DOOR=cloudfront; with alb, the load balancer's name is DOMAIN_NAME ($CONF, $LOCAL)."
+  [ -z "$DOMAIN_NAME" ] || [ "$FRONT_DOOR" = alb ] || die "DOMAIN_NAME is for FRONT_DOOR=alb ($LOCAL)."
+  # An existing VPC (deploy/terraform/app/network.tf): its IDs identify the account's network, and the domain is
+  # Operations', so only in .local.conf.
+  ! grep -Eq '^[[:space:]]*(VPC_ID|APP_SUBNET_IDS|LB_SUBNET_IDS|DOMAIN_NAME)=' "$CONF" ||
+    die "Put VPC_ID, APP_SUBNET_IDS, LB_SUBNET_IDS and DOMAIN_NAME in $LOCAL, which isn't committed, not in $CONF."
   case "${CREATE_GATEWAY_ENDPOINTS:=false}" in true|false) ;; *) die "CREATE_GATEWAY_ENDPOINTS must be true or false ($LOCAL)." ;; esac
   if [ "$CMD" = rehearsal-vpc ]; then
     :   # it makes the VPC, and saves VPC_ID and APP_SUBNET_IDS
@@ -98,6 +117,12 @@ load_env() {
   else
     [ -z "$APP_SUBNET_IDS$LB_SUBNET_IDS" ] && [ "$CREATE_GATEWAY_ENDPOINTS" = false ] ||
       die "APP_SUBNET_IDS, LB_SUBNET_IDS and CREATE_GATEWAY_ENDPOINTS need VPC_ID ($LOCAL)."
+  fi
+  if [ "$FRONT_DOOR" = alb ] && [ "$CMD" != rehearsal-vpc ]; then
+    [ -n "$VPC_ID" ] && [ -n "$LB_SUBNET_IDS" ] ||
+      die "FRONT_DOOR=alb needs VPC_ID and LB_SUBNET_IDS: the VPC's public subnets, in two zones, for the internet-facing load balancer ($LOCAL)."
+    [ -n "$DOMAIN_NAME" ] ||
+      die "FRONT_DOOR=alb needs DOMAIN_NAME in $LOCAL: the BMU's name (from Operations in UC Berkeley's account; in a rehearsal, a name in a DNS zone you control)."
   fi
   export AWS_PAGER="" AWS_PROFILE AWS_REGION   # Terraform signs in with the same profile
   # Keys in the shell would win over the profile in Terraform (though not in "aws --profile"): never use them here.
@@ -269,11 +294,73 @@ app_vars() {  # app_vars IMAGE RUNNING [SIMULATOR-IMAGE]
     -var "waf_enabled=$WAF_ENABLED" -var "origin_domain=$ORIGIN_DOMAIN" -var "origin_certificate_arn=$ORIGIN_CERTIFICATE_ARN"
     -var "vpc_id=$VPC_ID" -var "app_subnet_ids=$(cidr_list "$APP_SUBNET_IDS")" -var "lb_subnet_ids=$(cidr_list "$LB_SUBNET_IDS")"
     -var "create_gateway_endpoints=$CREATE_GATEWAY_ENDPOINTS"
+    -var "front_door=$FRONT_DOOR" -var "domain_name=$DOMAIN_NAME" -var "certificate_arn=$CERTIFICATE_ARN"
+    -var "waf_managed_rules=$WAF_MANAGED_RULES"
   )
 }
 
-registry_vars() {
-  REGISTRY_VARS=(-var "account_id=$ACCOUNT_ID" -var "region=$AWS_REGION" -var "env_name=$BMU_ENV_NAME" -var "simulated_cspace=$SIMULATED_CSPACE")
+registry_vars() {  # with FRONT_DOOR=alb, the registry also requests DOMAIN_NAME's certificate
+  REGISTRY_VARS=(-var "account_id=$ACCOUNT_ID" -var "region=$AWS_REGION" -var "env_name=$BMU_ENV_NAME" -var "simulated_cspace=$SIMULATED_CSPACE"
+    -var "domain_name=$DOMAIN_NAME")
+}
+
+# ---- the certificate (FRONT_DOOR=alb) -------------------------------------------------------------------------------
+# DOMAIN_NAME's certificate is in ../registry (DNS-validated). It is issued only once Operations has added its
+# validation record (BQ32); until then deploy says which record and stops before the app, so it never waits on
+# someone else's step. The record stays valid for the same name in the same account, after a destroy too.
+load_certificate() {  # CERTIFICATE_ARN from ../registry's state; empty with FRONT_DOOR=cloudfront or before a deploy
+  CERTIFICATE_ARN=""
+  [ "$FRONT_DOOR" = alb ] || return 0
+  tf_init registry
+  CERTIFICATE_ARN="$(tf registry output -raw certificate_arn 2>/dev/null || true)"
+  case "$CERTIFICATE_ARN" in arn:*) ;; *) CERTIFICATE_ARN="" ;; esac
+}
+
+certificate_issued() {  # fails, after printing its validation record, while the certificate isn't issued
+  local status
+  [ -n "$CERTIFICATE_ARN" ] || die "No certificate for $DOMAIN_NAME in ../registry's state. Run ./bmu aws deploy again."
+  status="$(aws_ acm describe-certificate --certificate-arn "$CERTIFICATE_ARN" --query Certificate.Status --output text)"
+  [ "$status" = ISSUED ] && return 0
+  echo
+  echo "The certificate for $DOMAIN_NAME is $status. Operations adds this record in DNS, once (ACM renews the certificate after):"
+  aws_ acm describe-certificate --certificate-arn "$CERTIFICATE_ARN" \
+    --query 'Certificate.DomainValidationOptions[0].ResourceRecord.[Type,Name,Value]' --output text
+  return 1
+}
+
+need_certificate() {
+  certificate_issued ||
+    die "Run ./bmu aws deploy again once the record is in DNS and the certificate is ISSUED. The app wasn't changed."
+}
+
+# ---- what may be deployed -------------------------------------------------------------------------------------------
+# A front door can't change in place: the load balancer (internal or internet-facing), its security group and the
+# address all change, and CloudFront's go. An environment deployed before FRONT_DOOR existed is cloudfront.
+# Runs after tf_init app; nothing is checked before the first deploy.
+check_front_door() {
+  local was
+  was="$(applied front_door)"
+  if [ -z "$was" ]; then
+    [ -n "$(applied image_uri)" ] || return 0
+    was=cloudfront
+  fi
+  [ "$was" = "$FRONT_DOOR" ] && return 0
+  die "'$ENV' was deployed with FRONT_DOOR=$was, but its settings now say $FRONT_DOOR. A front door can't change in place.
+Stopped; nothing was changed. Put the setting back; to change it, run ./bmu aws destroy with the old setting first
+(it deletes the BMU's data), then deploy with the new one."
+}
+
+# BQ27: an environment with REQUIRE_CLEAN=true runs only what is on main, so a deploy (or any apply) comes from a
+# checkout with no changes or untracked files whose HEAD is on origin/main, after fetching it.
+check_clean() {
+  [ "$REQUIRE_CLEAN" = true ] || return 0
+  git rev-parse --git-dir >/dev/null 2>&1 || die "'$ENV' is deployed only from a git checkout (REQUIRE_CLEAN=true in $CONF)."
+  [ -z "$(git status --porcelain 2>/dev/null)" ] ||
+    die "'$ENV' is deployed only from a clean checkout (REQUIRE_CLEAN=true in $CONF), and this one has changes or untracked files (git status). Stopped; nothing was changed."
+  git fetch --quiet origin main ||
+    die "Couldn't fetch origin/main to check this checkout (REQUIRE_CLEAN=true in $CONF). Stopped; nothing was changed."
+  git merge-base --is-ancestor HEAD origin/main ||
+    die "'$ENV' runs only what is on main (REQUIRE_CLEAN=true in $CONF), and this checkout's HEAD ($(git rev-parse --short HEAD)) isn't on origin/main. Check out main and pull. Stopped; nothing was changed."
 }
 
 approve() { [ "${BMU_AWS_YES:-}" = 1 ] && echo "-auto-approve" || true; }
@@ -363,8 +450,9 @@ deploy() {
   load_env; check_account; ensure_allowlist; need_terraform
   command -v docker >/dev/null || die "Docker isn't installed or isn't on the PATH."
   docker info >/dev/null 2>&1 || die "Docker isn't running. Start Docker Desktop and try again."
+  check_clean
   ensure_state_bucket
-  tf_init app; check_museums ask   # before building anything
+  tf_init app; check_front_door; check_museums ask   # before building anything
   local tag repo registry image sim_image url code
   tag="$(git rev-parse --short HEAD 2>/dev/null || echo nogit)"
   [ -z "$(git status --porcelain 2>/dev/null)" ] || tag="$tag-dirty"
@@ -375,6 +463,7 @@ deploy() {
   tf_init registry
   tf registry apply -input=false -auto-approve "${REGISTRY_VARS[@]}"
   repo="$(tf registry output -raw repository_url)"
+  if [ "$FRONT_DOOR" = alb ]; then load_certificate; need_certificate; fi
   registry="${repo%%/*}"
   image="$repo:$tag"
 
@@ -392,7 +481,11 @@ deploy() {
   fi
 
   echo "== 3/3 The BMU. Terraform shows its plan and asks before changing anything."
-  echo "   The first time takes about 15-25 minutes (CloudFront); it finishes when the web app and worker are running."
+  if [ "$FRONT_DOOR" = cloudfront ]; then
+    echo "   The first time takes about 15-25 minutes (CloudFront); it finishes when the web app and worker are running."
+  else
+    echo "   The first time takes about 5-10 minutes; it finishes when the web app and worker are running."
+  fi
   echo "   If a task can't start, Terraform waits up to 20 minutes before saying so: ./bmu aws logs web shows why sooner."
   app_vars "$image" true "$sim_image"
   # shellcheck disable=SC2046
@@ -404,7 +497,13 @@ deploy() {
   code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$url/api/health" || true)"
   echo
   echo "$ENV_LABEL is up: $url   (./bmu open aws)"
-  [ "$code" = 200 ] || echo "Note: $url/api/health answered $code. A new CloudFront address can take a few minutes to work everywhere."
+  if [ "$FRONT_DOOR" = alb ]; then
+    echo "DNS: $DOMAIN_NAME must point at the load balancer $(applied alb_dns_name)"
+    echo "(Operations' record: a CNAME, or an alias; a new load balancer, after a destroy, needs the record changed)."
+    [ "$code" = 200 ] || echo "Note: $url/api/health answered $code. Check the DNS record, and that this computer's address is in ALLOWED_CIDRS (campus or VPN)."
+  else
+    [ "$code" = 200 ] || echo "Note: $url/api/health answered $code. A new CloudFront address can take a few minutes to work everywhere."
+  fi
   if [ "$SIMULATED_CSPACE" = true ]; then
     echo "It uses the simulated CollectionSpace: sign in with the simulator's accounts (deploy/README.md). Its records"
     echo "are lost whenever it restarts (a pause, a deploy), while the BMU keeps its jobs."
@@ -418,15 +517,21 @@ was_running() {  # true unless the environment is paused
   [ "$(tf app output -raw running 2>/dev/null || true)" = false ] && echo false || echo true
 }
 
+need_certificate_arn() {  # for a command that applies or plans the deployed app: the certificate deploy requested
+  load_certificate
+  [ "$FRONT_DOOR" != alb ] || [ -n "$CERTIFICATE_ARN" ] ||
+    die "No certificate for $DOMAIN_NAME in ../registry's state. Run ./bmu aws deploy."
+}
+
 plan() {
-  look; need_deployed; check_museums look
+  look; need_deployed; check_front_door; check_museums look; need_certificate_arn
   app_vars "$IMAGE" "$(was_running)" "$(applied fakecspace_image_uri)"
   tf app plan -input=false "${TF_VARS[@]}"
 }
 
 # Apply again with the running image: for a changed setting (pause, resume, the allowlist).
 reapply() {  # reapply RUNNING
-  prepare; tf_init app; need_deployed; check_museums ask
+  prepare; check_clean; tf_init app; need_deployed; check_front_door; check_museums ask; need_certificate_arn
   app_vars "$IMAGE" "$1" "$(applied fakecspace_image_uri)"
   # shellcheck disable=SC2046
   tf app apply -input=false $(approve) "${TF_VARS[@]}"
@@ -441,6 +546,11 @@ status() {
   url="$(app_url)"
   case "$url" in https://*) echo "Address: $url" ;; *) echo "Address: none yet. The last deploy didn't finish; run ./bmu aws deploy again." ;; esac
   echo "Image:   ${IMAGE##*:}"
+  if [ "$(applied front_door)" = alb ]; then
+    echo "Front door: the load balancer $(applied alb_dns_name), on $(applied domain_name) (Operations' DNS record points there)"
+  else
+    echo "Front door: CloudFront"
+  fi
   local services="web worker"
   [ "$SIMULATED_CSPACE" = false ] || services="web worker fakecspace"
   # shellcheck disable=SC2086
@@ -538,15 +648,22 @@ destroy() {
   read -r -p "Type the environment's name ($ENV) to go ahead: " ok
   [ "$ok" = "$ENV" ] || die "Stopped; nothing was deleted."
   tf_init app
+  check_front_door   # the variables must describe what was deployed
   IMAGE="$(deployed_image)"
   case "$IMAGE" in ""|*"No outputs"*|*Warning*) IMAGE=none ;; esac
+  load_certificate
+  [ "$FRONT_DOOR" != alb ] || [ -n "$CERTIFICATE_ARN" ] || CERTIFICATE_ARN="arn:aws:acm:$AWS_REGION:$ACCOUNT_ID:certificate/none"   # set, even to destroy
   [ -n "$ALLOWED_CIDRS" ] || ALLOWED_CIDRS="127.0.0.1/32"   # the variable must be set, even to destroy
   sim_image="$(applied fakecspace_image_uri)"
   [ -n "$sim_image" ] || sim_image=none   # the variable must be set when SIMULATED_CSPACE is true, even to destroy
   deployed="$(applied museums)"
   [ -z "$deployed" ] || MUSEUMS="$deployed"   # the museums whose keys and secrets are in the state
   app_vars "$IMAGE" false "$sim_image"
-  echo "Destroying the BMU (about 15-20 minutes: CloudFront is disabled first) ..."
+  if [ "$FRONT_DOOR" = cloudfront ]; then
+    echo "Destroying the BMU (about 15-20 minutes: CloudFront is disabled first) ..."
+  else
+    echo "Destroying the BMU (about 5-10 minutes) ..."
+  fi
   # CloudFront removes its VPC origin's network interfaces in the background, which can briefly hold the VPC.
   tf app destroy -input=false -auto-approve "${TF_VARS[@]}" ||
     die "The destroy didn't finish. Wait a few minutes and run ./bmu aws destroy again; Terraform continues where it stopped."
@@ -555,6 +672,8 @@ destroy() {
   tf registry destroy -input=false -auto-approve "${REGISTRY_VARS[@]}"
   rm -f "$URL_FILE"
   echo "Done. '$ENV' is gone from AWS (./bmu aws deploy creates it again)."
+  [ "$FRONT_DOOR" != alb ] ||
+    echo "$DOMAIN_NAME's DNS record now points at nothing: after the next deploy, Operations points it at the new load balancer."
   echo "The Terraform state bucket s3://$STATE_BUCKET is kept; it holds the (now empty) state and its history."
 }
 
@@ -598,7 +717,7 @@ rehearsal_vpc() {  # rehearsal_vpc [destroy]
       echo "This deletes the rehearsal's VPC, NAT gateway and deployer role in account $ACCOUNT_ID. Terraform asks first."
       # shellcheck disable=SC2046
       tf rehearsal destroy -input=false $(approve) "${vars[@]}"
-      for key in VPC_ID APP_SUBNET_IDS; do remove_local "$key"; done
+      for key in VPC_ID APP_SUBNET_IDS LB_SUBNET_IDS; do remove_local "$key"; done
       echo "Done. The [profile $DEPLOYER_PROFILE] section in ~/.aws/config can go too."
       return ;;
     *) die "./bmu aws rehearsal-vpc [destroy]" ;;
@@ -609,7 +728,8 @@ rehearsal_vpc() {  # rehearsal_vpc [destroy]
   tf rehearsal apply -input=false $(approve) "${vars[@]}"
   save_local VPC_ID "$(tf rehearsal output -raw vpc_id)"
   save_local APP_SUBNET_IDS "$(tf rehearsal output -raw app_subnet_ids)"
-  echo "Saved VPC_ID and APP_SUBNET_IDS in $LOCAL."
+  save_local LB_SUBNET_IDS "$(tf rehearsal output -raw lb_subnet_ids)"
+  echo "Saved VPC_ID, APP_SUBNET_IDS and LB_SUBNET_IDS in $LOCAL."
   role="$(tf rehearsal output -raw deployer_role_arn)"
   if [ "$(aws configure get role_arn --profile "$DEPLOYER_PROFILE" 2>/dev/null || true)" = "$role" ]; then
     echo "The deployer's profile $DEPLOYER_PROFILE is in ~/.aws/config."
@@ -620,6 +740,8 @@ rehearsal_vpc() {  # rehearsal_vpc [destroy]
     printf '[profile %s]\nrole_arn = %s\nsource_profile = %s\nregion = %s\n' "$DEPLOYER_PROFILE" "$role" "$ADMIN_PROFILE" "$AWS_REGION"
     echo
   fi
+  [ "$FRONT_DOOR" != alb ] || [ -n "$DOMAIN_NAME" ] ||
+    echo "Set DOMAIN_NAME in $LOCAL: a name in a Route 53 zone of this account, for the certificate (checklist section 24)."
   echo "Next: ./bmu aws deploy --env $ENV   (as the deployer: note every AccessDenied, checklist section 24)"
 }
 

@@ -1,4 +1,4 @@
-# CloudFront: HTTPS at a *.cloudfront.net address, and the IP allowlist.
+# CloudFront: HTTPS at a *.cloudfront.net address, and the IP allowlist. With front_door cloudfront only (variables.tf).
 
 locals {
   # AWS-managed CloudFront policies (the same IDs in every account).
@@ -14,6 +14,8 @@ locals {
 }
 
 resource "aws_cloudfront_vpc_origin" "alb" {
+  count = local.cloudfront ? 1 : 0
+
   vpc_origin_endpoint_config {
     name                   = local.name
     arn                    = aws_lb.main.arn
@@ -33,6 +35,7 @@ resource "aws_cloudfront_vpc_origin" "alb" {
 }
 
 resource "aws_cloudfront_function" "allowlist" {
+  count   = local.cloudfront ? 1 : 0
   name    = "${local.name}-allowlist"
   comment = "Only the listed addresses may open the BMU"
   runtime = "cloudfront-js-2.0"
@@ -41,12 +44,12 @@ resource "aws_cloudfront_function" "allowlist" {
 }
 
 resource "aws_cloudfront_distribution" "main" {
+  count           = local.cloudfront ? 1 : 0
   comment         = "BMU ${var.env_name}"
   enabled         = true
   http_version    = "http2and3"
   is_ipv6_enabled = false
   price_class     = "PriceClass_100"
-  web_acl_id      = var.waf_enabled ? aws_wafv2_web_acl.main[0].arn : null
 
   origin {
     origin_id = "web"
@@ -54,7 +57,7 @@ resource "aws_cloudfront_distribution" "main" {
     domain_name = local.origin_tls ? var.origin_domain : aws_lb.main.dns_name
 
     vpc_origin_config {
-      vpc_origin_id            = aws_cloudfront_vpc_origin.alb.id
+      vpc_origin_id            = aws_cloudfront_vpc_origin.alb[0].id
       origin_read_timeout      = 60 # some requests wait on CollectionSpace (sign-in, checks)
       origin_keepalive_timeout = 5
     }
@@ -72,7 +75,7 @@ resource "aws_cloudfront_distribution" "main" {
 
     function_association {
       event_type   = "viewer-request"
-      function_arn = aws_cloudfront_function.allowlist.arn
+      function_arn = aws_cloudfront_function.allowlist[0].arn
     }
   }
 
@@ -89,7 +92,7 @@ resource "aws_cloudfront_distribution" "main" {
 
     function_association {
       event_type   = "viewer-request"
-      function_arn = aws_cloudfront_function.allowlist.arn
+      function_arn = aws_cloudfront_function.allowlist[0].arn
     }
   }
 
@@ -111,4 +114,20 @@ resource "aws_cloudfront_distribution" "main" {
   viewer_certificate {
     cloudfront_default_certificate = true
   }
+}
+
+# Before front_door, these had no count.
+moved {
+  from = aws_cloudfront_vpc_origin.alb
+  to   = aws_cloudfront_vpc_origin.alb[0]
+}
+
+moved {
+  from = aws_cloudfront_function.allowlist
+  to   = aws_cloudfront_function.allowlist[0]
+}
+
+moved {
+  from = aws_cloudfront_distribution.main
+  to   = aws_cloudfront_distribution.main[0]
 }

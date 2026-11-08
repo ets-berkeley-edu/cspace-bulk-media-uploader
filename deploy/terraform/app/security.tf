@@ -1,14 +1,18 @@
-# CloudFront reaches the load balancer through its VPC origin, but the connections keep CloudFront's own source
-# addresses, so a rule for the VPC's range doesn't match them. AWS publishes those addresses as a managed prefix list.
+# Who may reach the load balancer depends on the front door (variables.tf, front_door):
+# - cloudfront: CloudFront's VPC origin. Its connections keep CloudFront's own source addresses, so a rule for the
+#   VPC's range doesn't match them; AWS publishes those addresses as a managed prefix list.
+# - alb: allowed_cidrs on 443, and nothing else (no port 80).
 data "aws_ec2_managed_prefix_list" "cloudfront_origin_facing" {
-  name = "com.amazonaws.global.cloudfront.origin-facing"
+  count = local.cloudfront ? 1 : 0
+  name  = "com.amazonaws.global.cloudfront.origin-facing"
 }
 
 resource "aws_security_group" "alb" {
   name = "${local.name}-alb"
   # AWS can't change a security group's description: a new description means a new group, and this one can't be
-  # deleted while the load balancer uses it. So the text stays as first deployed, though only CloudFront connects.
-  description = "BMU load balancer. The CloudFront VPC origin connects from inside the VPC."
+  # deleted while the load balancer uses it. So CloudFront's text stays as first deployed, and only alb (a new
+  # environment, since its front door never changes) gets its own.
+  description = local.cloudfront ? "BMU load balancer. The CloudFront VPC origin connects from inside the VPC." : "BMU load balancer. HTTPS from the allowed addresses only."
   vpc_id      = local.vpc_id
 
   tags = { Name = "${local.name}-alb" }
@@ -17,12 +21,29 @@ resource "aws_security_group" "alb" {
 # The prefix list counts as about 55 rules toward the security group's limit of 60, so this group has room for
 # little else.
 resource "aws_vpc_security_group_ingress_rule" "alb_from_cloudfront" {
+  count             = local.cloudfront ? 1 : 0
   security_group_id = aws_security_group.alb.id
   description       = "CloudFront (origin-facing addresses)"
-  prefix_list_id    = data.aws_ec2_managed_prefix_list.cloudfront_origin_facing.id
+  prefix_list_id    = data.aws_ec2_managed_prefix_list.cloudfront_origin_facing[0].id
   ip_protocol       = "tcp"
   from_port         = local.origin_port # one port: a second rule with the prefix list wouldn't fit the group's limit
   to_port           = local.origin_port
+}
+
+moved {
+  from = aws_vpc_security_group_ingress_rule.alb_from_cloudfront
+  to   = aws_vpc_security_group_ingress_rule.alb_from_cloudfront[0]
+}
+
+# One rule per range (at most 60: variables.tf, allowed_cidrs).
+resource "aws_vpc_security_group_ingress_rule" "alb_https" {
+  for_each          = local.alb ? toset(var.allowed_cidrs) : toset([])
+  security_group_id = aws_security_group.alb.id
+  description       = "HTTPS from an allowed address"
+  cidr_ipv4         = each.value
+  ip_protocol       = "tcp"
+  from_port         = 443
+  to_port           = 443
 }
 
 # The only way out of the load balancer: the web app's port.

@@ -1,11 +1,12 @@
-# The BMU in AWS, one environment per state: the web app and the worker on ECS Fargate, CloudFront (HTTPS, IP allowlist)
-# in front of an internal load balancer, DynamoDB, the S3 staging bucket and KMS keys. Applied by ./bmu aws deploy;
-# the image comes from ../registry.
+# The BMU in AWS, one environment per state: the web app and the worker on ECS Fargate behind a load balancer,
+# DynamoDB, the S3 staging bucket and KMS keys. Applied by ./bmu aws deploy; the image (and, with front_door alb, the
+# certificate) comes from ../registry.
 #
-# Layout: tasks run in public subnets with public IPs (no NAT gateway, which would cost about $35 a month); nothing
-# can reach them from outside, because their security groups take traffic only from the load balancer. The load
-# balancer is internal (private subnets), reachable only through CloudFront's VPC origin, so the hop from CloudFront
-# to it stays inside AWS's network. S3 and DynamoDB traffic from the tasks goes through free gateway endpoints.
+# The front door (variables.tf, front_door): CloudFront (HTTPS, IP allowlist) in front of an internal load balancer,
+# reachable only through CloudFront's VPC origin, so the hop from CloudFront to it stays inside AWS's network; or,
+# without CloudFront, an internet-facing load balancer on the BMU's own name, HTTPS only, admitting only the allowed
+# addresses, with a regional WAF (waf.tf). The tasks take traffic only from the load balancer (security.tf); the
+# network is the BMU's own VPC or an existing one (network.tf).
 
 terraform {
   required_version = ">= 1.10"
@@ -24,20 +25,6 @@ terraform {
 provider "aws" {
   region              = var.region
   allowed_account_ids = [var.account_id] # refuse to touch any other account, whatever credentials are in use
-
-  default_tags {
-    tags = {
-      project     = "bmu"
-      environment = var.env_name
-    }
-  }
-}
-
-# CloudFront's WAF (waf.tf) must be created in us-east-1, whatever the environment's region.
-provider "aws" {
-  alias               = "us_east_1"
-  region              = "us-east-1"
-  allowed_account_ids = [var.account_id]
 
   default_tags {
     tags = {

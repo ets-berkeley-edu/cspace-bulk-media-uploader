@@ -27,10 +27,6 @@ mock_provider "aws" {
   }
 }
 
-mock_provider "aws" {
-  alias = "us_east_1"
-}
-
 variables {
   account_id    = "123456789012"
   region        = "us-west-2"
@@ -169,12 +165,12 @@ run "allowlist_is_written_into_the_function" {
   command = plan
 
   assert {
-    condition     = strcontains(aws_cloudfront_function.allowlist.code, "var ALLOWED = \"203.0.113.7/32,198.51.100.0/24\";")
+    condition     = strcontains(aws_cloudfront_function.allowlist[0].code, "var ALLOWED = \"203.0.113.7/32,198.51.100.0/24\";")
     error_message = "The CloudFront function holds the allowed addresses."
   }
 
   assert {
-    condition     = !aws_cloudfront_distribution.main.is_ipv6_enabled
+    condition     = !aws_cloudfront_distribution.main[0].is_ipv6_enabled
     error_message = "The distribution is IPv4-only, because the allowlist is IPv4."
   }
 }
@@ -393,12 +389,12 @@ run "without_an_origin_domain_cloudfront_reaches_the_load_balancer_with_http" {
   }
 
   assert {
-    condition     = aws_cloudfront_vpc_origin.alb.vpc_origin_endpoint_config[0].origin_protocol_policy == "http-only"
+    condition     = aws_cloudfront_vpc_origin.alb[0].vpc_origin_endpoint_config[0].origin_protocol_policy == "http-only"
     error_message = "Without origin_domain CloudFront uses HTTP to the load balancer."
   }
 
   assert {
-    condition     = aws_vpc_security_group_ingress_rule.alb_from_cloudfront.from_port == 80
+    condition     = aws_vpc_security_group_ingress_rule.alb_from_cloudfront[0].from_port == 80
     error_message = "Without origin_domain the load balancer admits CloudFront on 80."
   }
 }
@@ -422,17 +418,17 @@ run "with_an_origin_domain_the_hop_to_the_load_balancer_is_https_only" {
   }
 
   assert {
-    condition     = aws_cloudfront_vpc_origin.alb.vpc_origin_endpoint_config[0].origin_protocol_policy == "https-only"
+    condition     = aws_cloudfront_vpc_origin.alb[0].vpc_origin_endpoint_config[0].origin_protocol_policy == "https-only"
     error_message = "With origin_domain CloudFront uses HTTPS only to the load balancer."
   }
 
   assert {
-    condition     = one([for o in aws_cloudfront_distribution.main.origin : o.domain_name]) == "bmu-dev-origin.example.berkeley.edu"
+    condition     = one([for o in aws_cloudfront_distribution.main[0].origin : o.domain_name]) == "bmu-dev-origin.example.berkeley.edu"
     error_message = "CloudFront checks the certificate against origin_domain."
   }
 
   assert {
-    condition     = aws_vpc_security_group_ingress_rule.alb_from_cloudfront.from_port == 443 && aws_vpc_security_group_ingress_rule.alb_from_cloudfront.to_port == 443
+    condition     = aws_vpc_security_group_ingress_rule.alb_from_cloudfront[0].from_port == 443 && aws_vpc_security_group_ingress_rule.alb_from_cloudfront[0].to_port == 443
     error_message = "The load balancer admits CloudFront on 443 only (one rule: the prefix list fills the group)."
   }
 }
@@ -451,30 +447,19 @@ run "no_waf_by_default" {
   command = plan
 
   assert {
-    condition     = length(aws_wafv2_web_acl.main) == 0 && aws_cloudfront_distribution.main.web_acl_id == null
+    condition     = length(aws_wafv2_web_acl.main) + length(aws_wafv2_web_acl_association.alb) + length(aws_cloudwatch_log_group.waf) == 0
     error_message = "The WAF is off unless waf_enabled."
   }
 }
 
-run "the_waf_limits_sign_ins_and_requests_per_address" {
+run "a_cloudfront_environment_has_no_waf" {
   command = plan
 
   variables {
     waf_enabled = true
   }
 
-  assert {
-    condition     = aws_wafv2_web_acl.main[0].scope == "CLOUDFRONT"
-    error_message = "CloudFront's WAF has scope CLOUDFRONT (in us-east-1)."
-  }
-
-  assert {
-    condition = (
-      [for r in aws_wafv2_web_acl.main[0].rule : r.statement[0].rate_based_statement[0].limit if r.name == "sign-in-rate"] == [20] &&
-      [for r in aws_wafv2_web_acl.main[0].rule : r.statement[0].rate_based_statement[0].limit if r.name == "request-rate"] == [3000]
-    )
-    error_message = "Sign-in is limited to 20 and all requests to 3,000 per address in 5 minutes."
-  }
+  expect_failures = [var.waf_enabled]
 }
 
 run "keys_wait_30_days_before_deletion_where_data_is_protected" {
@@ -644,4 +629,328 @@ run "gateway_endpoints_without_a_vpc_are_refused" {
   }
 
   expect_failures = [var.create_gateway_endpoints]
+}
+
+# ---- The front door (variables.tf, front_door) ----
+
+run "by_default_cloudfront_is_the_front_door" {
+  command = plan
+
+  assert {
+    condition = (length(aws_cloudfront_distribution.main) == 1 && length(aws_cloudfront_function.allowlist) == 1
+      && length(aws_cloudfront_vpc_origin.alb) == 1 && aws_lb.main.internal && length(aws_vpc_security_group_ingress_rule.alb_https) == 0
+    && output.front_door == "cloudfront")
+    error_message = "front_door cloudfront: CloudFront, its function and VPC origin, an internal load balancer, no rules for allowed_cidrs."
+  }
+
+  assert {
+    condition     = aws_security_group.alb.description == "BMU load balancer. The CloudFront VPC origin connects from inside the VPC."
+    error_message = "The CloudFront environment's security group keeps its description: a new one would replace the group, which fails."
+  }
+
+  assert {
+    condition     = length([for st in data.aws_iam_policy_document.staging_bucket.statement : st if st.sid == "UploadsOnlyFromTheAllowedAddressesOrTheVpc"]) == 0
+    error_message = "Behind CloudFront the staging bucket has no upload address rule (its allowlist is CloudFront's)."
+  }
+}
+
+run "alb_is_an_internet_facing_load_balancer_on_the_domain_with_https_only" {
+  command = plan
+
+  variables {
+    front_door      = "alb"
+    domain_name     = "bmu-qa.example.berkeley.edu"
+    certificate_arn = "arn:aws:acm:us-west-2:123456789012:certificate/0f1e2d3c-4b5a-6978-8091-a2b3c4d5e6f7"
+    vpc_id          = "vpc-00000000000000001"
+    app_subnet_ids  = ["subnet-0000000000000000a", "subnet-0000000000000000b"]
+    lb_subnet_ids   = ["subnet-0000000000000000c", "subnet-0000000000000000d"]
+  }
+
+  override_data {
+    target = data.aws_vpc.existing
+    values = { id = "vpc-00000000000000001" }
+  }
+
+  override_data {
+    target = data.aws_subnet.app
+    values = { vpc_id = "vpc-00000000000000001" }
+  }
+
+  override_data {
+    target = data.aws_subnet.lb
+    values = { vpc_id = "vpc-00000000000000001" }
+  }
+
+  override_data {
+    target = data.aws_vpc_endpoint.s3
+    values = { id = "vpce-0000000000000000a" }
+  }
+
+  assert {
+    condition = (length(aws_cloudfront_distribution.main) + length(aws_cloudfront_function.allowlist) + length(aws_cloudfront_vpc_origin.alb)
+    + length(aws_vpc_security_group_ingress_rule.alb_from_cloudfront) + length(data.aws_ec2_managed_prefix_list.cloudfront_origin_facing)) == 0
+    error_message = "front_door alb: no CloudFront distribution, function, VPC origin or prefix list rule."
+  }
+
+  assert {
+    condition     = !aws_lb.main.internal && toset(aws_lb.main.subnets) == toset(var.lb_subnet_ids)
+    error_message = "The load balancer is internet-facing, in lb_subnet_ids (the VPC's public subnets)."
+  }
+
+  assert {
+    condition = (length(aws_lb_listener.http) == 0 && length(aws_lb_listener.https) == 1
+      && aws_lb_listener.https[0].certificate_arn == var.certificate_arn
+    && aws_lb_listener.https[0].ssl_policy == "ELBSecurityPolicy-TLS13-1-2-2021-06")
+    error_message = "One HTTPS listener with domain_name's certificate and the TLS 1.3 policy; no HTTP listener (no port 80)."
+  }
+
+  assert {
+    condition = (toset([for r in aws_vpc_security_group_ingress_rule.alb_https : r.cidr_ipv4]) == toset(var.allowed_cidrs)
+    && alltrue([for r in aws_vpc_security_group_ingress_rule.alb_https : r.from_port == 443 && r.to_port == 443 && r.ip_protocol == "tcp"]))
+    error_message = "The load balancer's security group admits allowed_cidrs on 443 only."
+  }
+
+  assert {
+    condition     = aws_security_group.alb.description == "BMU load balancer. HTTPS from the allowed addresses only."
+    error_message = "An alb environment's security group says what it admits."
+  }
+
+  assert {
+    condition     = output.url == "https://bmu-qa.example.berkeley.edu" && output.front_door == "alb" && output.domain_name == var.domain_name
+    error_message = "The address is the domain name."
+  }
+
+  assert {
+    condition     = one(aws_s3_bucket_cors_configuration.staging.cors_rule).allowed_origins == toset(["https://bmu-qa.example.berkeley.edu"])
+    error_message = "The staging bucket takes browser uploads from the domain name."
+  }
+
+  assert {
+    condition = anytrue([for st in data.aws_iam_policy_document.staging_bucket.statement :
+      st.sid == "UploadsOnlyFromTheAllowedAddressesOrTheVpc" && st.effect == "Deny" && toset(st.actions) == toset(["s3:PutObject"])
+      && anytrue([for c in st.condition : c.test == "NotIpAddress" && c.variable == "aws:SourceIp" && toset(c.values) == toset(var.allowed_cidrs)])
+    && anytrue([for c in st.condition : c.test == "StringNotEqualsIfExists" && c.variable == "aws:SourceVpce" && toset(c.values) == toset(["vpce-0000000000000000a"])])])
+    error_message = "The staging bucket refuses uploads unless from allowed_cidrs or through the VPC's S3 endpoint (BQ31)."
+  }
+
+  assert {
+    condition     = length(aws_wafv2_web_acl.main) == 0
+    error_message = "No WAF unless waf_enabled."
+  }
+}
+
+run "alb_with_the_waf_regional_on_the_load_balancer" {
+  command = plan
+
+  variables {
+    front_door               = "alb"
+    domain_name              = "bmu-qa.example.berkeley.edu"
+    certificate_arn          = "arn:aws:acm:us-west-2:123456789012:certificate/0f1e2d3c-4b5a-6978-8091-a2b3c4d5e6f7"
+    vpc_id                   = "vpc-00000000000000001"
+    app_subnet_ids           = ["subnet-0000000000000000a", "subnet-0000000000000000b"]
+    lb_subnet_ids            = ["subnet-0000000000000000c", "subnet-0000000000000000d"]
+    create_gateway_endpoints = true
+    waf_enabled              = true
+  }
+
+  override_data {
+    target = data.aws_vpc.existing
+    values = { id = "vpc-00000000000000001" }
+  }
+
+  override_data {
+    target = data.aws_subnet.app
+    values = { vpc_id = "vpc-00000000000000001" }
+  }
+
+  override_data {
+    target = data.aws_subnet.lb
+    values = { vpc_id = "vpc-00000000000000001" }
+  }
+
+  override_data {
+    target = data.aws_route_table.app
+    values = { id = "rtb-0000000000000000a" }
+  }
+
+  assert {
+    condition     = length(data.aws_vpc_endpoint.s3) == 0 && length(aws_vpc_endpoint.s3) == 1
+    error_message = "With create_gateway_endpoints, the upload rule names the BMU's own S3 endpoint; nothing is looked up."
+  }
+
+  assert {
+    condition     = aws_wafv2_web_acl.main[0].scope == "REGIONAL" && length(aws_wafv2_web_acl_association.alb) == 1
+    error_message = "The WAF is regional and associated with the load balancer."
+  }
+
+  assert {
+    condition = (
+      [for r in aws_wafv2_web_acl.main[0].rule : r.statement[0].rate_based_statement[0].limit if r.name == "sign-in-rate"] == [20] &&
+      [for r in aws_wafv2_web_acl.main[0].rule : r.statement[0].rate_based_statement[0].limit if r.name == "request-rate"] == [3000] &&
+      alltrue([for r in aws_wafv2_web_acl.main[0].rule : length(r.action[0].block) == 1 && r.statement[0].rate_based_statement[0].aggregate_key_type == "IP" if startswith(r.name, "sign-in") || startswith(r.name, "request")])
+    )
+    error_message = "Sign-in is limited to 20 and all requests to 3,000 per source address in 5 minutes, both blocking."
+  }
+
+  assert {
+    condition = (
+      toset([for r in aws_wafv2_web_acl.main[0].rule : r.statement[0].managed_rule_group_statement[0].name if length(r.statement[0].managed_rule_group_statement) > 0])
+      == toset(["AWSManagedRulesAmazonIpReputationList", "AWSManagedRulesCommonRuleSet", "AWSManagedRulesKnownBadInputsRuleSet"])
+      && alltrue([for r in aws_wafv2_web_acl.main[0].rule : length(r.override_action[0].count) == 1 if length(r.statement[0].managed_rule_group_statement) > 0])
+    )
+    error_message = "AWS's IP reputation, common and known-bad-inputs rule sets run in count mode by default."
+  }
+
+  assert {
+    condition = (aws_cloudwatch_log_group.waf[0].name == "aws-waf-logs-bmu-dev"
+      && length([for f in aws_wafv2_web_acl_logging_configuration.main[0].redacted_fields : f if length(f.query_string) == 1]) == 1
+      && length([for f in aws_wafv2_web_acl_logging_configuration.main[0].redacted_fields : f if length(f.single_header) == 1 && f.single_header[0].name == "cookie"]) == 1
+    && length([for f in aws_wafv2_web_acl_logging_configuration.main[0].redacted_fields : f if length(f.uri_path) == 1]) == 0)
+    error_message = "The WAF logs to aws-waf-logs-bmu-<env>, redacting the query string and the Cookie header, keeping the path."
+  }
+}
+
+run "the_managed_rule_sets_can_block" {
+  command = plan
+
+  variables {
+    front_door        = "alb"
+    domain_name       = "bmu-qa.example.berkeley.edu"
+    certificate_arn   = "arn:aws:acm:us-west-2:123456789012:certificate/0f1e2d3c-4b5a-6978-8091-a2b3c4d5e6f7"
+    vpc_id            = "vpc-00000000000000001"
+    app_subnet_ids    = ["subnet-0000000000000000a", "subnet-0000000000000000b"]
+    lb_subnet_ids     = ["subnet-0000000000000000c", "subnet-0000000000000000d"]
+    waf_enabled       = true
+    waf_managed_rules = "block"
+  }
+
+  override_data {
+    target = data.aws_vpc.existing
+    values = { id = "vpc-00000000000000001" }
+  }
+
+  override_data {
+    target = data.aws_subnet.app
+    values = { vpc_id = "vpc-00000000000000001" }
+  }
+
+  override_data {
+    target = data.aws_subnet.lb
+    values = { vpc_id = "vpc-00000000000000001" }
+  }
+
+  override_data {
+    target = data.aws_vpc_endpoint.s3
+    values = { id = "vpce-0000000000000000a" }
+  }
+
+  assert {
+    condition = alltrue([for r in aws_wafv2_web_acl.main[0].rule :
+    length(r.override_action[0].none) == 1 && length(r.override_action[0].count) == 0 if length(r.statement[0].managed_rule_group_statement) > 0])
+    error_message = "waf_managed_rules block: the rule sets' own actions apply."
+  }
+
+  assert {
+    condition = anytrue([for r in aws_wafv2_web_acl.main[0].rule : anytrue([for o in r.statement[0].managed_rule_group_statement[0].rule_action_override :
+    o.name == "SizeRestrictions_BODY" && length(o.action_to_use[0].count) == 1]) if r.name == "common"])
+    error_message = "The common rule set's body size rule only counts: saving a job's documents can exceed 8 KB."
+  }
+}
+
+run "alb_needs_an_existing_vpc_with_load_balancer_subnets" {
+  command = plan
+
+  variables {
+    front_door      = "alb"
+    domain_name     = "bmu-qa.example.berkeley.edu"
+    certificate_arn = "arn:aws:acm:us-west-2:123456789012:certificate/0f1e2d3c-4b5a-6978-8091-a2b3c4d5e6f7"
+  }
+
+  expect_failures = [var.front_door]
+}
+
+run "alb_needs_its_domain_and_certificate" {
+  command = plan
+
+  variables {
+    front_door     = "alb"
+    vpc_id         = "vpc-00000000000000001"
+    app_subnet_ids = ["subnet-0000000000000000a", "subnet-0000000000000000b"]
+    lb_subnet_ids  = ["subnet-0000000000000000c", "subnet-0000000000000000d"]
+  }
+
+  override_data {
+    target = data.aws_subnet.app
+    values = { vpc_id = "vpc-00000000000000001" }
+  }
+
+  override_data {
+    target = data.aws_subnet.lb
+    values = { vpc_id = "vpc-00000000000000001" }
+  }
+
+  expect_failures = [var.domain_name, var.certificate_arn]
+}
+
+run "a_domain_is_only_for_alb" {
+  command = plan
+
+  variables {
+    domain_name = "bmu-qa.example.berkeley.edu"
+  }
+
+  expect_failures = [var.domain_name]
+}
+
+run "an_origin_domain_is_only_for_cloudfront" {
+  command = plan
+
+  variables {
+    front_door             = "alb"
+    domain_name            = "bmu-qa.example.berkeley.edu"
+    certificate_arn        = "arn:aws:acm:us-west-2:123456789012:certificate/0f1e2d3c-4b5a-6978-8091-a2b3c4d5e6f7"
+    vpc_id                 = "vpc-00000000000000001"
+    app_subnet_ids         = ["subnet-0000000000000000a", "subnet-0000000000000000b"]
+    lb_subnet_ids          = ["subnet-0000000000000000c", "subnet-0000000000000000d"]
+    origin_domain          = "bmu-dev-origin.example.berkeley.edu"
+    origin_certificate_arn = "arn:aws:acm:us-west-2:123456789012:certificate/0f1e2d3c-4b5a-6978-8091-a2b3c4d5e6f7"
+  }
+
+  override_data {
+    target = data.aws_subnet.app
+    values = { vpc_id = "vpc-00000000000000001" }
+  }
+
+  override_data {
+    target = data.aws_subnet.lb
+    values = { vpc_id = "vpc-00000000000000001" }
+  }
+
+  expect_failures = [var.origin_domain]
+}
+
+run "alb_allows_at_most_60_ranges" {
+  command = plan
+
+  variables {
+    front_door      = "alb"
+    domain_name     = "bmu-qa.example.berkeley.edu"
+    certificate_arn = "arn:aws:acm:us-west-2:123456789012:certificate/0f1e2d3c-4b5a-6978-8091-a2b3c4d5e6f7"
+    vpc_id          = "vpc-00000000000000001"
+    app_subnet_ids  = ["subnet-0000000000000000a", "subnet-0000000000000000b"]
+    lb_subnet_ids   = ["subnet-0000000000000000c", "subnet-0000000000000000d"]
+    allowed_cidrs   = [for i in range(61) : "10.0.${i}.0/24"]
+  }
+
+  override_data {
+    target = data.aws_subnet.app
+    values = { vpc_id = "vpc-00000000000000001" }
+  }
+
+  override_data {
+    target = data.aws_subnet.lb
+    values = { vpc_id = "vpc-00000000000000001" }
+  }
+
+  expect_failures = [var.allowed_cidrs]
 }

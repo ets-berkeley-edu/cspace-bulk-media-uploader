@@ -5,9 +5,13 @@ prototype: the image is built from this repository and runs on ECS Fargate. Demo
 
 - **One environment per account.** Each environment has a settings file in `deploy/environments/`.
   - `personal-dev.conf` is Richard's personal account and the default.
-  - `ucb-dev.conf` is the UC Berkeley account. It is ready to fill in but not set up yet.
+  - `ucb-stage2.conf` is the BMU's stage 2 in UC Berkeley's account ("Stage 2: UC Berkeley's account" below).
   - `personal-rehearsal.conf` rehearses the UC Berkeley deployment in the personal account ("Rehearsing the deploy
     in your own account" below).
+- **Two front doors** (`FRONT_DOOR`). `cloudfront`, the default (personal-dev): CloudFront at a `*.cloudfront.net`
+  address with an IP allowlist, in front of an internal load balancer. `alb` (stage 2 and its rehearsal): no
+  CloudFront; an internet-facing load balancer on the BMU's own name (`DOMAIN_NAME`), HTTPS only, that admits only
+  the allowed addresses, with a regional WAF. A deployed environment's front door never changes.
 - **Infrastructure as code.** Everything is created by Terraform (`deploy/terraform/`), so nothing has to be
   clicked together in the console, and the whole environment can be deleted and created again.
 - **No keys or passwords in files.** You sign in with IAM Identity Center (`aws sso login`). The app's own
@@ -211,6 +215,8 @@ ALWAYS_RUN_TIME=true   # optional: queued jobs start at once instead of at PAHMA
 
 **`deploy/terraform/registry`**
 - The image repository. It keeps the 10 newest images, scanned on push.
+- With `FRONT_DOOR=alb`: the ACM certificate for `DOMAIN_NAME`, validated by DNS. It is here, not in `app`, so a
+  deploy can stop before the app while it isn't issued yet.
 - With the simulated CollectionSpace: its own repository, `bmu-<env>-fakecspace`, keeping the 3 newest images.
 
 **`deploy/terraform/app`, all in one region**
@@ -218,12 +224,12 @@ ALWAYS_RUN_TIME=true   # optional: queued jobs start at once instead of at PAHMA
 | Piece | Details |
 | --- | --- |
 | Network | By default a VPC with two public subnets (the tasks) and two private subnets (the load balancer). No NAT gateway: the tasks have public IPs for outbound HTTPS to CollectionSpace and AWS, and nothing can connect in. S3 and DynamoDB traffic stays inside AWS through free gateway endpoints. In an existing VPC (below), none of that: only the BMU's security groups and, with `CREATE_GATEWAY_ENDPOINTS=true`, the two gateway endpoints. |
-| CloudFront | The HTTPS address (`*.cloudfront.net`). It forwards to an **internal** load balancer through a VPC origin, so the hop to the load balancer never crosses the internet. A CloudFront Function lets in only the allowed IPv4 addresses. Error answers are never cached. Built app files under `/assets/` are cached. |
-| Load balancer | Internal; health check `/api/health`. CloudFront reaches it with HTTP on port 80, inside AWS's network, unless the environment sets `ORIGIN_DOMAIN` and `ORIGIN_CERTIFICATE_ARN` (see HTTPS to the load balancer below): then HTTPS on 443 only. |
-| WAF | Only with `WAF_ENABLED=true`, which is the default when `PROTECT_DATA=true` (`waf.tf`, in us-east-1 as CloudFront requires): per address, at most 20 sign-in requests (`/api/login`) and 3,000 requests of any kind in 5 minutes; an address over a limit is blocked until it is under again. About $6 a month plus $0.60 per million requests. |
+| CloudFront | With `FRONT_DOOR=cloudfront` only. The HTTPS address (`*.cloudfront.net`). It forwards to an **internal** load balancer through a VPC origin, so the hop to the load balancer never crosses the internet. A CloudFront Function lets in only the allowed IPv4 addresses. Error answers are never cached. Built app files under `/assets/` are cached. |
+| Load balancer | Health check `/api/health`. With `cloudfront`: internal; CloudFront reaches it with HTTP on port 80, inside AWS's network, unless the environment sets `ORIGIN_DOMAIN` and `ORIGIN_CERTIFICATE_ARN` (see HTTPS to the load balancer below): then HTTPS on 443 only. With `alb`: internet-facing, in `LB_SUBNET_IDS`; one HTTPS listener on 443 with `DOMAIN_NAME`'s certificate and a TLS 1.2+ policy, and nothing on port 80; its security group admits only `ALLOWED_CIDRS` (at most 60 ranges, one rule each), so anyone else's connection times out. |
+| WAF | With `FRONT_DOOR=alb` and `WAF_ENABLED=true` only (the default there when `PROTECT_DATA=true`; `waf.tf`): a regional web ACL on the load balancer. Per source address, at most 20 sign-in requests (`/api/login`) and 3,000 requests of any kind in 5 minutes, both blocking until the address is under again; AWS's IP reputation, common and known-bad-inputs rule sets, in count mode until `WAF_MANAGED_RULES=block`. Logs in `aws-waf-logs-bmu-<env>` (30 days), with the query string and the Cookie header redacted. About $10 a month plus $0.60 per million requests. |
 | ECS Fargate | Cluster `bmu-<env>` with two services. Both run on ARM. The tasks are replaced one by one on deploy and rolled back automatically if they don't start. |
 | DynamoDB | `bmu-<env>-jobs`, `-sessions`, `-credentials` and `-audit`: the same keys, index and TTL as the local tables (a test checks this). Point-in-time recovery is on for jobs and audit, and off for the two tables that hold encrypted passwords. |
-| S3 | Staging bucket `bmu-<env>-staging-<account>-<region>`: each museum's files under `staging/<museum>/` and `audit/<museum>/`, SSE-KMS with that museum's key (the bucket policy refuses any other key, and any other prefix), S3 Bucket Keys off, versioning, all public access blocked, TLS only, KMS-encrypted uploads only, and CORS for the BMU's address only. The BMU deletes every version of a staged file; a rule removes any version left behind after a day. Audit files (`audit/`) keep their versions for a year. Access logs go to `bmu-<env>-s3-logs-…`, kept 90 days. |
+| S3 | Staging bucket `bmu-<env>-staging-<account>-<region>`: each museum's files under `staging/<museum>/` and `audit/<museum>/`, SSE-KMS with that museum's key (the bucket policy refuses any other key, and any other prefix), S3 Bucket Keys off, versioning, all public access blocked, TLS only, KMS-encrypted uploads only, and CORS for the BMU's address only. With `alb`, uploads only from `ALLOWED_CIDRS` (the browser's) or through the VPC's S3 gateway endpoint (the tasks' own writes). The BMU deletes every version of a staged file; a rule removes any version left behind after a day. Audit files (`audit/`) keep their versions for a year. Access logs go to `bmu-<env>-s3-logs-…`, kept 90 days. |
 | Secrets Manager | `bmu-<env>/cspace-reader/<museum>`, one per museum: its read-only CollectionSpace account's sign-in. Terraform creates them empty; `./bmu aws reader-secret <museum>` sets the value. Only the web role may read them. With `protect_data = false` they are deleted at once on `destroy`; with `true`, AWS keeps them for 30 days. |
 | KMS | A session key, a job key, and a staging key per museum (`alias/bmu-<env>-staging-<museum>`). Rotation is on. See the key policies below. |
 | IAM | Separate roles for the web app and the worker, each with only what its code uses. The web app can save and delete a job's sign-in but not read it; the worker can read and delete it. Only the web app adds staged files; both can read and delete them (the web app makes the TIFF thumbnails). Both can add audit entries and audit files, and neither can read, change or delete them. The worker role has no access to the session key and can only decrypt with the job key. |
@@ -272,10 +278,12 @@ costs.
 - **Settings.** `./bmu aws` passes the environment's settings (`deploy/environments/`) as variables;
   `app/variables.tf` lists them. `protect_data = true` (set `PROTECT_DATA=true` in the settings file) is for an
   environment whose data matters: tables can't be deleted, `destroy` won't empty the buckets, the KMS keys wait 30
-  days (not 7) before they are deleted, the WAF is on unless `WAF_ENABLED=false`, and `./bmu aws destroy` refuses
+  days (not 7) before they are deleted, with `FRONT_DOOR=alb` the WAF is on unless `WAF_ENABLED=false`, and `./bmu aws destroy` refuses
   to start. To destroy such an environment on purpose, set `PROTECT_DATA=false`, deploy, then destroy.
 - **CollectionSpace servers must be HTTPS.** Each user's password is sent to them with every request, so
   `./bmu aws`, Terraform and the app all refuse an `http://` server; only the simulated CollectionSpace is HTTP.
+- **`REQUIRE_CLEAN=true`** (stage 2): `deploy`, `pause`, `resume` and `allow-my-ip` refuse a checkout with changes or
+  untracked files, and, after fetching `origin/main`, one whose HEAD isn't on it. Only what is on `main` is deployed.
 - **Running Terraform yourself.** `./bmu aws init` initializes both folders against the environment's state.
   After that, `terraform -chdir=deploy/terraform/app state list` and other read-only commands work as usual,
   with `AWS_PROFILE` set. For changes, use `./bmu aws deploy`, which supplies the variables.
@@ -290,30 +298,37 @@ These are rough us-west-2 prices.
 | Paused | About **$0.65 a day** | The load balancer and the KMS keys still bill. |
 | Destroyed | Nothing | — |
 
+With `FRONT_DOOR=alb` there is no CloudFront; the WAF adds about $10 a month, and in an existing VPC there are no
+public IPv4 addresses for the tasks (the NAT gateway is the VPC owner's).
+
 The simulated CollectionSpace adds about $13 a month while running (its task, about $9; a public IPv4 address,
 about $3.60; the DNS namespace, about $0.60) and nothing while paused, except the namespace.
 
 The `bmu-monthly` budget ($25), which you created in the Billing console when setting up the account, emails you
 if a month heads past it. Pause or destroy the environment between test sessions.
 
-## Moving to another account (UC Berkeley)
+## Stage 2: UC Berkeley's account
 
-Nothing in the Terraform code names an account.
+`ucb-stage2.conf`: the cspace account, us-west-2, in Operations' dev/QA VPC (next section), with PAHMA's QA
+CollectionSpace, `FRONT_DOOR=alb`, the WAF, and `REQUIRE_CLEAN=true`. Nothing in the Terraform code names an account,
+and no state is moved between accounts: everything is created fresh there.
 
-1. **Sign-in.** Set up an IAM Identity Center sign-in for the new account (`aws configure sso`) with the profile
-   name in `ucb-dev.conf`.
-2. **Settings.** Check the region and the label in `ucb-dev.conf`.
-3. **Deploy.** Run `./bmu aws deploy --env ucb-dev`. Everything is created fresh there: its own state bucket,
-   new keys, new tables and a new address. No state is moved between accounts.
-4. **The read-only accounts.** Run `./bmu aws reader-secret <museum> --env ucb-dev` for each museum. The new
-   environment's secrets start empty.
+1. **Sign-in.** An IAM Identity Center profile `bmu-stage2-deploy` (`aws configure sso`) for the role
+   `rtl-BmuStage2Deployer`, whose policy is `deploy/iam/bmu-deployer-policy.json` (`deploy/iam/README.md`). Its sessions
+   last an hour; a deploy that outlasts one fails with an expired token and continues when run again.
+2. **Settings.** `ucb-stage2.local.conf` (not committed) holds the account, the VPC and its subnets, the name from
+   Operations (`DOMAIN_NAME`, `bmu-qa.<domain>`) and `ALLOWED_CIDRS` (campus and VPN): the list is in
+   `ucb-stage2.conf`'s comments.
+3. **First deploy, from a clean checkout of `main`:** `./bmu aws deploy --env ucb-stage2`. It creates the image
+   repository and requests the certificate, prints the certificate's validation record (a CNAME) and stops: Operations
+   adds the record once. When the certificate is issued, run the deploy again: it builds the image, applies the app,
+   and prints the load balancer's DNS name, which Operations points `DOMAIN_NAME` at.
+4. **The read-only account.** `./bmu aws reader-secret pahma --env ucb-stage2` (PAHMA QA's `BMU_Reader` account).
+5. **After a destroy**, the certificate is requested again under the same name and uses the same validation record,
+   but the new load balancer has a new DNS name: Operations repoints the name's record (BQ32).
 
-The personal environment is unaffected; `./bmu aws destroy --env personal-dev` removes it when you're done with
-it.
-
-In UC Berkeley's account the BMU runs in Operations' existing VPC (next section), deployed with the role
-`rtl-BmuDeployer`, whose policy is `deploy/iam/bmu-deployer-policy.json` (`deploy/iam/README.md`). A custom domain
-or a shared state bucket would become variables in `app/variables.tf` or settings in `deploy/aws.sh`.
+`PROTECT_DATA` stays false until acceptance passes, then true before PAHMA staff use it. The personal environments are
+unaffected.
 
 ## Deploying into an existing VPC
 
@@ -324,15 +339,22 @@ them in the committed `.conf`), before the environment's first deploy:
 ```bash
 VPC_ID=vpc-...                               # the VPC
 APP_SUBNET_IDS="subnet-...,subnet-..."       # its private subnets behind its NAT gateway, in two zones: the tasks
-LB_SUBNET_IDS="subnet-...,subnet-..."        # optional: private subnets for the internal load balancer (default: the app subnets)
+LB_SUBNET_IDS="subnet-...,subnet-..."        # FRONT_DOOR=alb: its public subnets, in two zones, for the load balancer
+                                             # (cloudfront: optional private subnets for the internal one; default: the app subnets)
 CREATE_GATEWAY_ENDPOINTS=false               # true only if the VPC has no S3 and DynamoDB gateway endpoints yet
 ```
 
 - **What changes.** The tasks run in the app subnets without public IPs and reach CollectionSpace and AWS through
   the VPC's NAT gateway (so the simulated CollectionSpace's image build, which needs IPv4 to PyPI, is unaffected).
-  The internal load balancer goes in the load balancer subnets, and CloudFront still reaches it through its VPC
-  origin, which needs the VPC to have an internet gateway (one with a NAT gateway does). Terraform checks that each
-  subnet is in the VPC.
+  The load balancer goes in the load balancer subnets: with `cloudfront`, an internal one that CloudFront reaches
+  through its VPC origin, which needs the VPC to have an internet gateway (one with a NAT gateway does); with `alb`,
+  an internet-facing one in the public subnets. Terraform checks that each subnet is in the VPC.
+- **The S3 gateway endpoint** (`FRONT_DOOR=alb`). The staging bucket takes the tasks' own writes only through the
+  VPC's S3 gateway endpoint (`aws:SourceVpce`); Terraform finds the VPC's endpoint, and the plan fails if it has none.
+  The app subnets' route tables must be among the endpoint's, or those writes leave through the NAT gateway and are
+  refused, and its policy must allow the BMU's buckets (vpc-devqa's: AWS's default, allowing everything; checked
+  November 8, 2026). If Operations ever narrows that policy, the BMU's thumbnails and audit files fail with
+  `AccessDenied`.
 - **What it creates there.** The BMU's three security groups (four with the simulator) and, if asked, the two
   gateway endpoints on the app subnets' route tables, all tagged `project=bmu`. Nothing else in the VPC is created or
   changed, and `./bmu aws destroy` removes only those.
@@ -341,26 +363,29 @@ CREATE_GATEWAY_ENDPOINTS=false               # true only if the VPC has no S3 an
 - **No switching.** Moving a deployed environment between its own VPC and an existing one replaces its load
   balancer, security groups and services; destroy it first, or use another `BMU_ENV_NAME`.
 - **The deployer.** In UC Berkeley's account, a role with only `deploy/iam/bmu-deployer-policy.json`, which can't
-  create or change a VPC, subnets, routes or gateways. Without the WAF: the policy allows only us-west-2, and the
-  BMU's WAF is in us-east-1 (`deploy/iam/README.md`, Not covered).
+  create or change a VPC, subnets, routes or gateways, nor anything of CloudFront: in that account the front door
+  is `alb`, with the regional WAF.
 
 ## Rehearsing the deploy in your own account
 
 Before Operations attaches the deployer policy, the deploy can be tried in a personal account as a role with only
 that policy, so that a missing permission shows up there, not as a round trip with Operations. The environment
 `personal-rehearsal` (`REHEARSAL=true`) is that rehearsal: the simulated CollectionSpace only, deployed into a VPC like
-Operations', as the deployer.
+Operations', as the deployer, with stage 2's front door (`FRONT_DOOR=alb`, the WAF). Its `DOMAIN_NAME`, in
+`personal-rehearsal.local.conf`, is a name in a Route 53 zone of the personal account (BQ23); you add its two records
+by hand, as Operations will.
 
 1. **What Operations provides.** Sign in as the account's administrator (`aws sso login --profile bmu-personal`), then
    `./bmu aws rehearsal-vpc --env personal-rehearsal`. Terraform (`deploy/terraform/rehearsal`, state
    `bmu/devqar/rehearsal.tfstate`) makes a VPC with two public and two private subnets and a NAT gateway, and the role
    `rehearsal-devqar-deployer` with the policy's parts as managed policies, exactly as `deploy/iam/split-policy.py`
-   makes them for Operations. It saves `VPC_ID` and `APP_SUBNET_IDS` in `personal-rehearsal.local.conf` and prints the
+   makes them for Operations. It saves `VPC_ID`, `APP_SUBNET_IDS` and `LB_SUBNET_IDS` in `personal-rehearsal.local.conf` and prints the
    deployer's profile for `~/.aws/config` (`bmu-rehearsal-deploy`, which signs in through `bmu-personal`, then
    takes the role).
 2. **The deploy, as the deployer.** `./bmu aws deploy --env personal-rehearsal`. Everything `./bmu aws` does for this
-   environment, but `rehearsal-vpc`, uses the deployer's profile. Its sessions last an hour (role chaining), like
-   `rtl-BmuDeployer`'s; a deploy that outlasts one fails with an expired token and continues when run again.
+   environment, but `rehearsal-vpc`, uses the deployer's profile. The first deploy stops at the certificate's validation
+   record: add it in Route 53, wait for ISSUED, deploy again, then add the name's record (a CNAME to the load balancer's
+   DNS name it prints). Its sessions last an hour (role chaining), like `rtl-BmuStage2Deployer`'s; a deploy that outlasts one fails with an expired token and continues when run again.
 3. **Each `AccessDenied`** is the policy's: fix `deploy/iam/bmu-deployer-policy.json`, run
    `./bmu aws rehearsal-vpc --env personal-rehearsal` again (it updates the role's policies), and continue the deploy.
 4. **Afterwards**, `./bmu aws destroy --env personal-rehearsal` (as the deployer), then
@@ -427,7 +452,8 @@ still try to read it (and fail with a 403 when you aren't signed in):
 - **No SQS.** The worker polls DynamoDB, as it does locally.
 - **No thumbnail Lambda.** The web app makes TIFF thumbnails, as in the prototype, so its role can read staged
   files.
-- **No custom domain.** No custom domain for the BMU's address, which stays `*.cloudfront.net`.
+- **No custom domain behind CloudFront.** A `cloudfront` environment's address stays `*.cloudfront.net`; the BMU's
+  own name comes with `FRONT_DOOR=alb`.
 - **HTTPS to the load balancer is optional.** The hop from CloudFront to the internal load balancer is plain HTTP
   inside AWS's network until the environment has a domain for it. To turn HTTPS on: choose a name (such as
   `bmu-dev-origin.<a domain you control>`), request a DNS-validated ACM certificate for it in the environment's
@@ -438,7 +464,9 @@ still try to read it (and fail with a 403 when you aren't signed in):
 - **No Object Lock or CloudTrail for the audit files.** The roles can't delete them, and their versions are kept
   for a year, but an administrator still can. Object Lock and CloudTrail data events come with the UC Berkeley
   account: Object Lock would stop `./bmu aws destroy` from emptying a test account's bucket.
-- **60-second requests.** CloudFront waits at most 60 seconds for an answer (more needs a quota increase). A
+- **No compression with `alb`.** CloudFront compressed answers; the load balancer doesn't, and the app doesn't
+  either, so the built app's files arrive uncompressed (larger, not slower to matter on campus).
+- **60-second requests** (`cloudfront`). CloudFront waits at most 60 seconds for an answer (more needs a quota increase). A
   request that waits longer on CollectionSpace, such as a sign-in while the QA server is slow, shows an error,
   though the app finishes it.
 - **A deploy stops a running job.** On a deploy or pause the worker gets SIGTERM: a running job ends after the
@@ -459,7 +487,16 @@ still try to read it (and fail with a 403 when you aren't signed in):
     second try works.
   - CloudFront can also refuse new distributions until AWS has verified a new account. AWS Support resolves
     that.
-- **403 "open only to listed addresses".** Your address changed: run `./bmu aws allow-my-ip`.
+- **403 "open only to listed addresses"** (`cloudfront`), or **the connection times out** (`alb`). Your address
+  changed: run `./bmu aws allow-my-ip`; or, in stage 2, connect from campus or the VPN.
+- **"The certificate for <name> is PENDING_VALIDATION".** The deploy printed the validation record and stopped
+  before the app. Operations (or you, in a rehearsal) adds the record; run the deploy again once
+  `aws acm describe-certificate` says ISSUED. `FAILED` or `VALIDATION_TIMED_OUT` (72 hours): destroy and deploy
+  again for a new request.
+- **"'<env>' was deployed with FRONT_DOOR=…, but its settings now say …".** Put the setting back. To change the front
+  door, destroy with the old setting, then deploy with the new one.
+- **"deployed only from a clean checkout" or "isn't on origin/main"** (`REQUIRE_CLEAN=true`). Commit, move or delete
+  what `git status` shows, check out `main` and pull, then run the command again.
 - **"'<env>' was deployed with <museum> on <server>, but its settings now say …".** A museum's server changed in
   the settings files after the environment was deployed (see "Once deployed, a museum's server never changes"
   above). Nothing was changed. Put the setting back, or follow that section to move to another server.

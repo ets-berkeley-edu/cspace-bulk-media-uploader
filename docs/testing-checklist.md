@@ -625,72 +625,114 @@ Branch `feature/ecr-public-sign-in`. The `bmut` job signs in to ECR Public befor
   only `ecr-public:GetAuthorizationToken` and `sts:GetServiceBearerToken`.
 - [ ] **5. Again changes nothing.** `./bmu aws ci-role` a second time: "No changes".
 
-## 23. An existing VPC and the deployer policy (8 November 2026)
+## 23. Stage 2 in UC Berkeley's account: an existing VPC, the load balancer front door and the deployer policy (8 November 2026)
 
-Branch `feature/vpc-devqa-deployer-policy`. `./bmu aws` deploys into an existing VPC when the `.local.conf` sets
-`VPC_ID` (deploy/README.md, "Deploying into an existing VPC"); the deployer policy is `deploy/iam/` (its README).
-Steps 1 and 2 in the personal account (15 minutes); steps 3 to 8 in UC Berkeley's account once Operations has created
-`rtl-BmuDeployer` (an hour, mostly CloudFront).
+Branches `feature/vpc-devqa-deployer-policy` and `feature/stage2-alb-front-door`. `ucb-stage2` deploys into Operations'
+dev/QA VPC (deploy/README.md, "Deploying into an existing VPC") with `FRONT_DOOR=alb` ("Stage 2: UC Berkeley's
+account"), as `rtl-BmuStage2Deployer` (deploy/iam/README.md). Steps 1 and 2 in the personal account (15 minutes); the
+rest in UC Berkeley's account once Operations has created the role (about an hour, plus waiting for Operations' two
+DNS records). Every command from `cd ~/dev/src/rtl/cspace-bulk-media-uploader`, on a clean checkout of `main`
+(`REQUIRE_CLEAN=true`).
 
-- [ ] **1. The personal environment keeps its VPC.** `cd ~/dev/src/rtl/cspace-bulk-media-uploader`,
-  `aws sso login --profile bmu-personal`, then `./bmu aws plan`. Expected: the VPC, internet gateway, route tables and
-  gateway endpoints are listed as "has moved to …[0]", and the plan shows no changes to them (none at all, unless
-  the image changed). Anything to be destroyed or replaced: stop and note it.
+Already checked (8 November 2026, with Serena's stage 2 profile): vpc-devqa's S3 gateway endpoint is `available`, the
+app subnets' route table is among its route tables, and its policy is AWS's default (allow everything). So the tasks'
+own writes reach the staging bucket through it, as the upload rule (BQ31) needs.
+
+- [ ] **1. The personal environment keeps CloudFront.** `aws sso login --profile bmu-personal`, then
+  `./bmu aws plan`. Expected: the CloudFront distribution, function and VPC origin and the prefix list rule are
+  listed as "has moved to …[0]", and nothing is destroyed or replaced (the load balancer's security group keeps its
+  description). Anything to be destroyed or replaced: stop and note it.
 - [ ] **2. The parts.** `python3 deploy/iam/split-policy.py`. Expected: three parts, each at most 6,144 characters,
-  written to `deploy/iam/out/` (`git status` doesn't list them). These are the files Operations attaches.
-- [ ] **3. The settings.** In the UC Berkeley environment's `.local.conf`: `VPC_ID`, `APP_SUBNET_IDS` (the dev/QA
-  VPC's private subnets, two zones) and `CREATE_GATEWAY_ENDPOINTS` (true only if the VPC has no S3 and DynamoDB gateway
-  endpoints), with `SIMULATED_CSPACE=true`. `git status` lists no `.conf` change.
-- [ ] **4. Plan.** `./bmu aws plan --env <env>` (or the first `deploy`, answering no at Terraform's question).
-  Expected: no `aws_vpc`, `aws_subnet`, `aws_internet_gateway` or `aws_route_table` resources; the services'
-  `assign_public_ip = false` and their subnets the app subnets; the load balancer `internal = true`.
-- [ ] **5. Deploy.** `./bmu aws deploy --env <env>`, signed in as `rtl-BmuDeployer`. Expected: it finishes and
-  prints the address. On `AccessDenied`, note the action and resource here, stop, and fix the policy (a pull request,
-  then the changed part to Operations). Not yet checked against AWS: the load balancer's security group rule that
-  names CloudFront's managed prefix list, with the rule permissions limited by tag.
-- [ ] **6. The app.** From an allowed address: sign in with the simulator's `admin`, add a file to a job, submit it
-  and run it (`ALWAYS_RUN_TIME=true` helps); sign in as `intern` and open a draft (the languages list loads). Each
-  screen and action once, watching `./bmu aws logs web --env <env>` and `worker` for `AccessDenied` (as Serena's
-  #197 found a missing role permission only when a screen was used).
-- [ ] **7. Nothing else in the VPC.** In the VPC console, filtered by the tag `project=bmu`: only the BMU's security
-  groups (and the gateway endpoints if asked). Its route tables are unchanged, except for the endpoints' routes.
-- [ ] **8. Destroy** (if that's the plan for this first deployment). `./bmu aws destroy --env <env>`: it finishes
-  without stopping at the VPC, and the VPC console no longer lists anything tagged `project=bmu`.
+  written to `deploy/iam/out/` (`git status` doesn't list them), and no `cloudfront` in any. These are the files
+  Operations attaches.
+- [ ] **3. The settings.** `ucb-stage2.local.conf` as in `ucb-stage2.conf`'s comments: the VPC, its private and
+  public subnets, `CREATE_GATEWAY_ENDPOINTS=false`, `DOMAIN_NAME` from Operations and `ALLOWED_CIDRS` (campus and
+  VPN). `git status` lists no change.
+- [ ] **4. The certificate.** `aws sso login --profile bmu-stage2-deploy`, then `./bmu aws deploy --env ucb-stage2`.
+  Expected: it confirms the account, creates the image repository and the certificate, prints the validation record
+  (`CNAME _….bmu-qa.… _….acm-validations.aws.`) and stops, with nothing built. Send the record to Operations (the
+  Ops ask). Once they've added it, `aws acm list-certificates --profile bmu-stage2-deploy --region us-west-2` shows
+  the certificate `ISSUED` (minutes to an hour).
+- [ ] **5. Plan and deploy.** `./bmu aws deploy --env ucb-stage2` again. Expected, in the plan: no `aws_cloudfront_*`
+  resources and no `aws_vpc`, `aws_subnet`, `aws_internet_gateway` or `aws_route_table`; the load balancer
+  `internal = false` in the public subnets; one listener, HTTPS on 443 (no port 80); one security group rule per
+  allowed range, on 443; the web ACL (`scope = "REGIONAL"`), its association and its log group
+  `aws-waf-logs-bmu-stage2`; the bucket policy's `UploadsOnlyFromTheAllowedAddressesOrTheVpc`. After `yes` it
+  finishes and prints the load balancer's DNS name. On `AccessDenied`, note the action and resource here, stop, and
+  fix the policy (a pull request, then the changed part to Operations).
+- [ ] **6. The name's record.** Operations points `DOMAIN_NAME` at the load balancer's DNS name (a CNAME). Then
+  `./bmu aws reader-secret pahma --env ucb-stage2` (PAHMA QA's read-only account).
+- [ ] **7. Access from campus and the VPN.** From campus, and from home on the VPN: `https://<DOMAIN_NAME>` opens
+  the sign-in page; the certificate is valid for the name; `curl -sI https://<DOMAIN_NAME>/api/health` shows
+  `strict-transport-security`, `content-security-policy` and `x-frame-options: DENY`. `http://<DOMAIN_NAME>` doesn't
+  connect (no port 80).
+- [ ] **8. Access from off campus.** Off the VPN (a phone's hotspot): `https://<DOMAIN_NAME>` times out (the
+  security group drops it; no 403 page as with CloudFront).
+- [ ] **9. The app, as Serena's #197 taught.** Sign in with a PAHMA QA staff account, add a file to a job (the
+  browser's upload to S3 works from campus), check its thumbnail appears (the tasks' own write, through the
+  endpoint), submit and run it (real records on PAHMA QA); sign in as an intern and open a draft (the languages list
+  loads). Watch `./bmu aws logs web --env ucb-stage2` and `worker` for `AccessDenied`.
+- [ ] **10. Uploads refused from off campus.** With a job open from campus, note a presigned upload (the browser's
+  network panel, the POST to the staging bucket); the same upload from off campus (or, simpler: the BMU used from off
+  campus can't load at all, step 8) is refused by S3 with `AccessDenied`. Optional: it shows that the bucket rule,
+  not only the load balancer, keeps uploads to the allowed ranges.
+- [ ] **11. The WAF's logs.** In CloudWatch Logs, `aws-waf-logs-bmu-stage2` has entries for steps 7 to 9; an entry's
+  `httpRequest` shows the path, the query string `REDACTED` and no `cookie` value. In the WAF console, the web ACL's
+  sampled requests show the managed rule sets' matches as `COUNT`. After a week of logs, decide on
+  `WAF_MANAGED_RULES=block` (BQ28).
+- [ ] **12. Nothing else in the VPC.** In the VPC console, filtered by the tag `project=bmu`: only the BMU's security
+  groups. Its route tables are unchanged.
+- [ ] **13. Destroy** (only if that's the plan before acceptance). `./bmu aws destroy --env ucb-stage2`: it finishes,
+  and the VPC console no longer lists anything tagged `project=bmu`. A later deploy reuses the validation record but
+  has a new load balancer: Operations repoints the name (BQ32).
 
-## 24. The deployer rehearsal (8 November 2026; about 1½ hours, in the personal account)
+## 24. The deployer rehearsal (8 November 2026; about 2 hours, in the personal account)
 
-Branch `feature/deployer-rehearsal`. The BMU deployed into a VPC like Operations', as a role with only the deployer
-policy (deploy/README.md, "Rehearsing the deploy in your own account"), so that missing permissions are found before
-Operations attaches it. Every command from `cd ~/dev/src/rtl/cspace-bulk-media-uploader`. Note here every
-`AccessDenied`: the action, the resource, and the fix to `deploy/iam/bmu-deployer-policy.json`.
+Branches `feature/deployer-rehearsal` and `feature/stage2-alb-front-door`. The BMU deployed into a VPC like Operations',
+as a role with only the deployer policy, with stage 2's front door (deploy/README.md, "Rehearsing the deploy in your
+own account"), so that missing permissions are found before Operations attaches it. Every command from
+`cd ~/dev/src/rtl/cspace-bulk-media-uploader`. Note here every `AccessDenied`: the action, the resource, and the fix
+to `deploy/iam/bmu-deployer-policy.json`.
 
+- [ ] **0. The rehearsal's name (BQ23).** A name under the Route 53 zone Serena's rehearsal used, in the personal
+  account (check the zone still exists: `aws route53 list-hosted-zones --profile bmu-personal`). Put it in
+  `personal-rehearsal.local.conf` as `DOMAIN_NAME=…` (never in the committed `.conf`).
 - [ ] **1. What Operations provides.** `aws sso login --profile bmu-personal`, then
   `./bmu aws rehearsal-vpc --env personal-rehearsal`. The first time it asks to confirm the account (yes). Expected:
   Terraform's plan lists a VPC, four subnets, an internet gateway, an Elastic IP, a NAT gateway, two route tables and
   four associations, the role `rehearsal-devqar-deployer`, and three policies `rehearsal-devqar-deployer-1` to `-3` with
-  their attachments; nothing named `bmu-`. Type `yes`. It then prints a `[profile bmu-rehearsal-deploy]` section.
+  their attachments; nothing named `bmu-`. Type `yes`. It saves `VPC_ID`, `APP_SUBNET_IDS` and `LB_SUBNET_IDS`, then
+  prints a `[profile bmu-rehearsal-deploy]` section.
 - [ ] **2. The deployer's profile.** Add that section to `~/.aws/config`. Check:
   `aws sts get-caller-identity --profile bmu-rehearsal-deploy` shows an `assumed-role/rehearsal-devqar-deployer/…` ARN.
-- [ ] **3. Deploy as the deployer.** `./bmu aws deploy --env personal-rehearsal`. Expected: the image is built and
-  pushed, Terraform plans the BMU with no VPC or subnets of its own, two gateway endpoints
-  (`CREATE_GATEWAY_ENDPOINTS=true`) and the simulator, and after `yes` (15 to 25 minutes) it prints the address. Note
-  any `AccessDenied` (then step 4). In particular: the load balancer's security group rule naming CloudFront's prefix
-  list, and the gateway endpoints on the VPC's route table.
-- [ ] **4. If something was denied.** Add the permission to the policy, run
-  `./bmu aws rehearsal-vpc --env personal-rehearsal` (as administrator; the plan changes only the policies), then step 3
+- [ ] **3. The certificate, as the deployer.** `./bmu aws deploy --env personal-rehearsal`. Expected: the image
+  repository and the certificate are created, the validation record is printed, and it stops. Add the record in
+  Route 53 by hand, as Operations will (a CNAME, the name and value printed). Wait for `ISSUED`.
+- [ ] **4. Deploy as the deployer.** `./bmu aws deploy --env personal-rehearsal` again. Expected: the image is built
+  and pushed, Terraform plans the BMU with no CloudFront, no VPC or subnets of its own, two gateway endpoints
+  (`CREATE_GATEWAY_ENDPOINTS=true`), the internet-facing load balancer, the WAF and the simulator, and after `yes`
+  (5 to 10 minutes) it prints the load balancer's DNS name. Add the name's record in Route 53 (a CNAME to it). Note
+  any `AccessDenied` (then step 5). In particular: the certificate's tags, the web ACL and its association
+  (`SetWebAcl`), the WAF's logging (log delivery, the resource policy), and the gateway endpoints on the VPC's route
+  table.
+- [ ] **5. If something was denied.** Add the permission to the policy, run
+  `./bmu aws rehearsal-vpc --env personal-rehearsal` (as administrator; the plan changes only the policies), then step 4
   again; Terraform continues where it stopped. `python3 deploy/iam/split-policy.py --check` still fits in three parts.
-- [ ] **5. The app, as Serena's #197 taught.** From this computer: sign in as `admin`, make a job with a file, submit
-  it (it runs at once: `ALWAYS_RUN_TIME=true`), see it finish; sign in as `intern` and open a draft (the languages list
-  loads). Meanwhile `./bmu aws logs web --env personal-rehearsal` and `worker` show no `AccessDenied` (the app's own
-  roles, not the deployer's).
-- [ ] **6. Day-to-day commands as the deployer.** `./bmu aws status`, `pause`, `resume`, `allow-my-ip` and
-  `logs fakecspace`, each with `--env personal-rehearsal`: none is denied.
-- [ ] **7. Destroy as the deployer.** `./bmu aws destroy --env personal-rehearsal`: it finishes (run it again if it
-  stops while CloudFront lets go of the VPC origin), with no `AccessDenied`.
-- [ ] **8. Remove the rehearsal.** `aws sso login --profile bmu-personal` if needed, then
+- [ ] **6. The app, as Serena's #197 taught.** From this computer: `https://<DOMAIN_NAME>` opens; sign in as
+  `admin`, make a job with a file (its thumbnail appears: the tasks' write through the endpoint), submit it (it runs
+  at once: `ALWAYS_RUN_TIME=true`), see it finish; sign in as `intern` and open a draft (the languages list loads).
+  Meanwhile `./bmu aws logs web --env personal-rehearsal` and `worker` show no `AccessDenied` (the app's own roles,
+  not the deployer's). From a phone off your network, the name times out.
+- [ ] **7. Day-to-day commands as the deployer.** `./bmu aws status` (it shows the front door), `pause`, `resume`,
+  `allow-my-ip` and `logs fakecspace`, each with `--env personal-rehearsal`: none is denied.
+- [ ] **8. Destroy as the deployer.** `./bmu aws destroy --env personal-rehearsal`: it finishes, with no
+  `AccessDenied` (the certificate is deleted with the registry). Delete the name's record in Route 53; keep the
+  validation record if the rehearsal may run again (it stays valid for the same name).
+- [ ] **9. Remove the rehearsal.** `aws sso login --profile bmu-personal` if needed, then
   `./bmu aws rehearsal-vpc --env personal-rehearsal destroy`; type `yes`. `personal-rehearsal.local.conf` no longer
-  has `VPC_ID`; the `[profile bmu-rehearsal-deploy]` section can be removed from `~/.aws/config`.
-- [ ] **9. The result.** If the policy changed, commit it (with these notes) before the ask goes to Operations.
+  has `VPC_ID`, `APP_SUBNET_IDS` or `LB_SUBNET_IDS`; the `[profile bmu-rehearsal-deploy]` section can be removed from
+  `~/.aws/config`.
+- [ ] **10. The result.** If the policy changed, commit it (with these notes) before the ask goes to Operations.
 
 ## Not tests, but still open
 

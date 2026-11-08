@@ -163,7 +163,7 @@ resource "aws_s3_bucket_cors_configuration" "staging" {
   cors_rule {
     id              = "browser-uploads"
     allowed_methods = ["POST"]
-    allowed_origins = ["https://${aws_cloudfront_distribution.main.domain_name}"]
+    allowed_origins = ["https://${local.app_domain}"]
     allowed_headers = ["*"]
     expose_headers  = ["ETag"]
     max_age_seconds = 3600
@@ -290,6 +290,37 @@ data "aws_iam_policy_document" "staging_bucket" {
         test     = "StringNotEqualsIfExists"
         variable = "s3:x-amz-server-side-encryption-aws-kms-key-id"
         values   = [aws_kms_key.staging[statement.key].arn]
+      }
+    }
+  }
+
+  # With front_door alb (BQ31): uploads only from the allowed addresses (the browser's presigned POSTs, from campus and
+  # VPN) or through the VPC's S3 gateway endpoint (the tasks' own writes: thumbnails, audit files). Both conditions
+  # must hold for the Deny. Behind CloudFront the bucket stays as it was: its allowlist is CloudFront's.
+  dynamic "statement" {
+    for_each = local.alb ? [1] : []
+
+    content {
+      sid       = "UploadsOnlyFromTheAllowedAddressesOrTheVpc"
+      effect    = "Deny"
+      actions   = ["s3:PutObject"]
+      resources = ["${aws_s3_bucket.staging.arn}/*"]
+
+      principals {
+        type        = "*"
+        identifiers = ["*"]
+      }
+
+      condition {
+        test     = "NotIpAddress"
+        variable = "aws:SourceIp"
+        values   = var.allowed_cidrs
+      }
+
+      condition {
+        test     = "StringNotEqualsIfExists"
+        variable = "aws:SourceVpce"
+        values   = [local.s3_endpoint_id]
       }
     }
   }
