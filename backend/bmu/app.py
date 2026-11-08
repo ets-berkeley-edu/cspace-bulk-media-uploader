@@ -43,6 +43,7 @@ FIXABLE = ("NeedsAttention", "Failed")
 
 ClientFactory = Callable[[str, str, str], CSpaceClient]  # (museum, username, password): that museum's CollectionSpace
 
+UPLOADED_ATTEMPTS = 3  # uploaded: saves tried when the row changed meanwhile (RowChanged)
 RUN_AT_GRACE_SECONDS = 60  # a job's own run time may be this far in the past (the browser picks whole minutes)
 
 AUTOCOMPLETE_PAGE = 20  # the first page of each source, as the CollectionSpace UI fetches
@@ -1177,14 +1178,25 @@ def _routes(app: FastAPI) -> None:
 
     @app.post("/api/jobs/{job_id}/rows/{n}/uploaded")
     def uploaded(job_id: str, n: int, background: BackgroundTasks, sess: Session = Depends(editor_session), s: Services = Depends(svc)):
+        """The browser's file reached S3: check it (HEAD) and mark the document's upload done or failed. Several
+        documents' uploads finish at once, alongside the editor's /check, so a save that finds the row changed since
+        it was read (RowChanged) reads it again and saves once more: a file that is in S3 is never marked failed for a
+        race."""
         _draft_for_editor(s, sess, job_id)
-        row = s.storage.get_row(job_id, n) or _404()
-        head = s.storage.head_object(row["s3Key"])
-        if head and head["ContentLength"] == row["size"]:
-            row["upload"] = {"s": "done", "version": head.get("VersionId") or ""}
-        else:
-            row["upload"] = {"s": "failed", "reason": "missing" if not head else "size mismatch"}
-        s.storage.put_row(job_id, row, editing=sess.key)
+        for attempt in range(UPLOADED_ATTEMPTS):
+            row = s.storage.get_row(job_id, n) or _404()
+            head = s.storage.head_object(row["s3Key"])
+            if head and head["ContentLength"] == row["size"]:
+                row["upload"] = {"s": "done", "version": head.get("VersionId") or ""}
+            else:
+                row["upload"] = {"s": "failed", "reason": "missing" if not head else "size mismatch"}
+            try:
+                s.storage.put_row(job_id, row, editing=sess.key)
+                break
+            except RowChanged:
+                if attempt + 1 == UPLOADED_ATTEMPTS:
+                    raise
+                log.warning("uploaded: job %s document %s changed while it was saved, reading it again", job_id, n)
         result = _recheck_after_change(s, sess, job_id, n)
         if row["upload"]["s"] == "done" and row["file"].rsplit(".", 1)[-1].lower() in TIFF_EXTENSIONS:
             background.add_task(tiff_thumbnail_step, s.storage, sess.tenant, job_id, n)  # the thumbnail step (a Lambda in AWS)

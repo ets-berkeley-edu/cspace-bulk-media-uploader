@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import random
 import time
 import uuid
 from decimal import Decimal
@@ -72,6 +73,9 @@ def expiry_of(job: dict) -> float | None:
     if job.get("fixFrom"):
         return job.get("draftExpiresAt") or job.get("expiresAt")
     return job.get("expiresAt")
+
+
+TRANSACTION_ATTEMPTS = 4  # put_row: tries of a transaction DynamoDB cancels for a conflict (TransactionConflict)
 
 
 class RowChanged(Exception):
@@ -556,14 +560,24 @@ class Storage:
                                         "ConditionExpression": "#s = :draft AND editingSession = :ed",
                                         "ExpressionAttributeNames": {"#s": "status"},
                                         "ExpressionAttributeValues": _dyn({":draft": "Draft", ":ed": editing})}}
-            try:
-                self.dynamodb.meta.client.transact_write_items(TransactItems=[{"Put": put}, check])
-                return
-            except ClientError as e:
+            for attempt in range(TRANSACTION_ATTEMPTS):
+                try:
+                    self.dynamodb.meta.client.transact_write_items(TransactItems=[{"Put": put}, check])
+                    return
+                except ClientError as e:
+                    if e.response["Error"]["Code"] != "TransactionCanceledException":
+                        row["v"] = old
+                        raise
+                    reasons = [r.get("Code") or "None" for r in e.response.get("CancellationReasons") or []]
+                # Real DynamoDB (not moto) cancels a transaction whose items another write is changing at that moment
+                # (TransactionConflict): the parallel uploads' transactions all check the job item, and a /check saves
+                # the rows' checks. Nothing failed; the same guarded write is tried again.
+                if "TransactionConflict" in reasons and "ConditionalCheckFailed" not in reasons and attempt + 1 < TRANSACTION_ATTEMPTS:
+                    log.warning("put_row: job %s row %s: transaction conflict (%s), trying again", job_id, row["n"], ",".join(reasons))
+                    time.sleep(0.05 * 2 ** attempt + random.uniform(0, 0.05))
+                    continue
                 row["v"] = old
-                if e.response["Error"]["Code"] != "TransactionCanceledException":
-                    raise
-                reasons = [r.get("Code") for r in e.response.get("CancellationReasons") or []]
+                log.warning("put_row: job %s row %s: transaction cancelled (%s)", job_id, row["n"], ",".join(reasons))
                 if len(reasons) > 1 and reasons[1] == "ConditionalCheckFailed":
                     raise NotEditing() from None
                 raise RowChanged(row["n"]) from None
