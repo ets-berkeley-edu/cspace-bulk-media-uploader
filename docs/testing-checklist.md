@@ -734,6 +734,22 @@ to `deploy/iam/bmu-deployer-policy.json`.
   `~/.aws/config`.
 - [ ] **10. The result.** If the policy changed, commit it (with these notes) before the ask goes to Operations.
 
+## 25. Uploads that finish together, on real DynamoDB (8 November 2026; 10 minutes, on an AWS environment)
+
+Branch `fix/uploaded-transaction-conflict`. Found in section 24: three files added at once, and one
+`POST …/rows/<n>/uploaded` answered 409 while the others answered 200, so the page marked a file that was in S3
+"Upload failed" (Retry then worked). Real DynamoDB cancels a transaction whose items another write is changing at
+that moment (`TransactionConflict`): each `uploaded` saves its row in a transaction that checks the job item, and the
+editor's `/check` saves the rows' checks meanwhile. moto never does this, so the tests simulate it
+(`backend/tests/test_upload_races.py`); only an AWS environment shows the real thing.
+
+- [ ] **1. Many files at once.** On an AWS environment (DynamoDB, not the local one), sign in as `admin`, make a job and
+  add 10 to 20 small JPEGs in one go. Expected: every document ends "Uploaded", none "Upload failed".
+- [ ] **2. The log.** `./bmu aws logs web --env <env>`: no `uploaded` answered 409. Lines
+  `put_row: job … row …: transaction conflict (…), trying again` may appear (the cancellation reasons, for the
+  record); a `transaction cancelled (…)` line means a save gave up: note its reasons here.
+- [ ] **3. Twice more**, with a different number of files, since the race depends on timing.
+
 ## Not tests, but still open
 
 - The design doc's "For Richard to address" list (from the October 3 comparison of the doc with the prototype).
