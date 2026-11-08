@@ -73,7 +73,7 @@ npm run build:demo                          # build with Demo tools
 CI (`.github/workflows/ci.yml`) runs `pytest -q`, then `npm run lint`, `typecheck`, `test` and `build`, and a
 `dependencies` job: the requirements files are in step (below) and `pip-audit` finds no known vulnerabilities, and a
 `terraform` job: `terraform fmt -check`, `validate` for the four configurations in `deploy/terraform`, and
-`terraform test` for `app`, `ci` and `rehearsal` (no AWS sign-in; the Terraform version is pinned in the job), and a `bmut` job:
+`terraform test` for `registry`, `app`, `ci` and `rehearsal` (no AWS sign-in; the Terraform version is pinned in the job), and a `bmut` job:
 `./bmu test`, the Selenium tests on the bmu-test stack in Docker (a failed run uploads the screenshots and the
 services' logs). It signs in to ECR Public first with the role in `deploy/terraform/ci` when the repository has the
 Actions variable `ECR_PUBLIC_ROLE_ARN` (deploy/README.md, "CI's sign-in to ECR Public"); never commit that ARN. After

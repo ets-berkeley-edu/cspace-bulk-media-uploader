@@ -1,7 +1,7 @@
 # The deployer: a role with only the deployer policy, which ./bmu aws assumes for the rehearsal, so that every
 # AccessDenied is the policy's. Only the administrator role that applies this configuration may assume it. Its name
 # doesn't start with bmu-: the policy lets the deployer change bmu-* roles, and it mustn't be able to change its own.
-# Sessions last an hour at most (assumed from an SSO session: role chaining), as rtl-BmuDeployer's.
+# Sessions last an hour at most (assumed from an SSO session: role chaining), as rtl-BmuStage2Deployer's.
 
 data "aws_iam_session_context" "admin" {
   arn = data.aws_caller_identity.current.arn

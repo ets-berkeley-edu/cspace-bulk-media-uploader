@@ -245,7 +245,8 @@ def test_what_the_app_writes_to_s3_names_the_staging_key_as_the_bucket_policy_re
     """The bucket refuses a PutObject without SSE-KMS and the staging key (s3.tf: StringNotEqualsIfExists also
     refuses a request that names neither). Thumbnails and audit detail are written by the app itself."""
     policy = (APP / "s3.tf").read_text()
-    assert policy.count("StringNotEqualsIfExists") == 2 and "OnlyKmsEncryptedUploads" in policy and "OnlyTheStagingKeyOf" in policy
+    # The third is the upload address rule's aws:SourceVpce (front_door alb), which isn't about encryption.
+    assert policy.count("StringNotEqualsIfExists") == 3 and "OnlyKmsEncryptedUploads" in policy and "OnlyTheStagingKeyOf" in policy
     sent = []
     for key_id in (None, "arn:aws:kms:us-west-2:111122223333:key/abc"):
         settings.s3_kms_key_id = key_id
@@ -353,7 +354,8 @@ def test_the_deployer_policy_names_no_account_or_network_and_limits_writes_to_th
         for r in resources:
             # A named resource is the BMU's; the other forms are limited by tag or are generated IDs (README.md).
             assert r == "*" or "bmu-" in r or ":log-group:/bmu/" in r or r.endswith((":vpc/*", ":route-table/*", ":security-group/*",
-                    ":security-group-rule/*", ":vpc-endpoint/*", ":distribution/*", ":vpcorigin/*", ":key/*")), (st["Sid"], r)
+                    ":security-group-rule/*", ":vpc-endpoint/*", ":certificate/*", "/managedruleset/*/*", ":key/*")), (st["Sid"], r)
+    assert "cloudfront" not in text  # no CloudFront in UC Berkeley's account (BQ6): the load balancer is the front door
     assert _local("versions.tf", "name") == "bmu-${var.env_name}"  # every name the policy allows starts bmu-
 
 

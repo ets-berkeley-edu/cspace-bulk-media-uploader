@@ -2,7 +2,8 @@
 # - its own VPC (vpc_id empty; a personal account): public subnets for the tasks, which have public IPs for outbound
 #   HTTPS, private subnets for the load balancer, no NAT gateway;
 # - an existing VPC (vpc_id set, such as Operations' shared dev/QA VPC): the tasks in its private subnets without
-#   public IPs, out through its NAT gateway, and the internal load balancer in the subnets given. Nothing in that VPC
+#   public IPs, out through its NAT gateway, and the load balancer in the subnets given (private ones for an internal
+#   one behind CloudFront, public ones with front_door alb). Nothing in that VPC
 #   is created or changed except the BMU's security groups and, if asked, the S3 and DynamoDB gateway endpoints.
 
 locals {
@@ -37,7 +38,7 @@ data "aws_subnet" "app" {
   }
 }
 
-# Without lb_subnet_ids, the internal load balancer goes in the app subnets.
+# Without lb_subnet_ids (front_door cloudfront only), the internal load balancer goes in the app subnets.
 data "aws_subnet" "lb" {
   for_each = toset(length(var.lb_subnet_ids) > 0 ? var.lb_subnet_ids : var.app_subnet_ids)
   id       = each.value
@@ -150,6 +151,25 @@ resource "aws_vpc_endpoint" "dynamodb" {
   route_table_ids   = local.endpoint_route_tables
 
   tags = { Name = "${local.name}-dynamodb" }
+}
+
+# With front_door alb, the staging bucket takes uploads only from allowed_cidrs or through the VPC's S3 gateway
+# endpoint, which the tasks' own writes use (s3.tf). In an existing VPC with its own endpoint (Operations'), it is
+# looked up: the plan fails if the VPC has none. Its route tables must include the app subnets', or the tasks' writes
+# would leave through the NAT gateway and be refused (deploy/README.md, "Deploying into an existing VPC").
+data "aws_vpc_endpoint" "s3" {
+  count        = local.alb && local.gateway_endpoints == 0 ? 1 : 0
+  vpc_id       = local.vpc_id
+  service_name = "com.amazonaws.${var.region}.s3"
+
+  filter {
+    name   = "vpc-endpoint-type"
+    values = ["Gateway"]
+  }
+}
+
+locals {
+  s3_endpoint_id = local.alb ? (local.gateway_endpoints == 1 ? aws_vpc_endpoint.s3[0].id : data.aws_vpc_endpoint.s3[0].id) : ""
 }
 
 # Environments deployed before the existing-VPC option keep their network: the same resources, now counted.

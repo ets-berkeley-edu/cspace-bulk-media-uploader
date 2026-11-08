@@ -29,12 +29,18 @@ variable "image_uri" {
 }
 
 variable "allowed_cidrs" {
-  description = "IPv4 addresses or CIDR ranges allowed to open the BMU, e.g. [\"203.0.113.7/32\"]. Everyone else gets 403 from CloudFront."
+  description = "IPv4 addresses or CIDR ranges allowed to open the BMU, e.g. [\"203.0.113.7/32\"]. With front_door cloudfront, everyone else gets 403 from CloudFront; with alb, the load balancer's security group admits only these, and the staging bucket takes uploads only from these (s3.tf)."
   type        = list(string)
 
   validation {
     condition     = length(var.allowed_cidrs) > 0 && alltrue([for c in var.allowed_cidrs : can(cidrhost(c, 0)) && !strcontains(c, ":")])
     error_message = "allowed_cidrs needs at least one IPv4 CIDR range, such as 203.0.113.7/32 (IPv6 isn't supported: the distribution is IPv4-only)."
+  }
+
+  # With alb, each range is a rule in the load balancer's security group, which holds at most 60 inbound rules.
+  validation {
+    condition     = var.front_door != "alb" || length(distinct(var.allowed_cidrs)) <= 60
+    error_message = "With front_door alb, allowed_cidrs holds at most 60 ranges: each is a rule in the load balancer's security group (AWS's limit is 60)."
   }
 }
 
@@ -128,7 +134,7 @@ variable "app_subnet_ids" {
 }
 
 variable "lb_subnet_ids" {
-  description = "With vpc_id: the private subnets the internal load balancer is in, in at least two zones. Empty: the app subnets."
+  description = "With vpc_id: the load balancer's subnets, in at least two zones: private ones for front_door cloudfront (an internal load balancer; empty: the app subnets), public ones for alb (internet-facing; required)."
   type        = list(string)
   default     = []
 
@@ -207,15 +213,74 @@ variable "worker_memory" {
   default     = 2048
 }
 
-# HTTPS from CloudFront to the load balancer (review 5.2). The VPC origin keeps that hop inside AWS's network, but it
+# HTTPS from CloudFront to the load balancer (review 5.2), with front_door cloudfront only. The VPC origin keeps that hop inside AWS's network, but it
 # is plain HTTP until the load balancer has a certificate, which needs a domain name the team controls (the load
 # balancer's own *.elb.amazonaws.com name can't get one). Set both to turn it on: then the load balancer listens on
 # 443 only, with that certificate, and CloudFront connects with HTTPS only and checks the certificate against
 # origin_domain. origin_domain needs a DNS record (CNAME) pointing to the load balancer (output alb_dns_name).
+# The front door (design: AWS deployment). cloudfront: CloudFront (HTTPS at a *.cloudfront.net address, the IP
+# allowlist in a CloudFront function) in front of an internal load balancer, as in a personal account. alb: no
+# CloudFront (UC Berkeley's account, stage 2): an internet-facing load balancer in the VPC's public subnets, HTTPS
+# only on domain_name with an ACM certificate (../registry), its security group admitting allowed_cidrs, and the
+# regional WAF (waf.tf). A deployed environment's front door never changes: ./bmu aws refuses it (destroy first).
+variable "front_door" {
+  description = "cloudfront or alb (see above)."
+  type        = string
+  default     = "cloudfront"
+
+  validation {
+    condition     = contains(["cloudfront", "alb"], var.front_door)
+    error_message = "front_door must be cloudfront or alb."
+  }
+
+  # The BMU's own VPC has no public subnets for a load balancer: alb goes in an existing VPC's (network.tf).
+  validation {
+    condition     = var.front_door != "alb" || (var.vpc_id != "" && length(var.lb_subnet_ids) >= 2)
+    error_message = "front_door alb needs vpc_id and lb_subnet_ids: the VPC's public subnets, in two zones, for the internet-facing load balancer."
+  }
+}
+
+variable "domain_name" {
+  description = "With front_door alb: the BMU's name, such as bmu-qa.example.berkeley.edu, matching certificate_arn. Its DNS record (Operations') points at the load balancer (output alb_dns_name). Empty with cloudfront."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = (var.domain_name != "") == (var.front_door == "alb")
+    error_message = "domain_name is needed with front_door alb, and only then."
+  }
+
+  validation {
+    condition     = var.domain_name == "" || can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", var.domain_name))
+    error_message = "domain_name must be a domain name alone, in lowercase, such as bmu-qa.example.berkeley.edu."
+  }
+}
+
+variable "certificate_arn" {
+  description = "With front_door alb: domain_name's ACM certificate, in the environment's region (../registry, output certificate_arn). Empty with cloudfront."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = (var.certificate_arn != "") == (var.front_door == "alb")
+    error_message = "certificate_arn is needed with front_door alb, and only then."
+  }
+
+  validation {
+    condition     = var.certificate_arn == "" || can(regex("^arn:aws[a-z-]*:acm:[a-z0-9-]+:[0-9]{12}:certificate/", var.certificate_arn))
+    error_message = "certificate_arn must be an ACM certificate's ARN."
+  }
+}
+
 variable "origin_domain" {
   description = "The load balancer's own domain name, matching origin_certificate_arn, e.g. bmu-dev-origin.example.berkeley.edu. Empty: CloudFront reaches the load balancer with HTTP inside AWS's network."
   type        = string
   default     = ""
+
+  validation {
+    condition     = var.origin_domain == "" || var.front_door == "cloudfront"
+    error_message = "origin_domain is for front_door cloudfront only: with alb, the load balancer's name is domain_name."
+  }
 
   validation {
     condition     = var.origin_domain == "" || can(regex("^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$", var.origin_domain))
@@ -240,9 +305,25 @@ variable "origin_certificate_arn" {
 }
 
 variable "waf_enabled" {
-  description = "true puts an AWS WAF in front of CloudFront: a rate limit on sign-in (/api/login) and on all requests, per address (waf.tf; about $6 a month plus $0.60 per million requests). ./bmu aws turns it on with PROTECT_DATA unless WAF_ENABLED says otherwise."
+  description = "true puts a regional AWS WAF on the load balancer, with front_door alb only (waf.tf; about $10 a month plus $0.60 per million requests). ./bmu aws turns it on with PROTECT_DATA there unless WAF_ENABLED says otherwise."
   type        = bool
   default     = false
+
+  validation {
+    condition     = !var.waf_enabled || var.front_door == "alb"
+    error_message = "waf_enabled is for front_door alb only: a CloudFront environment has no WAF."
+  }
+}
+
+variable "waf_managed_rules" {
+  description = "What AWS's managed rule sets in the WAF do with a match: count (log it only; the first week) or block."
+  type        = string
+  default     = "count"
+
+  validation {
+    condition     = contains(["count", "block"], var.waf_managed_rules)
+    error_message = "waf_managed_rules must be count or block."
+  }
 }
 
 variable "waf_login_limit" {

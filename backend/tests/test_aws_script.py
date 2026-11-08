@@ -8,6 +8,8 @@
 - the simulated CollectionSpace (SIMULATED_CSPACE=true): its address, label, image and read-only account;
 - the read-only accounts' secrets, one per museum (reader-secret MUSEUM, status).
 - ci-role: CI's ECR Public role, with the account's GitHub OIDC provider created or reused.
+- the front door (FRONT_DOOR, DOMAIN_NAME): its settings, the certificate's DNS record, and no change of front door
+  once deployed (check_front_door); REQUIRE_CLEAN (check_clean).
 """
 import json
 import os
@@ -31,6 +33,9 @@ case "$*" in
   *"secretsmanager describe-secret"*)
     case "$*" in *LastChangedDate*) echo "2026-10-07T12:00:00" ;; *) echo "${FAKE_SECRET_VERSIONS-0}" ;; esac ;;
   *"iam list-open-id-connect-providers"*) echo "${FAKE_OIDC_PROVIDERS:-}" ;;
+  *"acm describe-certificate"*)
+    case "$*" in *Certificate.Status*) echo "${FAKE_CERT_STATUS:-ISSUED}" ;;
+      *) printf 'CNAME\t_abc.bmu-qa.example.invalid.\t_xyz.acm-validations.aws.\n' ;; esac ;;
   *"secretsmanager put-secret-value"*)
     printf '%s\n' "$@" | grep -A1 -x -e --secret-id | tail -1 > "$FAKE_LOG_DIR/secret-id"
     cat > "$FAKE_LOG_DIR/secret" ;;
@@ -51,6 +56,10 @@ case "$*" in
   *"output -raw fakecspace_repository_url"*) echo "repo/bmu-dev-fakecspace" ;;
   *"output -raw repository_url"*) echo "repo/bmu-dev" ;;
   *"output -raw url"*) echo "https://bmu.example.invalid" ;;
+  *"output -raw front_door"*) out front_door FAKE_FRONT_DOOR ;;
+  *"output -raw domain_name"*) out domain_name FAKE_DOMAIN ;;
+  *"output -raw alb_dns_name"*) echo "bmu-dev-123.us-west-2.elb.amazonaws.com" ;;
+  *"output -raw certificate_arn"*) echo "${FAKE_CERT_ARN-arn:aws:acm:us-west-2:111122223333:certificate/abc}" ;;
   *"output -raw role_arn"*) echo "arn:aws:iam::$FAKE_ACCOUNT:role/bmu-ci-ecr-public-pull" ;;
   *"state list"*) echo "${FAKE_CI_STATE:-}" ;;
   *" plan "*|*" apply "*|*" destroy "*)
@@ -448,11 +457,21 @@ def test_an_environment_whose_data_is_protected_is_never_destroyed(tree):
 
 @pytest.mark.parametrize("extra, waf", [("", "false"), ("PROTECT_DATA=true\n", "true"),
                                         ("PROTECT_DATA=true\nWAF_ENABLED=false\n", "false"), ("WAF_ENABLED=true\n", "true")])
-def test_the_waf_comes_with_protected_data_unless_the_settings_say_otherwise(tree, extra, waf):
-    write_env(tree, museums=f"pahma={QA}", local_extra=extra)
-    r = run(tree, "plan", museums=f"pahma={QA}")
+def test_with_alb_the_waf_comes_with_protected_data_unless_the_settings_say_otherwise(tree, extra, waf):
+    write_env(tree, museums=f"pahma={QA}", local_extra=ALB + extra)
+    r = run(tree, "plan", museums=f"pahma={QA}", front_door="alb")
     assert r.returncode == 0, r.stderr
     assert tf_args(tree, "plan-app")["waf_enabled"] == waf
+
+
+def test_a_cloudfront_environment_has_no_waf(tree):
+    write_env(tree, museums=f"pahma={QA}", local_extra="PROTECT_DATA=true\n")
+    r = run(tree, "plan", museums=f"pahma={QA}")
+    assert r.returncode == 0, r.stderr
+    assert tf_args(tree, "plan-app")["waf_enabled"] == "false"
+    write_env(tree, museums=f"pahma={QA}", local_extra="WAF_ENABLED=true\n")
+    r = run(tree, "plan", museums=f"pahma={QA}")
+    assert r.returncode == 1 and "WAF_ENABLED=true needs FRONT_DOOR=alb" in r.stderr
 
 
 def test_https_to_the_load_balancer_needs_both_settings(tree):
@@ -493,3 +512,154 @@ def test_ci_role_keeps_an_oidc_provider_its_own_state_created(tree):
     r = run(tree, "ci-role", oidc_providers=existing, ci_state="aws_iam_openid_connect_provider.github[0]")
     assert r.returncode == 0, r.stderr
     assert "-var=create_oidc_provider=true" in (tree / "log" / "terraform-apply-ci").read_text().splitlines()
+
+
+# ---- the front door (FRONT_DOOR, DOMAIN_NAME) and REQUIRE_CLEAN -------------------------------------------------------
+
+ALB = ('FRONT_DOOR=alb\nVPC_ID=vpc-00000000000000001\nAPP_SUBNET_IDS="subnet-0000000000000000a,subnet-0000000000000000b"\n'
+       'LB_SUBNET_IDS="subnet-0000000000000000c,subnet-0000000000000000d"\nDOMAIN_NAME=bmu-qa.example.invalid\n')
+
+
+def test_by_default_the_front_door_is_cloudfront_with_no_domain(tree):
+    write_env(tree, museums=f"pahma={QA}")
+    r = run(tree, "deploy", museums=f"pahma={QA}")
+    assert r.returncode == 0, r.stderr
+    args = tf_args(tree, "apply-app")
+    assert args["front_door"] == "cloudfront" and args["domain_name"] == "" and args["certificate_arn"] == ""
+    assert tf_args(tree, "apply-registry")["domain_name"] == ""
+    assert "15-25 minutes (CloudFront)" in r.stdout and "DNS:" not in r.stdout
+
+
+def test_alb_passes_the_domain_and_the_registrys_certificate(tree):
+    write_env(tree, museums=f"pahma={QA}", local_extra=ALB)
+    r = run(tree, "deploy", museums=f"pahma={QA}", front_door="alb")
+    assert r.returncode == 0, r.stderr
+    assert tf_args(tree, "apply-registry")["domain_name"] == "bmu-qa.example.invalid"
+    args = tf_args(tree, "apply-app")
+    assert args["front_door"] == "alb" and args["domain_name"] == "bmu-qa.example.invalid"
+    assert args["certificate_arn"] == f"arn:aws:acm:us-west-2:{ACCOUNT}:certificate/abc"
+    assert args["lb_subnet_ids"] == '["subnet-0000000000000000c","subnet-0000000000000000d"]'
+    assert args["waf_managed_rules"] == "count"
+    assert "DNS: bmu-qa.example.invalid must point at the load balancer bmu-dev-123.us-west-2.elb.amazonaws.com" in r.stdout
+
+
+def test_while_the_certificate_isnt_issued_deploy_prints_its_record_and_stops_before_the_app(tree):
+    write_env(tree, museums=f"pahma={QA}", local_extra=ALB)
+    r = run(tree, "deploy", museums=f"pahma={QA}", front_door="alb", cert_status="PENDING_VALIDATION")
+    assert r.returncode == 1, r.stdout
+    assert "The certificate for bmu-qa.example.invalid is PENDING_VALIDATION" in r.stdout
+    assert "_abc.bmu-qa.example.invalid." in r.stdout and "_xyz.acm-validations.aws." in r.stdout
+    assert "once the record is in DNS and the certificate is ISSUED" in r.stderr
+    assert "DOCKER build" not in r.stdout and not (tree / "log" / "terraform-apply-app").exists()
+
+
+@pytest.mark.parametrize("drop, message", [("VPC_ID", "needs VPC_ID and LB_SUBNET_IDS"), ("LB_SUBNET_IDS", "needs VPC_ID and LB_SUBNET_IDS"),
+                                           ("DOMAIN_NAME", "needs DOMAIN_NAME")])
+def test_alb_needs_an_existing_vpcs_public_subnets_and_a_domain(tree, drop, message):
+    extra = "".join(line + "\n" for line in ALB.splitlines() if not line.startswith(drop + "="))
+    if drop == "VPC_ID":
+        extra = "".join(line + "\n" for line in extra.splitlines() if not line.startswith(("APP_SUBNET_IDS=", "LB_SUBNET_IDS=")))
+    write_env(tree, museums=f"pahma={QA}", local_extra=extra)
+    r = run(tree, "plan", museums=f"pahma={QA}", front_door="alb")
+    assert r.returncode == 1 and message in r.stderr, r.stderr
+
+
+def test_the_domain_goes_only_in_the_local_settings(tree):
+    write_env(tree, museums=f"pahma={QA}", local_extra=ALB)
+    conf = tree / "deploy" / "environments" / "t.conf"
+    conf.write_text(conf.read_text() + "DOMAIN_NAME=bmu-qa.example.invalid\n")
+    r = run(tree, "plan", museums=f"pahma={QA}", front_door="alb")
+    assert r.returncode == 1 and "not in" in r.stderr and "DOMAIN_NAME" in r.stderr
+
+
+def test_a_domain_or_an_origin_domain_belongs_to_one_front_door(tree):
+    write_env(tree, museums=f"pahma={QA}", local_extra="DOMAIN_NAME=bmu-qa.example.invalid\n")
+    r = run(tree, "plan", museums=f"pahma={QA}")
+    assert r.returncode == 1 and "DOMAIN_NAME is for FRONT_DOOR=alb" in r.stderr
+    arn = "arn:aws:acm:us-west-2:111122223333:certificate/abc"
+    write_env(tree, museums=f"pahma={QA}", local_extra=ALB + f"ORIGIN_DOMAIN=bmu-dev-origin.example.invalid\nORIGIN_CERTIFICATE_ARN={arn}\n")
+    r = run(tree, "plan", museums=f"pahma={QA}", front_door="alb")
+    assert r.returncode == 1 and "are for FRONT_DOOR=cloudfront" in r.stderr
+
+
+@pytest.mark.parametrize("deployed, now", [(None, "alb"), ("cloudfront", "alb"), ("alb", "cloudfront")])
+def test_a_deployed_environments_front_door_never_changes(tree, deployed, now):
+    """None: deployed before FRONT_DOOR existed, so behind CloudFront."""
+    write_env(tree, museums=f"pahma={QA}", local_extra=ALB if now == "alb" else "")
+    fake = {"museums": f"pahma={QA}"} | ({"front_door": deployed} if deployed else {})
+    for cmd in ("plan", "deploy", "pause", "destroy"):
+        r = run(tree, cmd, answers="t\n", **fake)
+        assert r.returncode == 1 and f"deployed with FRONT_DOOR={deployed or 'cloudfront'}" in r.stderr, (cmd, r.stderr)
+    assert not list((tree / "log").glob("terraform-*-app")), "nothing was planned, applied or destroyed"
+    assert "DOCKER build" not in r.stdout
+
+
+def test_status_shows_the_front_door(tree):
+    write_env(tree, museums=f"pahma={QA}", local_extra=ALB)
+    r = run(tree, "status", museums=f"pahma={QA}", front_door="alb", domain="bmu-qa.example.invalid")
+    assert r.returncode == 0, r.stderr
+    assert "Front door: the load balancer bmu-dev-123.us-west-2.elb.amazonaws.com, on bmu-qa.example.invalid" in r.stdout
+
+
+def git(tree, *args):
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args], cwd=tree, check=True,
+                   capture_output=True, text=True)
+
+
+@pytest.fixture
+def clean_checkout(tree, tmp_path_factory):
+    """tree as a git checkout of main, with an origin (a bare repository) at the same commit."""
+    origin = tmp_path_factory.mktemp("origin")
+    git(origin, "init", "--bare", "-b", "main")
+    (tree / ".gitignore").write_text("log/\nbin/\n*.local.conf\n")
+    git(tree, "init", "-b", "main")
+    git(tree, "remote", "add", "origin", str(origin))
+    return tree
+
+
+def commit_and_push(tree):
+    git(tree, "add", "-A")
+    git(tree, "commit", "-m", "c")
+    git(tree, "push", "-q", "origin", "main")
+
+
+def test_require_clean_deploys_from_a_clean_checkout_on_main(clean_checkout):
+    tree = clean_checkout
+    write_env(tree, museums=f"pahma={QA}", local_extra="REQUIRE_CLEAN=true\n")
+    commit_and_push(tree)
+    r = run(tree, "deploy", museums=f"pahma={QA}")
+    assert r.returncode == 0, r.stderr
+    assert "-dirty" not in tf_args(tree, "apply-app")["image_uri"]
+
+
+def test_require_clean_refuses_changes_or_untracked_files(clean_checkout):
+    tree = clean_checkout
+    write_env(tree, museums=f"pahma={QA}", local_extra="REQUIRE_CLEAN=true\n")
+    commit_and_push(tree)
+    (tree / "medium.jpg").write_text("x")
+    for cmd in ("deploy", "pause"):
+        r = run(tree, cmd, museums=f"pahma={QA}")
+        assert r.returncode == 1 and "only from a clean checkout" in r.stderr, (cmd, r.stderr)
+    assert "DOCKER build" not in r.stdout and not list((tree / "log").glob("terraform-apply-*"))
+
+
+def test_require_clean_refuses_a_head_that_isnt_on_origin_main(clean_checkout):
+    tree = clean_checkout
+    write_env(tree, museums=f"pahma={QA}", local_extra="REQUIRE_CLEAN=true\n")
+    commit_and_push(tree)
+    (tree / "change.txt").write_text("x")
+    git(tree, "add", "-A")
+    git(tree, "commit", "-m", "not pushed")
+    r = run(tree, "deploy", museums=f"pahma={QA}")
+    assert r.returncode == 1 and "isn't on origin/main" in r.stderr, r.stderr
+    assert not list((tree / "log").glob("terraform-apply-*"))
+
+
+def test_without_require_clean_a_dirty_checkout_deploys_with_a_dirty_tag(clean_checkout):
+    tree = clean_checkout
+    write_env(tree, museums=f"pahma={QA}")
+    commit_and_push(tree)
+    (tree / "medium.jpg").write_text("x")
+    r = run(tree, "deploy", museums=f"pahma={QA}")
+    assert r.returncode == 0, r.stderr
+    assert "-dirty-" in tf_args(tree, "apply-app")["image_uri"]

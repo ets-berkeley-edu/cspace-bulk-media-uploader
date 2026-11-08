@@ -184,11 +184,12 @@ jobs:
       - name: Formatting (terraform fmt -recursive deploy/terraform fixes it)
         run: terraform fmt -check -recursive -diff
       # -lockfile=readonly: the providers must be the ones .terraform.lock.hcl pins, with its checksums.
-      - name: Validate the image repository's configuration
+      - name: Validate and test the image repository's configuration
         working-directory: deploy/terraform/registry
         run: |
           terraform init -backend=false -lockfile=readonly
           terraform validate
+          terraform test
       - name: Validate and test the app's configuration
         working-directory: deploy/terraform/app
         run: |

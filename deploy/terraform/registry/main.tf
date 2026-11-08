@@ -1,5 +1,6 @@
-# BMU container image repository. Its own configuration (and state), so the image can be pushed before the app
-# configuration (../app) starts tasks that run it. Applied by ./bmu aws deploy.
+# BMU container image repository, and with front_door alb the load balancer's certificate. Its own configuration (and
+# state), so the image can be pushed, and the certificate issued, before the app configuration (../app) starts tasks
+# that run it or a listener that needs it. Applied by ./bmu aws deploy.
 
 terraform {
   required_version = ">= 1.10"
@@ -56,6 +57,31 @@ variable "simulated_cspace" {
   description = "true also creates the simulated CollectionSpace's repository (../app/fakecspace.tf)."
   type        = bool
   default     = false
+}
+
+variable "domain_name" {
+  description = "With front_door alb (../app/variables.tf): the BMU's name, for its ACM certificate. Empty: none."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.domain_name == "" || can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", var.domain_name))
+    error_message = "domain_name must be a domain name alone, in lowercase, such as bmu-qa.example.berkeley.edu."
+  }
+}
+
+# DNS-validated (BQ6, BQ32, as Serena's D294): Operations adds the validation record once, and ACM renews the
+# certificate itself; a certificate requested again for the same name in the same account (after ./bmu aws destroy)
+# uses the same record. ./bmu aws deploy prints the record and stops before the app while the certificate isn't
+# issued, so a deploy never waits on someone else's step. The private key never leaves AWS.
+resource "aws_acm_certificate" "app" {
+  count             = var.domain_name == "" ? 0 : 1
+  domain_name       = var.domain_name
+  validation_method = "DNS"
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "aws_ecr_repository" "app" {
@@ -123,4 +149,9 @@ output "repository_url" {
 output "fakecspace_repository_url" {
   description = "Where ./bmu aws deploy pushes the simulated CollectionSpace's image; empty without it."
   value       = var.simulated_cspace ? aws_ecr_repository.fakecspace[0].repository_url : ""
+}
+
+output "certificate_arn" {
+  description = "The load balancer's certificate (front_door alb); empty without a domain."
+  value       = var.domain_name == "" ? "" : aws_acm_certificate.app[0].arn
 }
