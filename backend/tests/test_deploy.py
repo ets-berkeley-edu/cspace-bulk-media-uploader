@@ -318,3 +318,36 @@ def test_each_museum_in_the_settings_has_a_configuration():
         for entry in line.split("=", 1)[1].strip('"').split():
             museum = entry.split("=", 1)[0]
             assert (Path(appmod.__file__).parent / "tenants" / f"{museum}.yaml").exists(), (conf.name, museum)
+
+
+def _split_policy():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("split_policy", DEPLOY / "iam" / "split-policy.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_deployer_policy_fits_in_three_managed_policies_each_with_the_region_deny():
+    sp = _split_policy()
+    policy = json.loads(sp.POLICY.read_text())
+    parts = sp.split(policy)
+    assert 1 < len(parts) <= 3
+    assert all(sp.size(p) <= 6144 and p["Statement"][0]["Sid"] == "OnlyItsRegion" for p in parts)
+    together = [s for p in parts for s in p["Statement"][1:]]
+    assert sorted(s["Sid"] for s in together) == sorted(s["Sid"] for s in policy["Statement"][1:])  # each once
+    assert len({s["Sid"] for s in policy["Statement"]}) == len(policy["Statement"])
+
+
+def test_the_deployer_policy_names_no_account_or_network_and_limits_writes_to_the_bmu():
+    text = (DEPLOY / "iam" / "bmu-deployer-policy.json").read_text()
+    assert not re.search(r"\d{12}|\b(vpc|subnet|rtb|sg)-[0-9a-f]{8,}\b", text)  # the repository is public
+    policy = json.loads(text)
+    for st in policy["Statement"]:
+        resources = st["Resource"] if isinstance(st["Resource"], list) else [st["Resource"]]
+        assert "serena" not in json.dumps(st), st["Sid"]  # a separate policy, not Serena's
+        for r in resources:
+            # A named resource is the BMU's; the other forms are limited by tag or are generated IDs (README.md).
+            assert r == "*" or "bmu-" in r or ":log-group:/bmu/" in r or r.endswith((":vpc/*", ":route-table/*", ":security-group/*",
+                    ":security-group-rule/*", ":vpc-endpoint/*", ":distribution/*", ":vpcorigin/*", ":key/*")), (st["Sid"], r)
+    assert _local("versions.tf", "name") == "bmu-${var.env_name}"  # every name the policy allows starts bmu-

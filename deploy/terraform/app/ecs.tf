@@ -118,8 +118,8 @@ resource "aws_ecs_service" "web" {
   }
 
   network_configuration {
-    assign_public_ip = true
-    subnets          = aws_subnet.public[*].id
+    assign_public_ip = local.assign_public_ip
+    subnets          = local.app_subnet_ids
     security_groups  = [aws_security_group.web.id]
   }
 
@@ -153,8 +153,8 @@ resource "aws_ecs_service" "worker" {
   }
 
   network_configuration {
-    assign_public_ip = true
-    subnets          = aws_subnet.public[*].id
+    assign_public_ip = local.assign_public_ip
+    subnets          = local.app_subnet_ids
     security_groups  = [aws_security_group.worker.id]
   }
 

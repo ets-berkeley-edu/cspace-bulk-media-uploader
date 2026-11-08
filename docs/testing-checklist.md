@@ -625,6 +625,38 @@ Branch `feature/ecr-public-sign-in`. The `bmut` job signs in to ECR Public befor
   only `ecr-public:GetAuthorizationToken` and `sts:GetServiceBearerToken`.
 - [ ] **5. Again changes nothing.** `./bmu aws ci-role` a second time: "No changes".
 
+## 23. An existing VPC and the deployer policy (8 November 2026)
+
+Branch `feature/vpc-devqa-deployer-policy`. `./bmu aws` deploys into an existing VPC when the `.local.conf` sets
+`VPC_ID` (deploy/README.md, "Deploying into an existing VPC"); the deployer policy is `deploy/iam/` (its README).
+Steps 1 and 2 in the personal account (15 minutes); steps 3 to 8 in UC Berkeley's account once Operations has created
+`rtl-BmuDeployer` (an hour, mostly CloudFront).
+
+- [ ] **1. The personal environment keeps its VPC.** `cd ~/dev/src/rtl/cspace-bulk-media-uploader`,
+  `aws sso login --profile bmu-personal`, then `./bmu aws plan`. Expected: the VPC, internet gateway, route tables and
+  gateway endpoints are listed as "has moved to …[0]", and the plan shows no changes to them (none at all, unless
+  the image changed). Anything to be destroyed or replaced: stop and note it.
+- [ ] **2. The parts.** `python3 deploy/iam/split-policy.py`. Expected: three parts, each at most 6,144 characters,
+  written to `deploy/iam/out/` (`git status` doesn't list them). These are the files Operations attaches.
+- [ ] **3. The settings.** In the UC Berkeley environment's `.local.conf`: `VPC_ID`, `APP_SUBNET_IDS` (the dev/QA
+  VPC's private subnets, two zones) and `CREATE_GATEWAY_ENDPOINTS` (true only if the VPC has no S3 and DynamoDB gateway
+  endpoints), with `SIMULATED_CSPACE=true`. `git status` lists no `.conf` change.
+- [ ] **4. Plan.** `./bmu aws plan --env <env>` (or the first `deploy`, answering no at Terraform's question).
+  Expected: no `aws_vpc`, `aws_subnet`, `aws_internet_gateway` or `aws_route_table` resources; the services'
+  `assign_public_ip = false` and their subnets the app subnets; the load balancer `internal = true`.
+- [ ] **5. Deploy.** `./bmu aws deploy --env <env>`, signed in as `rtl-BmuDeployer`. Expected: it finishes and
+  prints the address. On `AccessDenied`, note the action and resource here, stop, and fix the policy (a pull request,
+  then the changed part to Operations). Not yet checked against AWS: the load balancer's security group rule that
+  names CloudFront's managed prefix list, with the rule permissions limited by tag.
+- [ ] **6. The app.** From an allowed address: sign in with the simulator's `admin`, add a file to a job, submit it
+  and run it (`ALWAYS_RUN_TIME=true` helps); sign in as `intern` and open a draft (the languages list loads). Each
+  screen and action once, watching `./bmu aws logs web --env <env>` and `worker` for `AccessDenied` (as Serena's
+  #197 found a missing role permission only when a screen was used).
+- [ ] **7. Nothing else in the VPC.** In the VPC console, filtered by the tag `project=bmu`: only the BMU's security
+  groups (and the gateway endpoints if asked). Its route tables are unchanged, except for the endpoints' routes.
+- [ ] **8. Destroy** (if that's the plan for this first deployment). `./bmu aws destroy --env <env>`: it finishes
+  without stopping at the VPC, and the VPC console no longer lists anything tagged `project=bmu`.
+
 ## Not tests, but still open
 
 - The design doc's "For Richard to address" list (from the October 3 comparison of the doc with the prototype).

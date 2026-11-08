@@ -2,7 +2,7 @@ resource "aws_lb" "main" {
   name               = local.name
   internal           = true
   load_balancer_type = "application"
-  subnets            = aws_subnet.private[*].id
+  subnets            = local.lb_subnet_ids
   security_groups    = [aws_security_group.alb.id]
 
   idle_timeout               = 120
@@ -11,7 +11,7 @@ resource "aws_lb" "main" {
 
 resource "aws_lb_target_group" "web" {
   name                 = "${local.name}-web"
-  vpc_id               = aws_vpc.main.id
+  vpc_id               = local.vpc_id
   target_type          = "ip"
   protocol             = "HTTP"
   port                 = 8000

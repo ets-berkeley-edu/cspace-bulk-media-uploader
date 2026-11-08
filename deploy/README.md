@@ -214,7 +214,7 @@ ALWAYS_RUN_TIME=true   # optional: queued jobs start at once instead of at PAHMA
 
 | Piece | Details |
 | --- | --- |
-| Network | A VPC with two public subnets (the tasks) and two private subnets (the load balancer). No NAT gateway: the tasks have public IPs for outbound HTTPS to CollectionSpace and AWS, and nothing can connect in. S3 and DynamoDB traffic stays inside AWS through free gateway endpoints. |
+| Network | By default a VPC with two public subnets (the tasks) and two private subnets (the load balancer). No NAT gateway: the tasks have public IPs for outbound HTTPS to CollectionSpace and AWS, and nothing can connect in. S3 and DynamoDB traffic stays inside AWS through free gateway endpoints. In an existing VPC (below), none of that: only the BMU's security groups and, with `CREATE_GATEWAY_ENDPOINTS=true`, the two gateway endpoints. |
 | CloudFront | The HTTPS address (`*.cloudfront.net`). It forwards to an **internal** load balancer through a VPC origin, so the hop to the load balancer never crosses the internet. A CloudFront Function lets in only the allowed IPv4 addresses. Error answers are never cached. Built app files under `/assets/` are cached. |
 | Load balancer | Internal; health check `/api/health`. CloudFront reaches it with HTTP on port 80, inside AWS's network, unless the environment sets `ORIGIN_DOMAIN` and `ORIGIN_CERTIFICATE_ARN` (see HTTPS to the load balancer below): then HTTPS on 443 only. |
 | WAF | Only with `WAF_ENABLED=true`, which is the default when `PROTECT_DATA=true` (`waf.tf`, in us-east-1 as CloudFront requires): per address, at most 20 sign-in requests (`/api/login`) and 3,000 requests of any kind in 5 minutes; an address over a limit is blocked until it is under again. About $6 a month plus $0.60 per million requests. |
@@ -308,8 +308,38 @@ Nothing in the Terraform code names an account.
 The personal environment is unaffected; `./bmu aws destroy --env personal-dev` removes it when you're done with
 it.
 
-If the UCB account requires a custom domain, a different network layout, existing VPCs or a shared state
-bucket, those become variables in `app/variables.tf` or settings in `deploy/aws.sh`.
+In UC Berkeley's account the BMU runs in Operations' existing VPC (next section), deployed with the role
+`rtl-BmuDeployer`, whose policy is `deploy/iam/bmu-deployer-policy.json` (`deploy/iam/README.md`). A custom domain
+or a shared state bucket would become variables in `app/variables.tf` or settings in `deploy/aws.sh`.
+
+## Deploying into an existing VPC
+
+Where the account's network is Operations' (UC Berkeley's dev/QA VPC), the BMU doesn't create a VPC. Put the VPC's IDs
+in the environment's `.local.conf`, which isn't committed (they identify the account's network; `./bmu aws` refuses
+them in the committed `.conf`), before the environment's first deploy:
+
+```bash
+VPC_ID=vpc-...                               # the VPC
+APP_SUBNET_IDS="subnet-...,subnet-..."       # its private subnets behind its NAT gateway, in two zones: the tasks
+LB_SUBNET_IDS="subnet-...,subnet-..."        # optional: private subnets for the internal load balancer (default: the app subnets)
+CREATE_GATEWAY_ENDPOINTS=false               # true only if the VPC has no S3 and DynamoDB gateway endpoints yet
+```
+
+- **What changes.** The tasks run in the app subnets without public IPs and reach CollectionSpace and AWS through
+  the VPC's NAT gateway (so the simulated CollectionSpace's image build, which needs IPv4 to PyPI, is unaffected).
+  The internal load balancer goes in the load balancer subnets, and CloudFront still reaches it through its VPC
+  origin, which needs the VPC to have an internet gateway (one with a NAT gateway does). Terraform checks that each
+  subnet is in the VPC.
+- **What it creates there.** The BMU's three security groups (four with the simulator) and, if asked, the two
+  gateway endpoints on the app subnets' route tables, all tagged `project=bmu`. Nothing else in the VPC is created or
+  changed, and `./bmu aws destroy` removes only those.
+- **Cost.** No public IPv4 addresses (about $7 a month less); the NAT gateway's data charges are the VPC owner's.
+  S3 and DynamoDB traffic avoids them only through gateway endpoints.
+- **No switching.** Moving a deployed environment between its own VPC and an existing one replaces its load
+  balancer, security groups and services; destroy it first, or use another `BMU_ENV_NAME`.
+- **The deployer.** In UC Berkeley's account, a role with only `deploy/iam/bmu-deployer-policy.json`, which can't
+  create or change a VPC, subnets, routes or gateways. Without the WAF: the policy allows only us-west-2, and the
+  BMU's WAF is in us-east-1 (`deploy/iam/README.md`, Not covered).
 
 ## CI's sign-in to ECR Public
 
@@ -410,7 +440,7 @@ still try to read it (and fail with a 403 when you aren't signed in):
 - **"This account already has a BMU environment named '<name>'".** The first use of an environment on this
   computer found Terraform state for that name in the account. If you deployed it, from another computer, another
   clone or before a `destroy`, answer yes. Otherwise answer no and set `BMU_ENV_NAME` in your `.local.conf`.
-- **`destroy` stops at the VPC.** CloudFront removes its VPC origin's network interfaces in the background, and
+- **`destroy` stops at the VPC** (the BMU's own VPC). CloudFront removes its VPC origin's network interfaces in the background, and
   the VPC can't be deleted until they're gone. Run `./bmu aws destroy` again a few minutes later; Terraform
   continues where it stopped.
 - **"Error acquiring the state lock".** An earlier run was interrupted. Check that no other deploy is running,
@@ -430,4 +460,7 @@ still try to read it (and fail with a 403 when you aren't signed in):
     role; set the secret again or ask the CollectionSpace administrator.
 - **With the simulated CollectionSpace, records and finished jobs don't match.** The simulator lost its records when
   it restarted (a pause, a deploy). Expected: start new jobs. `./bmu aws logs fakecspace` shows when it started.
+- **`AccessDenied` with the deployer role.** The deployer policy lacks a permission: note the action and resource
+  (`deploy/iam/README.md`, When a deploy fails with `AccessDenied`). The failed step changed nothing after it;
+  `./bmu aws deploy` continues once the role has it.
 - **The app doesn't come up.** Run `./bmu aws logs web` or `./bmu aws logs worker`, and `./bmu aws status`.

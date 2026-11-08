@@ -27,7 +27,8 @@ resource "aws_cloudfront_vpc_origin" "alb" {
     }
   }
 
-  # A VPC origin needs the VPC's internet gateway attached.
+  # A VPC origin needs the VPC's internet gateway attached: the BMU's own, when it creates its VPC (an existing VPC
+  # with a NAT gateway has one).
   depends_on = [aws_internet_gateway.main]
 }
 

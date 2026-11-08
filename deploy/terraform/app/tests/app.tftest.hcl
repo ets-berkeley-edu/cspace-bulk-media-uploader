@@ -67,6 +67,11 @@ run "names_and_sizes" {
     condition     = aws_subnet.public[0].cidr_block == "10.40.0.0/24" && aws_subnet.private[1].cidr_block == "10.40.11.0/24"
     error_message = "Public subnets are 10.40.0-1.0/24 and private ones 10.40.10-11.0/24."
   }
+
+  assert {
+    condition     = length(aws_vpc.main) == 1 && aws_ecs_service.web.network_configuration[0].assign_public_ip && length(aws_vpc_endpoint.s3) == 1 && length(aws_vpc_endpoint.dynamodb) == 1
+    error_message = "Without vpc_id, the BMU creates its own VPC: tasks with public IPs, and S3 and DynamoDB gateway endpoints."
+  }
 }
 
 run "paused" {
@@ -483,4 +488,160 @@ run "keys_wait_30_days_before_deletion_where_data_is_protected" {
     condition     = aws_kms_key.session.deletion_window_in_days == 30 && aws_kms_key.job.deletion_window_in_days == 30 && alltrue([for k in aws_kms_key.staging : k.deletion_window_in_days == 30])
     error_message = "With protect_data every key has the longest deletion window, 30 days."
   }
+}
+
+# An existing VPC (network.tf), such as Operations' shared dev/QA VPC. The IDs are made up.
+run "in_an_existing_vpc_nothing_of_the_network_is_created" {
+  command = plan
+
+  variables {
+    vpc_id         = "vpc-00000000000000001"
+    app_subnet_ids = ["subnet-0000000000000000a", "subnet-0000000000000000b"]
+  }
+
+  override_data {
+    target = data.aws_vpc.existing
+    values = { id = "vpc-00000000000000001" }
+  }
+
+  override_data {
+    target = data.aws_subnet.app
+    values = { vpc_id = "vpc-00000000000000001" }
+  }
+
+  override_data {
+    target = data.aws_subnet.lb
+    values = { vpc_id = "vpc-00000000000000001" }
+  }
+
+  assert {
+    condition = (length(aws_vpc.main) + length(aws_internet_gateway.main) + length(aws_subnet.public) + length(aws_subnet.private)
+    + length(aws_route_table.public) + length(aws_route_table.private) + length(aws_vpc_endpoint.s3) + length(aws_vpc_endpoint.dynamodb)) == 0
+    error_message = "In an existing VPC the BMU creates no VPC, gateway, subnets, route tables or (by default) gateway endpoints."
+  }
+
+  assert {
+    condition = (!aws_ecs_service.web.network_configuration[0].assign_public_ip && !aws_ecs_service.worker.network_configuration[0].assign_public_ip
+      && toset(aws_ecs_service.web.network_configuration[0].subnets) == toset(var.app_subnet_ids)
+    && toset(aws_ecs_service.worker.network_configuration[0].subnets) == toset(var.app_subnet_ids))
+    error_message = "The tasks run in the given private subnets without public IPs (out through the VPC's NAT gateway)."
+  }
+
+  assert {
+    condition     = aws_lb.main.internal && toset(aws_lb.main.subnets) == toset(var.app_subnet_ids)
+    error_message = "Without lb_subnet_ids, the internal load balancer goes in the app subnets."
+  }
+
+  assert {
+    condition = (aws_security_group.alb.vpc_id == var.vpc_id && aws_security_group.web.vpc_id == var.vpc_id
+    && aws_security_group.worker.vpc_id == var.vpc_id && aws_lb_target_group.web.vpc_id == var.vpc_id)
+    error_message = "The security groups and the target group are in the given VPC."
+  }
+}
+
+run "in_an_existing_vpc_the_load_balancer_can_have_its_own_subnets_and_endpoints_can_be_added" {
+  command = plan
+
+  variables {
+    vpc_id                   = "vpc-00000000000000001"
+    app_subnet_ids           = ["subnet-0000000000000000a", "subnet-0000000000000000b"]
+    lb_subnet_ids            = ["subnet-0000000000000000c", "subnet-0000000000000000d"]
+    create_gateway_endpoints = true
+    simulated_cspace         = true
+    tenants                  = { pahma = "http://fakecspace.bmu-dev.internal:8180" }
+    fakecspace_image_uri     = "123456789012.dkr.ecr.us-west-2.amazonaws.com/bmu-dev-fakecspace:abc1234"
+  }
+
+  override_data {
+    target = data.aws_vpc.existing
+    values = { id = "vpc-00000000000000001" }
+  }
+
+  override_data {
+    target = data.aws_subnet.app
+    values = { vpc_id = "vpc-00000000000000001" }
+  }
+
+  override_data {
+    target = data.aws_subnet.lb
+    values = { vpc_id = "vpc-00000000000000001" }
+  }
+
+  override_data {
+    target = data.aws_route_table.app
+    values = { id = "rtb-0000000000000000a" }
+  }
+
+  assert {
+    condition     = toset(aws_lb.main.subnets) == toset(var.lb_subnet_ids)
+    error_message = "The load balancer goes in lb_subnet_ids when they're given."
+  }
+
+  assert {
+    condition     = length(aws_vpc_endpoint.s3) == 1 && aws_vpc_endpoint.s3[0].route_table_ids == toset(["rtb-0000000000000000a"]) && length(aws_vpc_endpoint.dynamodb) == 1
+    error_message = "create_gateway_endpoints adds S3 and DynamoDB endpoints to the app subnets' route tables, each table once."
+  }
+
+  assert {
+    condition = (!aws_ecs_service.fakecspace[0].network_configuration[0].assign_public_ip
+    && aws_service_discovery_private_dns_namespace.main[0].vpc == var.vpc_id)
+    error_message = "The simulator runs like the others: in the app subnets without a public IP, its name in the given VPC."
+  }
+}
+
+run "a_subnet_outside_the_vpc_is_refused" {
+  command = plan
+
+  variables {
+    vpc_id         = "vpc-00000000000000001"
+    app_subnet_ids = ["subnet-0000000000000000a", "subnet-0000000000000000b"]
+  }
+
+  override_data {
+    target = data.aws_vpc.existing
+    values = { id = "vpc-00000000000000001" }
+  }
+
+  override_data {
+    target = data.aws_subnet.app
+    values = { vpc_id = "vpc-00000000000000002" }
+  }
+
+  override_data {
+    target = data.aws_subnet.lb
+    values = { vpc_id = "vpc-00000000000000001" }
+  }
+
+  expect_failures = [data.aws_subnet.app]
+}
+
+run "an_existing_vpc_needs_two_app_subnets" {
+  command = plan
+
+  variables {
+    vpc_id         = "vpc-00000000000000001"
+    app_subnet_ids = ["subnet-0000000000000000a"]
+  }
+
+  expect_failures = [var.app_subnet_ids]
+}
+
+run "subnets_without_a_vpc_are_refused" {
+  command = plan
+
+  variables {
+    app_subnet_ids = ["subnet-0000000000000000a", "subnet-0000000000000000b"]
+  }
+
+  expect_failures = [var.app_subnet_ids]
+}
+
+run "gateway_endpoints_without_a_vpc_are_refused" {
+  command = plan
+
+  variables {
+    create_gateway_endpoints = true
+  }
+
+  expect_failures = [var.create_gateway_endpoints]
 }
