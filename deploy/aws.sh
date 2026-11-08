@@ -18,7 +18,8 @@
 #                           prints the gh command that sets the repository's ECR_PUBLIC_ROLE_ARN variable
 #   ./bmu aws rehearsal-vpc [destroy]   a rehearsal environment only (REHEARSAL=true), in your own account: make (or
 #                           delete) what Operations provides in UC Berkeley's account, a VPC with public subnets and a
-#                           NAT gateway and a deployer role with only deploy/iam/bmu-deployer-policy.json, as ADMIN_PROFILE
+#                           NAT gateway and a deployer role with only deploy/iam/bmu-deployer-policy.json (and the
+#                           simulator's bmu-simulator-dns-policy.json), as ADMIN_PROFILE
 #
 # Which environment: --env NAME or BMU_AWS_ENV (default personal-dev). Its settings are in
 # deploy/environments/NAME.conf; NAME.local.conf (not committed) holds the account number and allowed addresses.

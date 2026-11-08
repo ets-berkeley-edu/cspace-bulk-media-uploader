@@ -78,6 +78,11 @@ run "a_deployer_with_only_the_policys_parts" {
   }
 
   assert {
+    condition     = !startswith(aws_iam_role_policy.simulator_dns.name, "bmu-") && alltrue([for st in jsondecode(aws_iam_role_policy.simulator_dns.policy).Statement : alltrue([for a in st.Action : startswith(a, "route53:") || startswith(a, "servicediscovery:")])])
+    error_message = "Only the rehearsal's role gets the simulator's Route 53 and Cloud Map permissions, and nothing else with them."
+  }
+
+  assert {
     condition     = aws_iam_role.deployer.max_session_duration == 3600
     error_message = "Sessions of an hour, as rtl-BmuQaDeployer's (role chaining allows no more)."
   }

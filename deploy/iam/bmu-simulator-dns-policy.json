@@ -1,0 +1,39 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "SimulatorDnsRead",
+      "Effect": "Allow",
+      "Action": [
+        "route53:GetChange",
+        "route53:GetHostedZone",
+        "route53:ListHostedZonesByName",
+        "route53:ListHostedZonesByVPC",
+        "route53:ListResourceRecordSets",
+        "servicediscovery:Get*",
+        "servicediscovery:List*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "SimulatorDns",
+      "Effect": "Allow",
+      "Action": [
+        "route53:AssociateVPCWithHostedZone",
+        "route53:ChangeResourceRecordSets",
+        "route53:ChangeTagsForResource",
+        "route53:CreateHostedZone",
+        "route53:DeleteHostedZone",
+        "route53:DisassociateVPCFromHostedZone",
+        "servicediscovery:CreatePrivateDnsNamespace",
+        "servicediscovery:CreateService",
+        "servicediscovery:DeleteNamespace",
+        "servicediscovery:DeleteService",
+        "servicediscovery:TagResource",
+        "servicediscovery:UntagResource",
+        "servicediscovery:UpdateService"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

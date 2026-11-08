@@ -356,7 +356,18 @@ def test_the_deployer_policy_names_no_account_or_network_and_limits_writes_to_th
             assert r == "*" or "bmu-" in r or ":log-group:/bmu/" in r or r.endswith((":vpc/*", ":route-table/*", ":security-group/*",
                     ":security-group-rule/*", ":vpc-endpoint/*", ":certificate/*", "/managedruleset/*/*", ":key/*")), (st["Sid"], r)
     assert "cloudfront" not in text  # no CloudFront in UC Berkeley's account (BQ6): the load balancer is the front door
+    # No Route 53 or Cloud Map, but the region Deny's exemption: Operations handles DNS (BQ32), and only the simulator
+    # needs them, which the rehearsal's role alone gets (bmu-simulator-dns-policy.json). The exemption allows nothing.
+    for st in policy["Statement"][1:]:
+        assert not any(a.startswith(("route53:", "servicediscovery:")) for a in st["Action"]), st["Sid"]
     assert _local("versions.tf", "name") == "bmu-${var.env_name}"  # every name the policy allows starts bmu-
+
+
+def test_the_simulators_dns_policy_is_only_route53_and_cloud_map():
+    policy = json.loads((DEPLOY / "iam" / "bmu-simulator-dns-policy.json").read_text())
+    for st in policy["Statement"]:
+        assert st["Effect"] == "Allow" and st["Resource"] == "*", st["Sid"]
+        assert all(a.startswith(("route53:", "servicediscovery:")) for a in st["Action"]), st["Sid"]
 
 
 def test_the_rehearsal_gets_the_parts_operations_attaches_and_never_museum_data(capsys):

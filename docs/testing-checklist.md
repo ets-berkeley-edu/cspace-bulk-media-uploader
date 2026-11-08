@@ -759,6 +759,20 @@ another transaction on that item (`TransactionConflict`). Two came during the up
 saves also check the job item, so they can conflict with each other too, and the retry covers them. There was no `transaction cancelled` line. The cause found in section 24 is confirmed, and the retry
 works.
 
+## 26. No Route 53 in the deployer policy (8 November 2026; nothing to do until the next rehearsal or UC Berkeley deploy)
+
+Branch `fix/deployer-policy-no-route53`. The deployer policy no longer has any Route 53 or Cloud Map permission; the
+rehearsal's role gets them inline from `deploy/iam/bmu-simulator-dns-policy.json`, for the simulator only. CI checks
+both (`backend/tests/test_deploy.py`, `deploy/terraform/rehearsal/tests`). What only a real run shows:
+
+- [ ] **1. The parts.** `python3 deploy/iam/split-policy.py`. Expected: three parts, each at most 6,144 characters;
+  `grep -lE '"(route53|servicediscovery):[A-Z]' deploy/iam/out/*.json` lists none (the region Deny's `route53:*`
+  exemption doesn't match).
+- [ ] **2. The next rehearsal** (section 24): `./bmu aws rehearsal-vpc --env personal-rehearsal` shows the role's
+  inline policy `rehearsal-<env>-simulator-dns`, and the deploy, with the simulator, ends with no `AccessDenied`.
+- [ ] **3. The UC Berkeley deploy** (section 23, steps 4 and 5): no `AccessDenied` on `route53:` or
+  `servicediscovery:` (it creates neither: there is no simulator there).
+
 ## Not tests, but still open
 
 - The design doc's "For Richard to address" list (from the October 3 comparison of the doc with the prototype).

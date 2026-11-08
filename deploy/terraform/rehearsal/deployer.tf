@@ -1,6 +1,8 @@
 # The deployer: a role with only the deployer policy, which ./bmu aws assumes for the rehearsal, so that every
 # AccessDenied is the policy's. Only the administrator role that applies this configuration may assume it. Its name
 # doesn't start with bmu-: the policy lets the deployer change bmu-* roles, and it mustn't be able to change its own.
+# The rehearsal always runs the simulated CollectionSpace, whose private DNS name (Cloud Map) needs Route 53. That is
+# the only use of Route 53, so it isn't in the policy Operations attaches: the rehearsal's role alone gets it, inline.
 # Sessions last an hour at most (assumed from an SSO session: role chaining), as rtl-BmuQaDeployer's.
 
 data "aws_iam_session_context" "admin" {
@@ -30,4 +32,10 @@ resource "aws_iam_role_policy_attachment" "part" {
   count      = length(var.policy_parts)
   role       = aws_iam_role.deployer.name
   policy_arn = aws_iam_policy.part[count.index].arn
+}
+
+resource "aws_iam_role_policy" "simulator_dns" {
+  name   = "${local.name}-simulator-dns"
+  role   = aws_iam_role.deployer.id
+  policy = file("${path.module}/../../iam/bmu-simulator-dns-policy.json")
 }
