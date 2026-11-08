@@ -16,7 +16,7 @@ resource "aws_service_discovery_private_dns_namespace" "main" {
   count       = local.simulated
   name        = "${local.name}.internal"
   description = "Names inside the BMU's VPC: the simulated CollectionSpace"
-  vpc         = aws_vpc.main.id
+  vpc         = local.vpc_id
 }
 
 resource "aws_service_discovery_service" "fakecspace" {
@@ -38,7 +38,7 @@ resource "aws_security_group" "fakecspace" {
   count       = local.simulated
   name        = "${local.name}-fakecspace"
   description = "Simulated CollectionSpace. Only the web app and the worker can connect."
-  vpc_id      = aws_vpc.main.id
+  vpc_id      = local.vpc_id
 
   tags = { Name = "${local.name}-fakecspace" }
 }
@@ -133,8 +133,8 @@ resource "aws_ecs_service" "fakecspace" {
   }
 
   network_configuration {
-    assign_public_ip = true
-    subnets          = aws_subnet.public[*].id
+    assign_public_ip = local.assign_public_ip
+    subnets          = local.app_subnet_ids
     security_groups  = [aws_security_group.fakecspace[0].id]
   }
 

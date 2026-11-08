@@ -88,13 +88,69 @@ variable "running" {
 }
 
 variable "vpc_cidr" {
-  description = "The VPC's address range (a /16)."
+  description = "The BMU's own VPC's address range (a /16); not used with vpc_id."
   type        = string
   default     = "10.40.0.0/16"
 
   validation {
     condition     = can(regex("^10\\.\\d{1,3}\\.0\\.0/16$", var.vpc_cidr))
     error_message = "vpc_cidr must be a 10.x.0.0/16 range."
+  }
+}
+
+# An existing VPC (network.tf), such as Operations' shared dev/QA VPC. Its IDs identify the account's network, so they
+# come from the environment's .local.conf, which isn't committed. Empty: the BMU creates its own VPC (vpc_cidr).
+variable "vpc_id" {
+  description = "An existing VPC to deploy into, or empty for the BMU's own VPC."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.vpc_id == "" || can(regex("^vpc-[0-9a-f]+$", var.vpc_id))
+    error_message = "vpc_id must be a VPC's ID, such as vpc-0123456789abcdef0, or empty."
+  }
+}
+
+variable "app_subnet_ids" {
+  description = "With vpc_id: the private subnets the tasks run in, behind the VPC's NAT gateway, in at least two zones."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = var.vpc_id == "" ? length(var.app_subnet_ids) == 0 : length(var.app_subnet_ids) >= 2
+    error_message = "With vpc_id, app_subnet_ids needs at least two subnets, in different zones; without it, none."
+  }
+
+  validation {
+    condition     = alltrue([for s in var.app_subnet_ids : can(regex("^subnet-[0-9a-f]+$", s))])
+    error_message = "Each of app_subnet_ids must be a subnet's ID, such as subnet-0123456789abcdef0."
+  }
+}
+
+variable "lb_subnet_ids" {
+  description = "With vpc_id: the private subnets the internal load balancer is in, in at least two zones. Empty: the app subnets."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = length(var.lb_subnet_ids) == 0 || (var.vpc_id != "" && length(var.lb_subnet_ids) >= 2)
+    error_message = "lb_subnet_ids needs vpc_id, and at least two subnets in different zones (or none, for the app subnets)."
+  }
+
+  validation {
+    condition     = alltrue([for s in var.lb_subnet_ids : can(regex("^subnet-[0-9a-f]+$", s))])
+    error_message = "Each of lb_subnet_ids must be a subnet's ID, such as subnet-0123456789abcdef0."
+  }
+}
+
+variable "create_gateway_endpoints" {
+  description = "With vpc_id: true adds S3 and DynamoDB gateway endpoints to the app subnets' route tables; false where the VPC has them already. (The BMU's own VPC always has them.)"
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = !var.create_gateway_endpoints || var.vpc_id != ""
+    error_message = "create_gateway_endpoints is for an existing VPC (vpc_id); the BMU's own VPC always has them."
   }
 }
 

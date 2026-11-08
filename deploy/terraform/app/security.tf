@@ -9,7 +9,7 @@ resource "aws_security_group" "alb" {
   # AWS can't change a security group's description: a new description means a new group, and this one can't be
   # deleted while the load balancer uses it. So the text stays as first deployed, though only CloudFront connects.
   description = "BMU load balancer. The CloudFront VPC origin connects from inside the VPC."
-  vpc_id      = aws_vpc.main.id
+  vpc_id      = local.vpc_id
 
   tags = { Name = "${local.name}-alb" }
 }
@@ -38,7 +38,7 @@ resource "aws_vpc_security_group_egress_rule" "alb_to_web" {
 resource "aws_security_group" "web" {
   name        = "${local.name}-web"
   description = "BMU web app tasks. Only the load balancer can connect."
-  vpc_id      = aws_vpc.main.id
+  vpc_id      = local.vpc_id
 
   tags = { Name = "${local.name}-web" }
 }
@@ -62,7 +62,7 @@ resource "aws_vpc_security_group_egress_rule" "web_out" {
 resource "aws_security_group" "worker" {
   name        = "${local.name}-worker"
   description = "BMU worker tasks. Nothing can connect to them (no inbound rules)."
-  vpc_id      = aws_vpc.main.id
+  vpc_id      = local.vpc_id
 
   tags = { Name = "${local.name}-worker" }
 }

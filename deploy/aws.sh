@@ -56,6 +56,7 @@ load_env() {
   [ -f "$CONF" ] || die "No settings for environment '$ENV' ($CONF). Environments: $(ls "$ENV_DIR" | sed -n 's/\.conf$//p' | grep -v '\.local$' | tr '\n' ' ')"
   ACCOUNT_ID="" ALLOWED_CIDRS="" SIMULATED_CSPACE="" ENV_LABEL="" CSPACE_TENANTS="" TENANT="" CSPACE_URL=""
   WAF_ENABLED="" ORIGIN_DOMAIN="" ORIGIN_CERTIFICATE_ARN=""
+  VPC_ID="" APP_SUBNET_IDS="" LB_SUBNET_IDS="" CREATE_GATEWAY_ENDPOINTS=""
   # shellcheck disable=SC1090
   . "$CONF"
   local conf_label="$ENV_LABEL"
@@ -77,6 +78,16 @@ load_env() {
   # HTTPS from CloudFront to the load balancer: both settings, or neither (variables.tf, origin_domain).
   [ -z "$ORIGIN_DOMAIN" ] && [ -z "$ORIGIN_CERTIFICATE_ARN" ] || { [ -n "$ORIGIN_DOMAIN" ] && [ -n "$ORIGIN_CERTIFICATE_ARN" ]; } ||
     die "Set ORIGIN_DOMAIN and ORIGIN_CERTIFICATE_ARN together, or neither ($CONF, $LOCAL)."
+  # An existing VPC (deploy/terraform/app/network.tf): its IDs identify the account's network, so only in .local.conf.
+  ! grep -Eq '^[[:space:]]*(VPC_ID|APP_SUBNET_IDS|LB_SUBNET_IDS)=' "$CONF" ||
+    die "Put VPC_ID, APP_SUBNET_IDS and LB_SUBNET_IDS in $LOCAL, which isn't committed, not in $CONF."
+  case "${CREATE_GATEWAY_ENDPOINTS:=false}" in true|false) ;; *) die "CREATE_GATEWAY_ENDPOINTS must be true or false ($LOCAL)." ;; esac
+  if [ -n "$VPC_ID" ]; then
+    [ -n "$APP_SUBNET_IDS" ] || die "VPC_ID needs APP_SUBNET_IDS: the VPC's private subnets for the tasks, in two zones ($LOCAL)."
+  else
+    [ -z "$APP_SUBNET_IDS$LB_SUBNET_IDS" ] && [ "$CREATE_GATEWAY_ENDPOINTS" = false ] ||
+      die "APP_SUBNET_IDS, LB_SUBNET_IDS and CREATE_GATEWAY_ENDPOINTS need VPC_ID ($LOCAL)."
+  fi
   export AWS_PAGER="" AWS_PROFILE AWS_REGION   # Terraform signs in with the same profile
   # Keys in the shell would win over the profile in Terraform (though not in "aws --profile"): never use them here.
   unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
@@ -231,8 +242,10 @@ tf_init() {  # tf_init registry|app: point Terraform at this environment's state
     die "terraform init failed for $1. Run it again without '>/dev/null' to see why: ./bmu aws init"
 }
 
-cidr_list() {  # "a/32,b/24" -> ["a/32","b/24"]
-  printf '["%s"]' "$(printf '%s' "$ALLOWED_CIDRS" | sed 's/ //g; s/,/","/g')"
+cidr_list() {  # cidr_list [VALUE]: "a/32,b/24" (ALLOWED_CIDRS by default) -> ["a/32","b/24"]; "" -> []
+  local v
+  v="$(printf '%s' "${1-$ALLOWED_CIDRS}" | tr ' ' ',' | sed 's/,,*/,/g; s/^,//; s/,$//')"
+  if [ -z "$v" ]; then printf '[]'; else printf '["%s"]' "$(printf '%s' "$v" | sed 's/,/","/g')"; fi
 }
 
 # The app configuration's variables. app_vars IMAGE RUNNING fills the array TF_VARS.
@@ -243,6 +256,8 @@ app_vars() {  # app_vars IMAGE RUNNING [SIMULATOR-IMAGE]
     -var "env_label=$ENV_LABEL" -var "always_run_time=$ALWAYS_RUN_TIME" -var "protect_data=${PROTECT_DATA:-false}"
     -var "simulated_cspace=$SIMULATED_CSPACE" -var "fakecspace_image_uri=${3:-}"
     -var "waf_enabled=$WAF_ENABLED" -var "origin_domain=$ORIGIN_DOMAIN" -var "origin_certificate_arn=$ORIGIN_CERTIFICATE_ARN"
+    -var "vpc_id=$VPC_ID" -var "app_subnet_ids=$(cidr_list "$APP_SUBNET_IDS")" -var "lb_subnet_ids=$(cidr_list "$LB_SUBNET_IDS")"
+    -var "create_gateway_endpoints=$CREATE_GATEWAY_ENDPOINTS"
   )
 }
 
