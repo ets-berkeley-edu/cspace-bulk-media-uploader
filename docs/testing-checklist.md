@@ -743,12 +743,21 @@ that moment (`TransactionConflict`): each `uploaded` saves its row in a transact
 editor's `/check` saves the rows' checks meanwhile. moto never does this, so the tests simulate it
 (`backend/tests/test_upload_races.py`); only an AWS environment shows the real thing.
 
-- [ ] **1. Many files at once.** On an AWS environment (DynamoDB, not the local one), sign in as `admin`, make a job and
+- [x] **1. Many files at once.** On an AWS environment (DynamoDB, not the local one), sign in as `admin`, make a job and
   add 10 to 20 small JPEGs in one go. Expected: every document ends "Uploaded", none "Upload failed".
-- [ ] **2. The log.** `./bmu aws logs web --env <env>`: no `uploaded` answered 409. Lines
+- [x] **2. The log.** `./bmu aws logs web --env <env>`: no `uploaded` answered 409. Lines
   `put_row: job … row …: transaction conflict (…), trying again` may appear (the cancellation reasons, for the
   record); a `transaction cancelled (…)` line means a save gave up: note its reasons here.
-- [ ] **3. Twice more**, with a different number of files, since the race depends on timing.
+- [x] **3. Twice more**, with a different number of files, since the race depends on timing.
+
+Result (8 November 2026, personal-rehearsal, image `c80d900`, after PR 131): four jobs of 25, 13, 22 and 24 files.
+Every document ended "Uploaded", and all 84 `uploaded` requests answered 200, none 409. Three saves met a conflict
+and went through on the retry, each logged as `transaction conflict (None,TransactionConflict), trying again`: the
+reasons follow the transaction's order, so the row's own put was fine (`None`) and the check on the job item met
+another transaction on that item (`TransactionConflict`). Two came during the uploads (row 17 of the first job, row
+11 of the second). The third came during the fourth job's first `/check`, before any upload: the check's own row
+saves also check the job item, so they can conflict with each other too, and the retry covers them. There was no `transaction cancelled` line. The cause found in section 24 is confirmed, and the retry
+works.
 
 ## Not tests, but still open
 
