@@ -6,7 +6,7 @@ mock_provider "aws" {}
 variables {
   account_id = "123456789012"
   region     = "us-west-2"
-  env_name   = "stage2"
+  env_name   = "qa"
 }
 
 run "no_certificate_without_a_domain" {

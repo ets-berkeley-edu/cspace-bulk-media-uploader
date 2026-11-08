@@ -1,7 +1,7 @@
 # The deployer's permissions (for Operations)
 
 The IAM policy the person running `./bmu aws` (Terraform included) needs in a UC Berkeley AWS account, for the
-BMU's stage 2 (`../environments/ucb-stage2.conf`): a QA deployment in an existing VPC (`../README.md`, "Deploying
+BMU's stage 2 (`../environments/ucb-qa.conf`): a QA deployment in an existing VPC (`../README.md`, "Deploying
 into an existing VPC") that uses PAHMA's QA CollectionSpace. Its front door is an internet-facing load balancer on
 the BMU's own name with an ACM certificate and a regional WAF; there is no CloudFront.
 
@@ -16,7 +16,7 @@ every write is limited to resources named `bmu-*` (log groups `/bmu/*` and `aws-
 
 ## The ask
 
-Create an IAM role **`rtl-BmuStage2Deployer`**, with the same trust as `rtl-SerenaStage2Deployer` (assumed from the
+Create an IAM role **`rtl-BmuQaDeployer`**, with the same trust as `rtl-SerenaStage2Deployer` (assumed from the
 deployer's IAM Identity Center session; 1-hour sessions), and attach the policy's parts as customer managed policies.
 It is a new, separate policy, modelled on Serena's stage 2 deployer policy, which doesn't change.
 

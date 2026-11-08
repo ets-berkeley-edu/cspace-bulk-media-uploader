@@ -627,9 +627,9 @@ Branch `feature/ecr-public-sign-in`. The `bmut` job signs in to ECR Public befor
 
 ## 23. Stage 2 in UC Berkeley's account: an existing VPC, the load balancer front door and the deployer policy (8 November 2026)
 
-Branches `feature/vpc-devqa-deployer-policy` and `feature/stage2-alb-front-door`. `ucb-stage2` deploys into Operations'
+Branches `feature/vpc-devqa-deployer-policy` and `feature/stage2-alb-front-door`. `ucb-qa` deploys into Operations'
 dev/QA VPC (deploy/README.md, "Deploying into an existing VPC") with `FRONT_DOOR=alb` ("Stage 2: UC Berkeley's
-account"), as `rtl-BmuStage2Deployer` (deploy/iam/README.md). Steps 1 and 2 in the personal account (15 minutes); the
+account"), as `rtl-BmuQaDeployer` (deploy/iam/README.md). Steps 1 and 2 in the personal account (15 minutes); the
 rest in UC Berkeley's account once Operations has created the role (about an hour, plus waiting for Operations' two
 DNS records). Every command from `cd ~/dev/src/rtl/cspace-bulk-media-uploader`, on a clean checkout of `main`
 (`REQUIRE_CLEAN=true`).
@@ -645,23 +645,23 @@ own writes reach the staging bucket through it, as the upload rule (BQ31) needs.
 - [ ] **2. The parts.** `python3 deploy/iam/split-policy.py`. Expected: three parts, each at most 6,144 characters,
   written to `deploy/iam/out/` (`git status` doesn't list them), and no `cloudfront` in any. These are the files
   Operations attaches.
-- [ ] **3. The settings.** `ucb-stage2.local.conf` as in `ucb-stage2.conf`'s comments: the VPC, its private and
+- [ ] **3. The settings.** `ucb-qa.local.conf` as in `ucb-qa.conf`'s comments: the VPC, its private and
   public subnets, `CREATE_GATEWAY_ENDPOINTS=false`, `DOMAIN_NAME` from Operations and `ALLOWED_CIDRS` (campus and
   VPN). `git status` lists no change.
-- [ ] **4. The certificate.** `aws sso login --profile bmu-stage2-deploy`, then `./bmu aws deploy --env ucb-stage2`.
+- [ ] **4. The certificate.** `aws sso login --profile bmu-qa-deploy`, then `./bmu aws deploy --env ucb-qa`.
   Expected: it confirms the account, creates the image repository and the certificate, prints the validation record
   (`CNAME _….bmu-qa.… _….acm-validations.aws.`) and stops, with nothing built. Send the record to Operations (the
-  Ops ask). Once they've added it, `aws acm list-certificates --profile bmu-stage2-deploy --region us-west-2` shows
+  Ops ask). Once they've added it, `aws acm list-certificates --profile bmu-qa-deploy --region us-west-2` shows
   the certificate `ISSUED` (minutes to an hour).
-- [ ] **5. Plan and deploy.** `./bmu aws deploy --env ucb-stage2` again. Expected, in the plan: no `aws_cloudfront_*`
+- [ ] **5. Plan and deploy.** `./bmu aws deploy --env ucb-qa` again. Expected, in the plan: no `aws_cloudfront_*`
   resources and no `aws_vpc`, `aws_subnet`, `aws_internet_gateway` or `aws_route_table`; the load balancer
   `internal = false` in the public subnets; one listener, HTTPS on 443 (no port 80); one security group rule per
   allowed range, on 443; the web ACL (`scope = "REGIONAL"`), its association and its log group
-  `aws-waf-logs-bmu-stage2`; the bucket policy's `UploadsOnlyFromTheAllowedAddressesOrTheVpc`. After `yes` it
+  `aws-waf-logs-bmu-qa`; the bucket policy's `UploadsOnlyFromTheAllowedAddressesOrTheVpc`. After `yes` it
   finishes and prints the load balancer's DNS name. On `AccessDenied`, note the action and resource here, stop, and
   fix the policy (a pull request, then the changed part to Operations).
 - [ ] **6. The name's record.** Operations points `DOMAIN_NAME` at the load balancer's DNS name (a CNAME). Then
-  `./bmu aws reader-secret pahma --env ucb-stage2` (PAHMA QA's read-only account).
+  `./bmu aws reader-secret pahma --env ucb-qa` (PAHMA QA's read-only account).
 - [ ] **7. Access from campus and the VPN.** From campus, and from home on the VPN: `https://<DOMAIN_NAME>` opens
   the sign-in page; the certificate is valid for the name; `curl -sI https://<DOMAIN_NAME>/api/health` shows
   `strict-transport-security`, `content-security-policy` and `x-frame-options: DENY`. `http://<DOMAIN_NAME>` doesn't
@@ -671,18 +671,18 @@ own writes reach the staging bucket through it, as the upload rule (BQ31) needs.
 - [ ] **9. The app, as Serena's #197 taught.** Sign in with a PAHMA QA staff account, add a file to a job (the
   browser's upload to S3 works from campus), check its thumbnail appears (the tasks' own write, through the
   endpoint), submit and run it (real records on PAHMA QA); sign in as an intern and open a draft (the languages list
-  loads). Watch `./bmu aws logs web --env ucb-stage2` and `worker` for `AccessDenied`.
+  loads). Watch `./bmu aws logs web --env ucb-qa` and `worker` for `AccessDenied`.
 - [ ] **10. Uploads refused from off campus.** With a job open from campus, note a presigned upload (the browser's
   network panel, the POST to the staging bucket); the same upload from off campus (or, simpler: the BMU used from off
   campus can't load at all, step 8) is refused by S3 with `AccessDenied`. Optional: it shows that the bucket rule,
   not only the load balancer, keeps uploads to the allowed ranges.
-- [ ] **11. The WAF's logs.** In CloudWatch Logs, `aws-waf-logs-bmu-stage2` has entries for steps 7 to 9; an entry's
+- [ ] **11. The WAF's logs.** In CloudWatch Logs, `aws-waf-logs-bmu-qa` has entries for steps 7 to 9; an entry's
   `httpRequest` shows the path, the query string `REDACTED` and no `cookie` value. In the WAF console, the web ACL's
   sampled requests show the managed rule sets' matches as `COUNT`. After a week of logs, decide on
   `WAF_MANAGED_RULES=block` (BQ28).
 - [ ] **12. Nothing else in the VPC.** In the VPC console, filtered by the tag `project=bmu`: only the BMU's security
   groups. Its route tables are unchanged.
-- [ ] **13. Destroy** (only if that's the plan before acceptance). `./bmu aws destroy --env ucb-stage2`: it finishes,
+- [ ] **13. Destroy** (only if that's the plan before acceptance). `./bmu aws destroy --env ucb-qa`: it finishes,
   and the VPC console no longer lists anything tagged `project=bmu`. A later deploy reuses the validation record but
   has a new load balancer: Operations repoints the name (BQ32).
 

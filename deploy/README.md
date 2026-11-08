@@ -5,7 +5,7 @@ prototype: the image is built from this repository and runs on ECS Fargate. Demo
 
 - **One environment per account.** Each environment has a settings file in `deploy/environments/`.
   - `personal-dev.conf` is Richard's personal account and the default.
-  - `ucb-stage2.conf` is the BMU's stage 2 in UC Berkeley's account ("Stage 2: UC Berkeley's account" below).
+  - `ucb-qa.conf` is the BMU's QA instance (stage 2) in UC Berkeley's account ("Stage 2: UC Berkeley's account" below).
   - `personal-rehearsal.conf` rehearses the UC Berkeley deployment in the personal account ("Rehearsing the deploy
     in your own account" below).
 - **Two front doors** (`FRONT_DOOR`). `cloudfront`, the default (personal-dev): CloudFront at a `*.cloudfront.net`
@@ -309,21 +309,21 @@ if a month heads past it. Pause or destroy the environment between test sessions
 
 ## Stage 2: UC Berkeley's account
 
-`ucb-stage2.conf`: the cspace account, us-west-2, in Operations' dev/QA VPC (next section), with PAHMA's QA
+`ucb-qa.conf`: the cspace account, us-west-2, in Operations' dev/QA VPC (next section), with PAHMA's QA
 CollectionSpace, `FRONT_DOOR=alb`, the WAF, and `REQUIRE_CLEAN=true`. Nothing in the Terraform code names an account,
 and no state is moved between accounts: everything is created fresh there.
 
-1. **Sign-in.** An IAM Identity Center profile `bmu-stage2-deploy` (`aws configure sso`) for the role
-   `rtl-BmuStage2Deployer`, whose policy is `deploy/iam/bmu-deployer-policy.json` (`deploy/iam/README.md`). Its sessions
+1. **Sign-in.** An IAM Identity Center profile `bmu-qa-deploy` (`aws configure sso`) for the role
+   `rtl-BmuQaDeployer`, whose policy is `deploy/iam/bmu-deployer-policy.json` (`deploy/iam/README.md`). Its sessions
    last an hour; a deploy that outlasts one fails with an expired token and continues when run again.
-2. **Settings.** `ucb-stage2.local.conf` (not committed) holds the account, the VPC and its subnets, the name from
+2. **Settings.** `ucb-qa.local.conf` (not committed) holds the account, the VPC and its subnets, the name from
    Operations (`DOMAIN_NAME`, `bmu-qa.<domain>`) and `ALLOWED_CIDRS` (campus and VPN): the list is in
-   `ucb-stage2.conf`'s comments.
-3. **First deploy, from a clean checkout of `main`:** `./bmu aws deploy --env ucb-stage2`. It creates the image
+   `ucb-qa.conf`'s comments.
+3. **First deploy, from a clean checkout of `main`:** `./bmu aws deploy --env ucb-qa`. It creates the image
    repository and requests the certificate, prints the certificate's validation record (a CNAME) and stops: Operations
    adds the record once. When the certificate is issued, run the deploy again: it builds the image, applies the app,
    and prints the load balancer's DNS name, which Operations points `DOMAIN_NAME` at.
-4. **The read-only account.** `./bmu aws reader-secret pahma --env ucb-stage2` (PAHMA QA's `BMU_Reader` account).
+4. **The read-only account.** `./bmu aws reader-secret pahma --env ucb-qa` (PAHMA QA's `BMU_Reader` account).
 5. **After a destroy**, the certificate is requested again under the same name and uses the same validation record,
    but the new load balancer has a new DNS name: Operations repoints the name's record (BQ32).
 
@@ -385,7 +385,7 @@ by hand, as Operations will.
 2. **The deploy, as the deployer.** `./bmu aws deploy --env personal-rehearsal`. Everything `./bmu aws` does for this
    environment, but `rehearsal-vpc`, uses the deployer's profile. The first deploy stops at the certificate's validation
    record: add it in Route 53, wait for ISSUED, deploy again, then add the name's record (a CNAME to the load balancer's
-   DNS name it prints). Its sessions last an hour (role chaining), like `rtl-BmuStage2Deployer`'s; a deploy that outlasts one fails with an expired token and continues when run again.
+   DNS name it prints). Its sessions last an hour (role chaining), like `rtl-BmuQaDeployer`'s; a deploy that outlasts one fails with an expired token and continues when run again.
 3. **Each `AccessDenied`** is the policy's: fix `deploy/iam/bmu-deployer-policy.json`, run
    `./bmu aws rehearsal-vpc --env personal-rehearsal` again (it updates the role's policies), and continue the deploy.
 4. **Afterwards**, `./bmu aws destroy --env personal-rehearsal` (as the deployer), then
