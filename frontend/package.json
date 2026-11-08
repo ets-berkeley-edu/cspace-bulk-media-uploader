@@ -41,5 +41,16 @@
     "vitest": "^5.0.5",
     "vue-eslint-parser": "^10.4.1",
     "vue-tsc": "^3.3.13"
+  },
+  "overrides": {
+    "@typescript-eslint/typescript-estree": {
+      "minimatch": "11.0.5"
+    },
+    "editorconfig": {
+      "minimatch": "11.0.5"
+    },
+    "js-beautify": {
+      "glob": "14.0.4"
+    }
   }
 }
