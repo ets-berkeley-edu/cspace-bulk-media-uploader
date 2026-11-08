@@ -53,16 +53,9 @@
         "logs:ListLogDeliveries",
         "logs:ListTagsForResource",
         "logs:ListTagsLogGroup",
-        "route53:GetChange",
-        "route53:GetHostedZone",
-        "route53:ListHostedZonesByName",
-        "route53:ListHostedZonesByVPC",
-        "route53:ListResourceRecordSets",
         "s3:ListAllMyBuckets",
         "secretsmanager:GetRandomPassword",
         "secretsmanager:ListSecrets",
-        "servicediscovery:Get*",
-        "servicediscovery:List*",
         "sts:GetCallerIdentity",
         "wafv2:CheckCapacity",
         "wafv2:Describe*",
@@ -664,26 +657,6 @@
           ]
         }
       }
-    },
-    {
-      "Sid": "SimulatorOnlyServiceDiscovery",
-      "Effect": "Allow",
-      "Action": [
-        "route53:AssociateVPCWithHostedZone",
-        "route53:ChangeResourceRecordSets",
-        "route53:ChangeTagsForResource",
-        "route53:CreateHostedZone",
-        "route53:DeleteHostedZone",
-        "route53:DisassociateVPCFromHostedZone",
-        "servicediscovery:CreatePrivateDnsNamespace",
-        "servicediscovery:CreateService",
-        "servicediscovery:DeleteNamespace",
-        "servicediscovery:DeleteService",
-        "servicediscovery:TagResource",
-        "servicediscovery:UntagResource",
-        "servicediscovery:UpdateService"
-      ],
-      "Resource": "*"
     },
     {
       "Sid": "CostVisibility",

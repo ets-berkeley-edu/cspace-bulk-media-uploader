@@ -11,8 +11,9 @@ every write is limited to resources named `bmu-*` (log groups `/bmu/*` and `aws-
 
 | File | What |
 | --- | --- |
-| `bmu-deployer-policy.json` | The whole policy: the only copy, reviewed with the Terraform it permits. About 13,000 characters without whitespace |
+| `bmu-deployer-policy.json` | The whole policy: the only copy, reviewed with the Terraform it permits. About 12,300 characters without whitespace |
 | `split-policy.py` | Splits it into the customer managed policies to attach (below) |
+| `bmu-simulator-dns-policy.json` | **Not for Operations.** Route 53 and Cloud Map for the simulated CollectionSpace's private DNS name, given only to the rehearsal's role (below) |
 
 ## The ask
 
@@ -63,9 +64,6 @@ can create security groups and their rules, and the S3 and DynamoDB gateway endp
   created in any VPC (the VPC is Operations', so it can't carry the BMU's tag).
 - ECS task definitions and KMS key creation have no name-based resource to scope to (keys are limited by tag
   afterwards; their aliases by name).
-- The simulated CollectionSpace's private DNS name (Cloud Map, `SimulatorOnlyServiceDiscovery`) is created with the
-  deployer's own Route 53 permissions, on hosted zones with generated IDs, so `Resource: "*"`; Route 53 refuses to
-  delete a hosted zone that still has records. Without the simulator these permissions aren't used.
 - Read-only `Describe`, `Get` and `List` calls are allowed account-wide: Terraform reads many attributes of each
   resource, the exact list changes with provider versions, and they return only metadata.
 - `iam:PassRole` is limited to `bmu-*` roles and to ECS tasks; the only managed policy that can be attached is
@@ -76,8 +74,13 @@ can create security groups and their rules, and the S3 and DynamoDB gateway endp
 
 ## Not covered
 
-- **DNS.** There is no Route 53 in this policy beyond the simulator's private zone: Operations adds the certificate's
-  validation record once, and the BMU's name pointing at the load balancer, repointed after each destroy (BQ32).
+- **DNS.** There is no Route 53 or Cloud Map in this policy. Route 53 appears only in the region Deny's exemptions
+  (it is a global service), which allow nothing on their own. Operations adds the certificate's validation record
+  once, and the BMU's name pointing at the load balancer, repointed after each destroy (BQ32).
+- **The simulated CollectionSpace.** Its private DNS name (Cloud Map) needs Route 53 permissions that can't be limited
+  to its own zone (hosted zones have generated IDs), so they aren't in this policy: only the rehearsal's role gets
+  them (`bmu-simulator-dns-policy.json`). The UC Berkeley environment uses PAHMA's QA CollectionSpace, never the
+  simulator; a deploy with `SIMULATED_CSPACE=true` as this role fails with `AccessDenied` on Route 53.
 - **`./bmu aws ci-role`** (CI's ECR Public role and the GitHub OIDC provider) isn't for this role.
 - **A deploy pipeline** (GitHub OIDC and CodeBuild), as for Serena: later.
 - The role can't list its own policies (its IAM reads are limited to `bmu-*` roles). That's expected.
@@ -95,7 +98,8 @@ can create security groups and their rules, and the S3 and DynamoDB gateway endp
 
 ## Rehearsed in a personal account first
 
-`../terraform/rehearsal` makes a role with only this policy, attached as the same parts, and `./bmu aws` deploys the
+`../terraform/rehearsal` makes a role with only this policy, attached as the same parts (plus, inline,
+`bmu-simulator-dns-policy.json` for the simulator), and `./bmu aws` deploys the
 BMU as that role into a VPC like Operations' in a personal account, with the simulated CollectionSpace
 (`../README.md`, Rehearsing the deploy in your own account; `docs/testing-checklist.md`, section 24). What it can't
 show: guardrails of UC Berkeley's account (service control policies, a permissions boundary), and anything already in
