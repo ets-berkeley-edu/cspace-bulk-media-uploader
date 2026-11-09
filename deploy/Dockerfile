@@ -7,7 +7,7 @@
 # proposes the new digest. ECR Public mirrors the official images unchanged, so the digests match Docker Hub's.
 
 # ---- the Vue app: a production build, so the Demo tools pane is left out of the bundle ----------------------------
-FROM public.ecr.aws/docker/library/node:22.23.4-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914 AS frontend
+FROM public.ecr.aws/docker/library/node:22.23.4-alpine@sha256:0e1754758c2df4cfa3e68d59e2e1b7374bb7fd9ea6328eaaacf15cc934af8202 AS frontend
 # eMudhra CA compromise (Oct 2026): Node 22.23.4 refuses the compromised CAs itself, but Alpine's system bundle
 # (curl, wget, OpenSSL) needs ca-certificates 20261020-r0; the build fails if the bundle still holds the emSign root.
 RUN apk add --no-cache --upgrade ca-certificates-bundle \
