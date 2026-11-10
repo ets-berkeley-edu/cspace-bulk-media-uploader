@@ -638,13 +638,13 @@ Already checked (8 November 2026, with Serena's stage 2 profile): vpc-devqa's S3
 app subnets' route table is among its route tables, and its policy is AWS's default (allow everything). So the tasks'
 own writes reach the staging bucket through it, as the upload rule (BQ31) needs.
 
-- [ ] **1. The personal environment keeps CloudFront.** `aws sso login --profile bmu-personal`, then
+- [x] **1. The personal environment keeps CloudFront.** `aws sso login --profile bmu-personal`, then
   `./bmu aws plan`. Expected: the CloudFront distribution, function and VPC origin and the prefix list rule are
   listed as "has moved to …[0]", and nothing is destroyed or replaced (the load balancer's security group keeps its
-  description). Anything to be destroyed or replaced: stop and note it.
-- [ ] **2. The parts.** `python3 deploy/iam/split-policy.py`. Expected: three parts, each at most 6,144 characters,
+  description). Anything to be destroyed or replaced: stop and note it. (Passed, before November 9, 2026.)
+- [x] **2. The parts.** `python3 deploy/iam/split-policy.py`. Expected: three parts, each at most 6,144 characters,
   written to `deploy/iam/out/` (`git status` doesn't list them), and no `cloudfront` in any. These are the files
-  Operations attaches.
+  Operations attaches. (Passed, before November 9, 2026.)
 - [x] **3. The settings.** `ucb-qa.local.conf` as in `ucb-qa.conf`'s comments: the VPC, its private and
   public subnets, `CREATE_GATEWAY_ENDPOINTS=false`, `DOMAIN_NAME` from Operations and `ALLOWED_CIDRS` (campus and
   VPN). `git status` lists no change. (9 November 2026: made from Serena's `ucb-stage2.local.conf`, the same account,
