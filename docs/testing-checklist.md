@@ -645,46 +645,77 @@ own writes reach the staging bucket through it, as the upload rule (BQ31) needs.
 - [ ] **2. The parts.** `python3 deploy/iam/split-policy.py`. Expected: three parts, each at most 6,144 characters,
   written to `deploy/iam/out/` (`git status` doesn't list them), and no `cloudfront` in any. These are the files
   Operations attaches.
-- [ ] **3. The settings.** `ucb-qa.local.conf` as in `ucb-qa.conf`'s comments: the VPC, its private and
+- [x] **3. The settings.** `ucb-qa.local.conf` as in `ucb-qa.conf`'s comments: the VPC, its private and
   public subnets, `CREATE_GATEWAY_ENDPOINTS=false`, `DOMAIN_NAME` from Operations and `ALLOWED_CIDRS` (campus and
-  VPN). `git status` lists no change.
-- [ ] **4. The certificate.** `aws sso login --profile bmu-qa-deploy`, then `./bmu aws deploy --env ucb-qa`.
-  Expected: it confirms the account, creates the image repository and the certificate, prints the validation record
-  (`CNAME _….bmu-qa.… _….acm-validations.aws.`) and stops, with nothing built. Send the record to Operations (the
-  Ops ask). Once they've added it, `aws acm list-certificates --profile bmu-qa-deploy --region us-west-2` shows
-  the certificate `ISSUED` (minutes to an hour).
-- [ ] **5. Plan and deploy.** `./bmu aws deploy --env ucb-qa` again. Expected, in the plan: no `aws_cloudfront_*`
+  VPN). `git status` lists no change. (9 November 2026: made from Serena's `ucb-stage2.local.conf`, the same account,
+  VPC and subnets, with `ALLOWED_CIDRS` from its `ADMIN_CIDRS`, four ranges. With `ACCOUNT_ID` already set there, step
+  4 doesn't ask to confirm the account: it checks the signed-in account against it.)
+- [x] **4. The certificate.** Sign in to IAM Identity Center through the session that `bmu-qa-deploy`'s
+  `source_profile` uses (`aws sso login --sso-session <name>`; `aws sso login --profile bmu-qa-deploy` fails, because
+  that profile takes the role from another profile rather than signing in itself), and check the role:
+  `aws sts get-caller-identity --profile bmu-qa-deploy` ends in `assumed-role/rtl-BmuQaDeployer/…`. Then
+  `./bmu aws deploy --env ucb-qa`. Expected: it creates the image repository and the certificate, prints the
+  validation record (`CNAME _….bmu-qa.… _….acm-validations.aws.`) and stops, with nothing built. Send the record to
+  Operations (the Ops ask). Once they've added it, `aws acm list-certificates --profile bmu-qa-deploy --region
+  us-west-2` shows the certificate `ISSUED` (minutes to an hour). (9 November 2026: created the state bucket, the
+  repository, its lifecycle policy and the certificate, 3 resources, no `AccessDenied`; printed the record and
+  stopped. `ISSUED` within minutes of Operations adding it. The profile needs `duration_seconds` between 900 and
+  3600: AWS refuses a shorter session.)
+- [x] **5. Plan and deploy.** `./bmu aws deploy --env ucb-qa` again. Expected, in the plan: no `aws_cloudfront_*`
   resources and no `aws_vpc`, `aws_subnet`, `aws_internet_gateway` or `aws_route_table`; the load balancer
   `internal = false` in the public subnets; one listener, HTTPS on 443 (no port 80); one security group rule per
   allowed range, on 443; the web ACL (`scope = "REGIONAL"`), its association and its log group
   `aws-waf-logs-bmu-qa`; the bucket policy's `UploadsOnlyFromTheAllowedAddressesOrTheVpc`. After `yes` it
   finishes and prints the load balancer's DNS name. On `AccessDenied`, note the action and resource here, stop, and
-  fix the policy (a pull request, then the changed part to Operations).
-- [ ] **6. The name's record.** Operations points `DOMAIN_NAME` at the load balancer's DNS name (a CNAME). Then
-  `./bmu aws reader-secret pahma --env ucb-qa` (PAHMA QA's read-only account).
-- [ ] **7. Access from campus and the VPN.** From campus, and from home on the VPN: `https://<DOMAIN_NAME>` opens
-  the sign-in page; the certificate is valid for the name; `curl -sI https://<DOMAIN_NAME>/api/health` shows
-  `strict-transport-security`, `content-security-policy` and `x-frame-options: DENY`. `http://<DOMAIN_NAME>` doesn't
-  connect (no port 80).
-- [ ] **8. Access from off campus.** Off the VPN (a phone's hotspot): `https://<DOMAIN_NAME>` times out (the
-  security group drops it; no 403 page as with CloudFront).
-- [ ] **9. The app, as Serena's #197 taught.** Sign in with a PAHMA QA staff account, add a file to a job (the
+  fix the policy (a pull request, then the changed part to Operations). (9 November 2026: 58 to add, 0 to change,
+  0 to destroy; everything above as expected, the VPC and subnets only read; the listener uses
+  `ELBSecurityPolicy-TLS13-1-2-2021-06`. "Apply complete! Resources: 58 added", no `AccessDenied`, so the deployer
+  policy needed no change. The deploy's own health check answered `000`, as expected before the name's record.)
+- [x] **6. The name's record.** Operations points `DOMAIN_NAME` at the load balancer's DNS name (a CNAME). Then
+  `./bmu aws reader-secret pahma --env ucb-qa` (PAHMA QA's read-only account). (9 November 2026: the record was in
+  within the hour; the reader secret set.) Before the record exists, the app can be checked through the load
+  balancer under the real name, with a valid certificate:
+  `curl --connect-to <DOMAIN_NAME>:443:<load balancer's DNS name>:443 https://<DOMAIN_NAME>/api/health`.
+- [x] **7. Access from campus and the VPN.** From campus, and from home on the VPN: `https://<DOMAIN_NAME>` opens
+  the sign-in page; the certificate is valid for the name; `curl -sS -D - -o /dev/null https://<DOMAIN_NAME>/api/health`
+  answers `200` and shows `strict-transport-security`, `content-security-policy` and `x-frame-options: DENY`
+  (`curl -sI` sends `HEAD`, which `/api/health` answers with `405`, though with the same headers).
+  `http://<DOMAIN_NAME>` doesn't connect (no port 80). (9 November 2026, on the VPN: all as expected; port 80 timed
+  out after 10 seconds.)
+- [x] **8. Access from off campus.** Off the VPN (a phone's hotspot): `https://<DOMAIN_NAME>` times out (the
+  security group drops it; no 403 page as with CloudFront). (9 November 2026: timed out.)
+- [x] **9. The app, as Serena's #197 taught.** Sign in with a PAHMA QA staff account, add a file to a job (the
   browser's upload to S3 works from campus), check its thumbnail appears (the tasks' own write, through the
   endpoint), submit and run it (real records on PAHMA QA); sign in as an intern and open a draft (the languages list
-  loads). Watch `./bmu aws logs web --env ucb-qa` and `worker` for `AccessDenied`.
+  loads). Watch `./bmu aws logs web --env ucb-qa` and `worker` for `AccessDenied`. To hide the requests every open
+  page repeats: `./bmu aws logs web --env ucb-qa 2>&1 | grep --line-buffered -vE '"GET /api/(jobs|schedule|health)[^"]*" 200 '`.
+  (9 November 2026: two jobs of 5 and 4 documents, JPEG and TIFF, uploaded, thumbnails stored, submitted and run:
+  9 Media records with their files, their Relations and one new Object, every CollectionSpace call `200` or `201`.
+  An intern made a 7-document draft, its checks and the languages list worked through the read-only account, and
+  sent it for review. No `AccessDenied` or traceback in either log. A thumbnail asked for in the second after a
+  document's upload or run answers `404` until it exists; the page shows it at the next refresh.)
 - [ ] **10. Uploads refused from off campus.** With a job open from campus, note a presigned upload (the browser's
   network panel, the POST to the staging bucket); the same upload from off campus (or, simpler: the BMU used from off
   campus can't load at all, step 8) is refused by S3 with `AccessDenied`. Optional: it shows that the bucket rule,
-  not only the load balancer, keeps uploads to the allowed ranges.
-- [ ] **11. The WAF's logs.** In CloudWatch Logs, `aws-waf-logs-bmu-qa` has entries for steps 7 to 9; an entry's
+  not only the load balancer, keeps uploads to the allowed ranges. (9 November 2026: not done; step 8 passed.)
+- [x] **11. The WAF's logs.** In CloudWatch Logs, `aws-waf-logs-bmu-qa` has entries for steps 7 to 9; an entry's
   `httpRequest` shows the path, the query string `REDACTED` and no `cookie` value. In the WAF console, the web ACL's
   sampled requests show the managed rule sets' matches as `COUNT`. After a week of logs, decide on
-  `WAF_MANAGED_RULES=block` (BQ28).
-- [ ] **12. Nothing else in the VPC.** In the VPC console, filtered by the tag `project=bmu`: only the BMU's security
-  groups. Its route tables are unchanged.
+  `WAF_MANAGED_RULES=block` (BQ28). (9 November 2026, read with `aws logs tail aws-waf-logs-bmu-qa --since 4h`:
+  2,801 entries, all `ALLOW`; every query string and every cookie header `REDACTED`. The only managed rule matched
+  was the common rule set's `SizeRestrictions_BODY`, 8 times, as `COUNT`: thumbnails and saves over 8 KB, which
+  `waf.tf` keeps at count whatever `WAF_MANAGED_RULES` says.)
+- [x] **12. Nothing else in the VPC.** In the VPC console, filtered by the tag `project=bmu`: only the BMU's security
+  groups. Its route tables are unchanged. (9 November 2026, with `aws ec2 describe-security-groups`,
+  `describe-vpc-endpoints` and `describe-route-tables` filtered by the tag: the security groups `bmu-qa-alb`,
+  `bmu-qa-web` and `bmu-qa-worker`, and no endpoints or route tables.)
 - [ ] **13. Destroy** (only if that's the plan before acceptance). `./bmu aws destroy --env ucb-qa`: it finishes,
   and the VPC console no longer lists anything tagged `project=bmu`. A later deploy reuses the validation record but
-  has a new load balancer: Operations repoints the name (BQ32).
+  has a new load balancer: Operations repoints the name (BQ32). (9 November 2026: not done; `ucb-qa` stays up for
+  acceptance.)
+
+Found on the way (9 November 2026): status badges need a description on hover and focus (#141), and the review and
+checks badges in Drafts and the Job queue are too long for the row.
 
 ## 24. The deployer rehearsal (8 November 2026; about 2 hours, in the personal account)
 
