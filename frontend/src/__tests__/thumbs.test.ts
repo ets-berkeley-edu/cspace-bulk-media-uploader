@@ -3,6 +3,7 @@ import {mount} from '@vue/test-utils'
 import {fileKind} from '../lib/files'
 import type {Row} from '../types'
 import DocumentThumbnail from '@/components/util/DocumentThumbnail.vue'
+import {useContextStore} from '@/stores/context'
 
 const row = (p: Partial<Row> = {}): Row => ({n: 3, v: 2, file: '15-1234_a.jpg', size: 1, contentType: 'image/jpeg', handling: 'link', obj: '15-1234',
   objParsed: '15-1234', img: '15-1234_a', parseOk: true, idnum: '15-1234', date: '', restricted: false, type: [], creator: '', contributor: '',
@@ -31,6 +32,16 @@ describe('thumbnails (design: User interface, Thumbnails)', () => {
     const w = mount(DocumentThumbnail, {props: {jobId: 'j', row: row()}, attachTo: document.body})
     await w.find('button').trigger('click')
     expect(document.body.querySelector('.lightbox img')?.getAttribute('src')).toBe('/api/jobs/j/rows/3/thumbnail?v=2&size=large')
+    w.unmount()
+  })
+
+  it('puts the session\'s key in the address, so the browser keeps a thumbnail only for that session', async () => {
+    const context = useContextStore()
+    context.setCurrentUser({user: 'admin', role: 'staff', perms: {}, tenant: {}, thumbKey: 'abc123'} as never)
+    const w = mount(DocumentThumbnail, {props: {jobId: 'j', row: row()}, attachTo: document.body})
+    expect(w.find('img').attributes('src')).toBe('/api/jobs/j/rows/3/thumbnail?v=2&k=abc123')
+    await w.find('button').trigger('click')
+    expect(document.body.querySelector('.lightbox img')?.getAttribute('src')).toBe('/api/jobs/j/rows/3/thumbnail?v=2&size=large&k=abc123')
     w.unmount()
   })
 })

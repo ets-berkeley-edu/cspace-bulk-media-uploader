@@ -804,6 +804,26 @@ both (`backend/tests/test_deploy.py`, `deploy/terraform/rehearsal/tests`). What 
 - [ ] **3. The UC Berkeley deploy** (section 23, steps 4 and 5): no `AccessDenied` on `route53:` or
   `servicediscovery:` (it creates neither: there is no simulator there).
 
+## 27. Thumbnails kept per session (9 November 2026; 15 minutes, on your local stack, then on ucb-qa)
+
+Branch `fix/thumbnail-cache-per-session`. The browser keeps a thumbnail only under the signed-in session's key (`k` in
+the thumbnail's address), and signing out clears the browser's cache of the BMU. CI checks the server's answers
+(`test_the_browser_keeps_a_thumbnail_only_under_its_sessions_key`) and the address (`thumbs.test.ts`); only a real
+browser shows what it does with them. Restart first: `./bmu down sim`, then `./bmu up sim`, and open
+http://localhost:5173 in Chrome, with the developer tools open on the Network panel.
+
+- [ ] **1. The address and the answer.** Sign in as `admin`, make a job with two JPEG files and run it (Run now), then
+  open Finished jobs and expand it. Expected: each thumbnail's request is `…/thumbnail?v=…&k=<16 characters>`, and its
+  answer has `cache-control: private, max-age=300`. Collapse and expand the job again: the requests show
+  "(memory cache)" or "(disk cache)".
+- [ ] **2. Sign-out.** Choose Sign out. Expected: the `POST /api/logout` answer has `clear-site-data: "cache"`.
+- [ ] **3. The next user.** Within 5 minutes, sign in as `intern` (the job is staff only) and expand the same job in
+  Finished jobs. Expected: grey tiles, not the images; the requests carry a different `k` and answer `404`
+  (`./bmu logs sim web` shows them).
+- [ ] **4. Back as staff.** Sign out, sign in as `admin` again: the thumbnails show, with a new `k`.
+- [ ] **5. On ucb-qa,** after `./bmu aws deploy --env ucb-qa`: repeat steps 1 to 3 with a PAHMA QA staff account and an
+  intern's, as on November 9 (section 23). Expected: the intern sees no thumbnails of the staff-only jobs.
+
 ## Not tests, but still open
 
 - The design doc's "For Richard to address" list (from the October 3 comparison of the doc with the prototype).

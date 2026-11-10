@@ -52,6 +52,11 @@ export interface Me {
   role: 'staff' | 'intern';
   /** The largest file the BMU accepts, in bytes; the page skips larger files before adding them (design: Browser uploads). */
   maxFileBytes?: number;
+  /**
+   * The session's key in thumbnail addresses (design: Delivery through the web app): the browser keeps a thumbnail only
+   * under it, so the next person signed in to this browser never sees the previous one's cached images.
+   */
+  thumbKey?: string;
 }
 
 /** A tenant's run times (design: Job scheduling). days: ISO weekdays (1 = Mon … 7 = Sun); times "HH:MM", Pacific. */

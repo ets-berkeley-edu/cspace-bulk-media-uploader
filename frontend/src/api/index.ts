@@ -18,8 +18,9 @@ async function putThumbnail(id: string, n: number, jpeg: Blob): Promise<{ stored
   return response.data
 }
 
-export const thumbnailUrl = (id: string, n: number, v = 0, large = false) =>
-  `/api/jobs/${id}/rows/${n}/thumbnail?v=${v}${large ? '&size=large' : ''}`
+/** A thumbnail's address, with the session's key (Me.thumbKey): without it the browser doesn't keep the image. */
+export const thumbnailUrl = (id: string, n: number, v = 0, large = false, key = '') =>
+  `/api/jobs/${id}/rows/${n}/thumbnail?v=${v}${large ? '&size=large' : ''}${key ? `&k=${encodeURIComponent(key)}` : ''}`
 
 export const api = {
   putThumbnail,
