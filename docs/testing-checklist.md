@@ -812,15 +812,16 @@ the thumbnail's address), and signing out clears the browser's cache of the BMU.
 browser shows what it does with them. Restart first: `./bmu down sim`, then `./bmu up sim`, and open
 http://localhost:5173 in Chrome, with the developer tools open on the Network panel.
 
-- [ ] **1. The address and the answer.** Sign in as `admin`, make a job with two JPEG files and run it (Run now), then
+- [x] **1. The address and the answer.** Sign in as `admin`, make a job with two JPEG files and run it (Run now), then
   open Finished jobs and expand it. Expected: each thumbnail's request is `…/thumbnail?v=…&k=<16 characters>`, and its
   answer has `cache-control: private, max-age=300`. Collapse and expand the job again: the requests show
   "(memory cache)" or "(disk cache)".
-- [ ] **2. Sign-out.** Choose Sign out. Expected: the `POST /api/logout` answer has `clear-site-data: "cache"`.
-- [ ] **3. The next user.** Within 5 minutes, sign in as `intern` (the job is staff only) and expand the same job in
+- [x] **2. Sign-out.** Choose Sign out. Expected: the `POST /api/logout` answer has `clear-site-data: "cache"`.
+- [x] **3. The next user.** Within 5 minutes, sign in as `intern` (the job is staff only) and expand the same job in
   Finished jobs. Expected: grey tiles, not the images; the requests carry a different `k` and answer `404`
   (`./bmu logs sim web` shows them).
-- [ ] **4. Back as staff.** Sign out, sign in as `admin` again: the thumbnails show, with a new `k`.
+- [x] **4. Back as staff.** Sign out, sign in as `admin` again: the thumbnails show, with a new `k`.
+  (Steps 1 to 4: passed on the local stack, 9 November 2026.)
 - [ ] **5. On ucb-qa,** after `./bmu aws deploy --env ucb-qa`: repeat steps 1 to 3 with a PAHMA QA staff account and an
   intern's, as on November 9 (section 23). Expected: the intern sees no thumbnails of the staff-only jobs.
 
