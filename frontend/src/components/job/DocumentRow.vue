@@ -2,7 +2,12 @@
   <tbody :id="`document-${row.n}`" class="document">
     <tr :aria-busy="deleting" class="document-row" :class="{'row-deleting': deleting, 'row-excluded': !row.include}">
       <td class="thumb-col">
-        <DocumentThumbnail :job-id="jobId" :preview="preview" :row="row" />
+        <DocumentThumbnail
+          :intern-open="internOpen"
+          :job-id="jobId"
+          :preview="preview"
+          :row="row"
+        />
       </td>
       <td class="keep px-1">
         <input
@@ -560,6 +565,10 @@ const props = defineProps({
     type: Boolean
   },
   groupOn: {
+    required: false,
+    type: Boolean
+  },
+  internOpen: {
     required: false,
     type: Boolean
   },
