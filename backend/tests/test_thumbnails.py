@@ -39,7 +39,8 @@ def test_browser_thumbnails_are_stored_rewritten_and_served(api, login, add_uplo
     assert api.get(f"/api/jobs/{job}/rows/{n}/thumbnail").status_code == 404
     r = api.post(f"/api/jobs/{job}/rows/{n}/thumbnail", content=jpeg_with_exif((300, 200)), headers={"Content-Type": "image/jpeg"})
     assert r.json() == {"stored": True}
-    got = api.get(f"/api/jobs/{job}/rows/{n}/thumbnail")
+    key = api.get("/api/me").json()["thumbKey"]
+    got = api.get(f"/api/jobs/{job}/rows/{n}/thumbnail?k={key}")
     assert got.status_code == 200 and got.headers["cache-control"] == "private, max-age=300"
     with Image.open(io.BytesIO(got.content)) as im:
         assert not im.getexif()  # rewritten on the server: nothing but pixels
@@ -106,3 +107,25 @@ def test_deleting_a_document_deletes_its_thumbnail(api, login, add_uploaded, ser
     assert services.storage.head_object(thumb) and services.storage.head_object(staged)
     assert api.delete(f"/api/jobs/{job}/rows/{row['n']}").status_code == 200
     assert services.storage.head_object(thumb) is None and services.storage.head_object(staged) is None
+
+
+def test_the_browser_keeps_a_thumbnail_only_under_its_sessions_key(api, login, add_uploaded, services):
+    """Design (Delivery through the web app): whoever signs in next in the same browser never gets the previous
+    user's cached thumbnails. Each session has its own key in the address, and signing out clears the cache."""
+    from test_flow import _second_user
+    key = login()["thumbKey"]
+    assert len(key) == 16 and api.get("/api/me").json()["thumbKey"] == key
+    job = new_job(api)
+    n = add_uploaded(job, ["15-1234_1.jpg"])[0]["n"]
+    api.post(f"/api/jobs/{job}/rows/{n}/thumbnail", content=jpeg_with_exif((300, 200)), headers={"Content-Type": "image/jpeg"})
+    url = f"/api/jobs/{job}/rows/{n}/thumbnail"
+    assert api.get(f"{url}?k={key}").headers["cache-control"] == "private, max-age=300"
+    assert api.get(url).headers["cache-control"] == "no-store"  # without the key, never kept
+    other = _second_user(services, "limited")
+    other_key = other.get("/api/me").json()["thumbKey"]
+    assert other_key != key
+    assert other.get(f"{url}?k={key}").status_code == 404  # another session's address gets nothing
+    assert other.get(f"{url}?k={other_key}").status_code == 200
+    out = api.post("/api/logout")
+    assert out.status_code == 200 and out.headers["clear-site-data"] == '"cache"'
+    assert login()["thumbKey"] != key  # a new sign-in, a new key

@@ -53,6 +53,7 @@ import {mdiLock} from '@mdi/js'
 import type {Row} from '@/types'
 import {fileKind} from '@/lib/files'
 import {thumbnailUrl} from '@/api'
+import {useContextStore} from '@/stores/context'
 
 /**
  * A document's thumbnail (design: User interface, Thumbnails): the local preview in the browser that added the
@@ -77,6 +78,7 @@ const props = defineProps({
   }
 })
 
+const context = useContextStore()
 const hasFailed = ref(false)
 const isLargeOpen = ref(false)
 const kind = computed(() => fileKind(props.row.file))
@@ -85,8 +87,10 @@ const locked = computed(() => !props.preview && !!props.row.protected && !inColl
 // Ask the server only when there can be something: a staged image, or a file already in CollectionSpace.
 const remote = computed(() => !props.preview && !locked.value && !!props.jobId && kind.value.image
   && (inCollectionSpace.value || props.row.upload.s === 'done'))
-const src = computed(() => props.preview ?? (remote.value && !hasFailed.value ? thumbnailUrl(props.jobId!, props.row.n, props.row.v ?? 0) : ''))
-const largeSrc = computed(() => props.preview ?? (props.jobId ? thumbnailUrl(props.jobId, props.row.n, props.row.v ?? 0, true) : ''))
+// The session's key keeps the browser's copy to this session (design: Delivery through the web app)
+const key = computed(() => context.currentUser?.thumbKey ?? '')
+const src = computed(() => props.preview ?? (remote.value && !hasFailed.value ? thumbnailUrl(props.jobId!, props.row.n, props.row.v ?? 0, false, key.value) : ''))
+const largeSrc = computed(() => props.preview ?? (props.jobId ? thumbnailUrl(props.jobId, props.row.n, props.row.v ?? 0, true, key.value) : ''))
 
 watch(() => [props.row.v, props.row.result?.steps?.upload?.s], () => {
   hasFailed.value = false

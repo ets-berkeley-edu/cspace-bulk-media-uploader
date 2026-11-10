@@ -203,6 +203,13 @@ def _hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+def thumb_key(session_key: str) -> str:
+    """The session's key in thumbnail addresses (design: Delivery through the web app). The browser keeps a thumbnail
+    only under it, so whoever signs in next in the same browser never gets the previous user's cached images. It is
+    derived from the session's key one way, so it can't be turned back into the cookie or the stored session."""
+    return hashlib.sha256(f"thumbnail:{session_key}".encode()).hexdigest()[:16]
+
+
 class Session(BaseModel):
     key: str
     user: str
@@ -529,11 +536,12 @@ def _upload_form(s: "Services", key: str, size: int, content_type: str) -> dict:
     return demo.route_upload(s, form)
 
 
-def _me(s: "Services", tenant: Tenant, user: str, perms: dict, role: str) -> dict:
+def _me(s: "Services", tenant: Tenant, user: str, perms: dict, role: str, key: str) -> dict:
     """What the browser needs about the signed-in user and the app: the tenant's settings, the user's permissions,
-    and the per-file size limit, so the page skips files over it before asking to add them (design: Browser uploads)."""
+    the per-file size limit, so the page skips files over it before asking to add them (design: Browser uploads), and
+    the session's key for thumbnail addresses (thumb_key)."""
     return {"user": user, "tenant": tenant.public_summary(), "perms": perms, "role": role,
-            "maxFileBytes": s.settings.max_file_bytes}
+            "maxFileBytes": s.settings.max_file_bytes, "thumbKey": thumb_key(key)}
 
 
 def _delete_job(s: "Services", sess: "Session", job: dict, rows: list[dict],
@@ -784,7 +792,7 @@ def _sign_in(s: Services, response: Response, username: str, password: str, tena
     })
     response.set_cookie(s.settings.cookie_name, token, httponly=True, secure=s.settings.cookie_secure, samesite="strict",
                         max_age=int(s.settings.session_hours * 3600), path="/")
-    return _me(s, tenant, username, perms.summary, role)
+    return _me(s, tenant, username, perms.summary, role, key)
 
 
 def _routes(app: FastAPI) -> None:
@@ -815,6 +823,8 @@ def _routes(app: FastAPI) -> None:
             # stop editing any draft this session had open, so others can edit it without taking over
             s.storage.end_session(key, item["tenant"] if item else None)
         response.delete_cookie(s.settings.cookie_name, path="/")
+        # Thumbnails the browser kept for this user go too (design: Delivery through the web app)
+        response.headers["Clear-Site-Data"] = '"cache"'
         return {"ok": True}
 
     @app.get("/api/failures")
@@ -824,7 +834,7 @@ def _routes(app: FastAPI) -> None:
 
     @app.get("/api/me")
     def me(sess: Session = Depends(current_session), s: Services = Depends(svc)):
-        return _me(s, sess.museum(s), sess.user, sess.perms, sess.role)
+        return _me(s, sess.museum(s), sess.user, sess.perms, sess.role, sess.key)
 
     # ---- authority autocomplete (existing terms only) ------------------------------------
     @app.get("/api/authorities")
@@ -1228,17 +1238,22 @@ def _routes(app: FastAPI) -> None:
         return {"stored": s.storage.store_thumbnail(sess.tenant, job_id, n, jpeg)}
 
     @app.get("/api/jobs/{job_id}/rows/{n}/thumbnail")
-    def get_thumbnail(job_id: str, n: int, size: str = "small", sess: Session = Depends(current_session), s: Services = Depends(svc)):
+    def get_thumbnail(job_id: str, n: int, size: str = "small", k: str = "", sess: Session = Depends(current_session),
+                      s: Services = Depends(svc)):
         """A document's thumbnail, after checking the session and tenant: CollectionSpace's own derivative once
         the file is there (fetched with your credentials, so CollectionSpace's permissions apply, protected or
         not), otherwise the staged thumbnail. The browser never gets an S3 URL. Design (Roles, Intern access to a job):
-        an intern never sees the images of a staff-only job, only its text (review 7.5)."""
+        an intern never sees the images of a staff-only job, only its text (review 7.5).
+        k: the session's thumb_key. The browser may keep the image for a few minutes only under the session's own key;
+        without one it may not keep it at all, and another session's key gets nothing."""
+        if k and k != thumb_key(sess.key):
+            raise HTTPException(404, "No thumbnail.")
         job = _job_or_404(s, sess, job_id)
         if sess.role != "staff" and not job.get("internOpen"):
             raise HTTPException(404, "No thumbnail.")
         row = s.storage.get_row(job_id, n) or _404()
         upload = ((row.get("result") or {}).get("steps") or {}).get("upload") or {}
-        headers = {"Cache-Control": "private, max-age=300"}
+        headers = {"Cache-Control": "private, max-age=300" if k else "no-store"}
         if upload.get("s") == "done" and upload.get("csid"):
             client = sess.client(s)
             try:
