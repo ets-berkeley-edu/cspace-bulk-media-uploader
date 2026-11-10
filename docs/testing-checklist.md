@@ -834,13 +834,56 @@ http://localhost:5173 in Chrome, with the developer tools open on the Network pa
 - [x] **2. Sign-out.** Choose Sign out. Expected: the `POST /api/logout` answer has `clear-site-data: "cache"`.
 - [x] **3. The next user.** Within 5 minutes, sign in as `intern` (the job is staff only) and expand the same job in
   Finished jobs. Expected: grey tiles, not the images; the requests carry a different `k` and answer `404`
-  (`./bmu logs sim web` shows them).
+  (`./bmu logs sim web` shows them). Since section 28, the intern's page doesn't ask for these thumbnails at all: grey tiles, and
+  no thumbnail requests.
 - [x] **4. Back as staff.** Sign out, sign in as `admin` again: the thumbnails show, with a new `k`.
   (Steps 1 to 4: passed, 9 November 2026.)
 - [x] **5. On ucb-qa,** after `./bmu aws deploy --env ucb-qa`: repeat steps 1 to 3 with a PAHMA QA staff account and an
   intern's, as on November 9 (section 23). Expected: the intern sees no thumbnails of the staff-only jobs.
   (9 November 2026, image `afa14f8`: the intern saw grey tiles; every thumbnail request carried the session's `k` and
   answered `404`. `POST /api/logout` answers with `clear-site-data: "cache"`.)
+
+## 28. No repeated requests for thumbnails that are refused (9 November 2026; 10 minutes, on your local stack)
+
+Branch `fix/thumbnail-requests`. Found on ucb-qa on November 9 (section 27, step 5): an intern who expanded two
+staff-only jobs in Finished jobs rightly got grey tiles, but the page asked for the same thumbnails again at every
+refresh (every 4 seconds), each answered `404`, filling the web log. Now a thumbnail that failed is asked for again only
+when its document changes (a new `v`) or its file reaches CollectionSpace, and an intern's page doesn't ask for
+thumbnails the server always refuses an intern: those of a staff-only job, and those of documents already in
+CollectionSpace. Staff see what they saw before. CI checks each case in `thumbs.test.ts`; only a real browser shows the
+requests it makes.
+
+Start clean: in a terminal,
+
+```bash
+cd ~/dev/src/rtl/cspace-bulk-media-uploader && ./bmu down sim && ./bmu up sim
+```
+
+then open http://localhost:5173 in Chrome, with the developer tools open on the Network panel and its filter set to
+`thumbnail`. In a second terminal, follow the web app's log, showing only thumbnail requests:
+
+```bash
+cd ~/dev/src/rtl/cspace-bulk-media-uploader && ./bmu logs sim web | grep --line-buffered thumbnail
+```
+
+- [ ] **1. Staff, as before.** Sign in as `admin`, make a job with two JPEG files and one TIFF, and leave it staff only.
+  Open Drafts and expand the job. Expected: the three thumbnails show; the TIFF's may take a refresh or two (5 seconds
+  each) while it is made, and appears once it is stored. Choose Run now and wait for the job to finish. Open Finished
+  jobs and expand it. Expected: the three thumbnails show, now CollectionSpace's derivatives, each requested once.
+- [ ] **2. An intern, staff-only job.** Sign out and sign in as `intern`. Open Finished jobs, expand the job, and wait 20
+  seconds (five refreshes). Expected: grey tiles; the Network panel shows no thumbnail requests, and the log in the
+  second terminal shows no new lines.
+- [ ] **3. An intern, a draft open to interns.** As `intern`, make a draft with one JPEG file, then open Drafts and
+  expand it. Expected: its thumbnail shows, requested from the web app (a staged file, which the server gives an intern
+  of a draft open to interns; the editor shows the one made in the browser instead).
+- [ ] **4. An intern, after a run.** Sign out, sign in as `admin`, open the intern's draft, and choose Submit job, then
+  Run now from Job queue. Once it has finished, sign out and sign in as `intern` again, open Finished jobs and expand
+  that job (open to interns, its file now in CollectionSpace). Expected: a grey tile, no thumbnail request in the
+  Network panel and no new line in the log, for as long as the page stays open.
+- [ ] **5. A failed thumbnail isn't asked for again.** Tick Disable cache in the Network panel. As `admin`, expand the
+  first job in Finished jobs. In the Network panel, right-click one thumbnail request and choose Block request URL,
+  then collapse and expand the job. Expected: that tile is grey and its request shows as blocked once; wait 20 seconds:
+  it isn't requested again. Remove the block (Network request blocking panel) and untick Disable cache.
 
 ## Not tests, but still open
 

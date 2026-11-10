@@ -26,6 +26,15 @@ export const takeOverBlocked = (job: Pick<Job, 'internOpen' | 'editingRole'>, st
 export const draftDeleteBlocked = (job: Pick<Job, 'internOpen' | 'run' | 'fixFrom'>, staff: boolean): string => (
   draftBlocked(job, staff) || (!staff && (job.run || job.fixFrom) ? RAN_DELETE_WHY : ''))
 
+/**
+ * Whether to ask the web app for a document's thumbnail at all (design: Delivery through the web app; Roles). Staff
+ * always. An intern gets none of a staff-only job (app.get_thumbnail refuses it), and none of a document already in
+ * CollectionSpace, whose derivative is fetched with the viewer's own sign-in, which an intern's account can't read.
+ * The server decides; this only keeps the browser from asking for what it will always refuse.
+ */
+export const thumbnailAllowed = (me: Pick<Me, 'role'> | null | undefined, job: Pick<Job, 'internOpen'>, inCollectionSpace: boolean): boolean => (
+  !!me && (isStaff(me) || (!!job.internOpen && !inCollectionSpace)))
+
 export const INTERN_SUBMIT_WHY = 'Only staff can submit a job. A staff member submits it when the draft is ready.'
 
 const EVERY_PERMISSION: Perms = {media: true, mediaUpdate: true, relations: true, objects: true, readObjects: true, authorities: true,

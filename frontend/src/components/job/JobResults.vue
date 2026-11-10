@@ -99,7 +99,7 @@
           :key="row.n"
           :class="{'row-excluded': resultState(row) === 'Excluded'}"
         >
-          <td class="thumb-col"><DocumentThumbnail :job-id="job.id" :row="row" /></td>
+          <td class="thumb-col"><DocumentThumbnail :intern-open="!!job.internOpen" :job-id="job.id" :row="row" /></td>
           <td>{{ row.n }}</td>
           <td>
             {{ row.file }}

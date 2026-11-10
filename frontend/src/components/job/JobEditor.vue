@@ -482,6 +482,7 @@
             :deleting="deleting.has(row.n)"
             :expanded="expanded.has(row.n)"
             :group-on="!!job?.groupOn"
+            :intern-open="!!job?.internOpen"
             :job-id="job?.id"
             :languages="languages"
             :last="rows.length === 1"

@@ -52,6 +52,7 @@ import {computed, ref, watch} from 'vue'
 import {mdiLock} from '@mdi/js'
 import type {Row} from '@/types'
 import {fileKind} from '@/lib/files'
+import {thumbnailAllowed} from '@/lib/roles'
 import {thumbnailUrl} from '@/api'
 import {useContextStore} from '@/stores/context'
 
@@ -62,6 +63,11 @@ import {useContextStore} from '@/stores/context'
  * files show a type icon. Clicking opens a larger view.
  */
 const props = defineProps({
+  // The job's internOpen: an intern is never given a thumbnail of a staff-only job (design: Roles)
+  internOpen: {
+    required: false,
+    type: Boolean
+  },
   jobId: {
     default: undefined,
     required: false,
@@ -84,15 +90,20 @@ const isLargeOpen = ref(false)
 const kind = computed(() => fileKind(props.row.file))
 const inCollectionSpace = computed(() => props.row.result?.steps?.upload?.s === 'done')
 const locked = computed(() => !props.preview && !!props.row.protected && !inCollectionSpace.value)
-// Ask the server only when there can be something: a staged image, or a file already in CollectionSpace.
+// Ask the server only when there can be something: a staged image, or a file already in CollectionSpace, that
+// the server will give this user.
 const remote = computed(() => !props.preview && !locked.value && !!props.jobId && kind.value.image
-  && (inCollectionSpace.value || props.row.upload.s === 'done'))
+  && (inCollectionSpace.value || props.row.upload.s === 'done')
+  && thumbnailAllowed(context.currentUser, {internOpen: props.internOpen}, inCollectionSpace.value))
 // The session's key keeps the browser's copy to this session (design: Delivery through the web app)
 const key = computed(() => context.currentUser?.thumbKey ?? '')
 const src = computed(() => props.preview ?? (remote.value && !hasFailed.value ? thumbnailUrl(props.jobId!, props.row.n, props.row.v ?? 0, false, key.value) : ''))
 const largeSrc = computed(() => props.preview ?? (props.jobId ? thumbnailUrl(props.jobId, props.row.n, props.row.v ?? 0, true, key.value) : ''))
 
-watch(() => [props.row.v, props.row.result?.steps?.upload?.s], () => {
+// A failed thumbnail is asked for again only when the document changes (a stored thumbnail changes its v) or its
+// file reaches CollectionSpace. Two sources, compared one by one: every refresh brings a new row object, and a
+// getter returning a new array each time would ask again at every refresh.
+watch([() => props.row.v, () => props.row.result?.steps?.upload?.s], () => {
   hasFailed.value = false
 })
 </script>

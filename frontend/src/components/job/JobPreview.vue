@@ -197,7 +197,7 @@
             :key="row.n"
             :class="{'text-medium-emphasis': !row.include}"
           >
-            <td class="thumb-col"><DocumentThumbnail :job-id="job.id" :row="row" /></td>
+            <td class="thumb-col"><DocumentThumbnail :intern-open="!!job.internOpen" :job-id="job.id" :row="row" /></td>
             <td>
               {{ row.file }}
               <v-chip
