@@ -25,7 +25,8 @@
 # deploy/environments/NAME.conf; NAME.local.conf (not committed) holds the account number and allowed addresses.
 # CSPACE_TENANTS lists the museums the environment serves, each with its CollectionSpace server
 # ("pahma=https://... bampfa=https://..."); TENANT and CSPACE_URL instead mean a list of one.
-# Sign in first with: aws sso login --profile <the environment's AWS_PROFILE>. Nothing here handles a password or key,
+# Sign in first with aws sso login: for a profile that takes a role from another (source_profile, as in UC Berkeley's
+# account), through that profile's SSO session (sign_in_hint names it). Nothing here handles a password or key,
 # except reader-secret, which passes what you type straight to AWS Secrets Manager.
 # Terraform (deploy/terraform) creates everything; its state is in an S3 bucket in the same account, which the first
 # deploy creates. BMU_AWS_YES=1 skips Terraform's "yes" prompt. Works with the macOS bash (3.2).
@@ -212,11 +213,27 @@ check_not_someone_elses() {  # check_not_someone_elses ACCOUNT
   case "$ok" in y|Y|yes) ;; *) die "Stopped; nothing was changed." ;; esac
 }
 
+# The command that signs in for AWS_PROFILE. aws sso login --profile works only for a profile with SSO settings of its
+# own: a profile that takes a role (source_profile) signs in through the profile it takes it from, and a profile on an
+# SSO session through that session (--sso-session), as for the UC Berkeley environments.
+sign_in_hint() {
+  local profile="$AWS_PROFILE" source session hops=0
+  while source="$(aws configure get source_profile --profile "$profile" 2>/dev/null)" && [ -n "$source" ] && [ "$hops" -lt 5 ]; do
+    profile="$source"; hops=$((hops + 1))
+  done
+  session="$(aws configure get sso_session --profile "$profile" 2>/dev/null)" || session=""
+  if [ -n "$session" ]; then
+    echo "aws sso login --sso-session $session"
+  else
+    echo "aws sso login --profile $profile"
+  fi
+}
+
 # Signed in, and to the account this environment was first deployed to.
 check_account() {
   local who
   who="$(aws_ sts get-caller-identity --query Account --output text 2>/dev/null)" ||
-    die "Not signed in to AWS for '$ENV'. Run: aws sso login --profile $AWS_PROFILE"
+    die "Not signed in to AWS for '$ENV'. Run: $(sign_in_hint)"
   if [ -z "$ACCOUNT_ID" ]; then
     echo "Profile $AWS_PROFILE is signed in to AWS account $who."
     read -r -p "Is that the account for the '$ENV' environment? [y/N] " ok

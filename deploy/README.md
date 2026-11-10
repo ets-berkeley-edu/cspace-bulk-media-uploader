@@ -481,9 +481,9 @@ still try to read it (and fail with a 403 when you aren't signed in):
 ## If something goes wrong
 
 - **"Not signed in to AWS", "No valid credential sources found" or "refresh cached SSO token failed".** The
-  sign-in (8 hours) has expired. Run `aws sso login --profile <profile>` (for a profile that takes a role from
-  another, such as `bmu-qa-deploy`, sign in through that other profile or its `--sso-session`) and repeat the
-  command; the failed command changed nothing. "Could not connect to the endpoint URL" for `oidc.….amazonaws.com`
+  sign-in (8 hours) has expired. Run the `aws sso login` command that `./bmu aws` names (for a profile that takes a
+  role from another, such as `bmu-qa-deploy`, it names that other profile's `--sso-session`; `aws sso login --profile
+  bmu-qa-deploy` fails) and repeat the command; the failed command changed nothing. "Could not connect to the endpoint URL" for `oidc.….amazonaws.com`
   is the same renewal failing on the network (for example while changing networks or VPN): sign in again.
 - **"Docker isn't running".** Start Docker Desktop and run `./bmu aws deploy` again.
 - **The first creation fails.** Terraform stops at the resource that failed, says why, and keeps what it

@@ -3,7 +3,10 @@
 tools off, and runs the web app and the worker the way the image expects. Terraform's own checks (terraform validate,
 terraform test) cover the configuration itself (deploy/README.md)."""
 import json
+import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import boto3
@@ -381,3 +384,48 @@ def test_the_rehearsal_gets_the_parts_operations_attaches_and_never_museum_data(
             assert re.search(r"^SIMULATED_CSPACE=true", text, re.M) and not re.search(r"^PROTECT_DATA=true", text, re.M), conf.name
             profile = re.search(r"^AWS_PROFILE=(\S+)", text, re.M).group(1)
             assert profile != re.search(r"^ADMIN_PROFILE=(\S+)", text, re.M).group(1)  # the deployer isn't the administrator
+
+
+SAMPLE_AWS_CONFIG = """\
+[profile admin-sso]
+sso_session = campus
+sso_account_id = 111111111111
+sso_role_name = Developer
+
+[sso-session campus]
+sso_start_url = https://example.awsapps.com/start
+sso_region = us-west-2
+
+[profile deployer]
+role_arn = arn:aws:iam::111111111111:role/deployer
+source_profile = admin-sso
+
+[profile old-style]
+sso_start_url = https://example.awsapps.com/start
+sso_region = us-west-2
+sso_account_id = 111111111111
+sso_role_name = Developer
+
+[profile old-style-deployer]
+role_arn = arn:aws:iam::111111111111:role/deployer
+source_profile = old-style
+"""
+
+
+@pytest.mark.skipif(not shutil.which("aws"), reason="needs the AWS CLI, which reads the sample configuration")
+@pytest.mark.parametrize(("profile", "hint"), [
+    ("deployer", "aws sso login --sso-session campus"),  # a role through a profile on an SSO session (UC Berkeley's)
+    ("admin-sso", "aws sso login --sso-session campus"),
+    ("old-style-deployer", "aws sso login --profile old-style"),  # a role through a profile with its own SSO settings
+    ("old-style", "aws sso login --profile old-style"),
+    ("missing", "aws sso login --profile missing"),
+])
+def test_the_sign_in_hint_names_what_signs_in(tmp_path, profile, hint):
+    """aws.sh's "Not signed in" message: aws sso login --profile fails for a profile that takes a role from another."""
+    script = (DEPLOY / "aws.sh").read_text()
+    function = re.search(r"^sign_in_hint\(\) \{\n.*?^\}\n", script, re.S | re.M).group(0)
+    (tmp_path / "config").write_text(SAMPLE_AWS_CONFIG)
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path), "AWS_PROFILE": profile,
+           "AWS_CONFIG_FILE": str(tmp_path / "config"), "AWS_SHARED_CREDENTIALS_FILE": str(tmp_path / "credentials")}
+    out = subprocess.run(["bash", "-c", f"{function}\nsign_in_hint"], env=env, capture_output=True, text=True, check=True)
+    assert out.stdout.strip() == hint

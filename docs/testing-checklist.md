@@ -885,6 +885,30 @@ cd ~/dev/src/rtl/cspace-bulk-media-uploader && ./bmu logs sim web | grep --line-
   then collapse and expand the job. Expected: that tile is grey and its request shows as blocked once; wait 20 seconds:
   it isn't requested again. Remove the block (Network request blocking panel) and untick Disable cache.
 
+## 29. The sign-in hint names what signs in (9 November 2026; 2 minutes, on ucb-qa's profile)
+
+Branch `fix/aws-sign-in-hint`. When `./bmu aws` finds no sign-in it names the command to run. It used to name
+`aws sso login --profile <the environment's profile>`, which fails for a profile that takes a role from another
+(`source_profile`), such as `bmu-qa-deploy` ("Missing the following required SSO configuration values"). It now
+follows `source_profile` and names that profile's SSO session (`--sso-session`), or the profile itself when it has
+SSO settings of its own. CI checks the cases against a sample configuration
+(`test_the_sign_in_hint_names_what_signs_in`); this checks it against your own `~/.aws/config`.
+
+- [ ] **1. Signed out.** Sign out of IAM Identity Center, then ask for ucb-qa's status:
+
+  ```bash
+  cd ~/dev/src/rtl/cspace-bulk-media-uploader && aws sso logout && ./bmu aws status --env ucb-qa
+  ```
+
+  Expected: "Not signed in to AWS for 'ucb-qa'. Run: aws sso login --sso-session <your session's name>", not
+  `--profile bmu-qa-deploy`. If it shows the status instead, the AWS CLI still holds the role's credentials from
+  before (they last up to an hour): try again once they have expired.
+- [ ] **2. The named command works.** Run the command it named, then `./bmu aws status --env ucb-qa` again. Expected:
+  the environment's status, with no sign-in message.
+- [ ] **3. A personal profile.** `aws sso logout`, then `./bmu aws status` (personal-dev). Expected: it names
+  `bmu-personal`'s session (`aws sso login --sso-session …`, or `--profile bmu-personal` if that profile has its own
+  SSO settings), and that command signs you in.
+
 ## Not tests, but still open
 
 - The design doc's "For Richard to address" list (from the October 3 comparison of the doc with the prototype).
