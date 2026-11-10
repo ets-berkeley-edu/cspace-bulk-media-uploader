@@ -313,8 +313,12 @@ if a month heads past it. Pause or destroy the environment between test sessions
 CollectionSpace, `FRONT_DOOR=alb`, the WAF, and `REQUIRE_CLEAN=true`. Nothing in the Terraform code names an account,
 and no state is moved between accounts: everything is created fresh there.
 
-1. **Sign-in.** An IAM Identity Center profile `bmu-qa-deploy` (`aws configure sso`) for the role
-   `rtl-BmuQaDeployer`, whose policy is `deploy/iam/bmu-deployer-policy.json` (`deploy/iam/README.md`). Its sessions
+1. **Sign-in.** A profile `bmu-qa-deploy` in `~/.aws/config` that takes the role `rtl-BmuQaDeployer` (`role_arn`)
+   from your IAM Identity Center profile (`source_profile`), with `region = us-west-2` and
+   `duration_seconds = 3600` (AWS refuses less than 900). The role's policy is `deploy/iam/bmu-deployer-policy.json`
+   (`deploy/iam/README.md`). Sign in through the source profile's session (`aws sso login --sso-session <name>`, or
+   `--profile <source profile>`), not `--profile bmu-qa-deploy`, which has no sign-in of its own; then
+   `aws sts get-caller-identity --profile bmu-qa-deploy` ends in `assumed-role/rtl-BmuQaDeployer/…`. Its sessions
    last an hour; a deploy that outlasts one fails with an expired token and continues when run again.
 2. **Settings.** `ucb-qa.local.conf` (not committed) holds the account, the VPC and its subnets, the name from
    Operations (`DOMAIN_NAME`, `bmu-qa.<domain>`) and `ALLOWED_CIDRS` (campus and VPN): the list is in
@@ -477,8 +481,10 @@ still try to read it (and fail with a 403 when you aren't signed in):
 ## If something goes wrong
 
 - **"Not signed in to AWS", "No valid credential sources found" or "refresh cached SSO token failed".** The
-  sign-in (8 hours) has expired. Run `aws sso login --profile <profile>` and repeat the command; the failed
-  command changed nothing.
+  sign-in (8 hours) has expired. Run `aws sso login --profile <profile>` (for a profile that takes a role from
+  another, such as `bmu-qa-deploy`, sign in through that other profile or its `--sso-session`) and repeat the
+  command; the failed command changed nothing. "Could not connect to the endpoint URL" for `oidc.….amazonaws.com`
+  is the same renewal failing on the network (for example while changing networks or VPN): sign in again.
 - **"Docker isn't running".** Start Docker Desktop and run `./bmu aws deploy` again.
 - **The first creation fails.** Terraform stops at the resource that failed, says why, and keeps what it
   already created.
