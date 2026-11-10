@@ -725,45 +725,60 @@ own account"), so that missing permissions are found before Operations attaches 
 `cd ~/dev/src/rtl/cspace-bulk-media-uploader`. Note here every `AccessDenied`: the action, the resource, and the fix
 to `deploy/iam/bmu-deployer-policy.json`.
 
-- [ ] **0. The rehearsal's name (BQ23).** A name under the Route 53 zone Serena's rehearsal used, in the personal
+- [x] **0. The rehearsal's name (BQ23).** A name under the Route 53 zone Serena's rehearsal used, in the personal
   account (check the zone still exists: `aws route53 list-hosted-zones --profile bmu-personal`). Put it in
   `personal-rehearsal.local.conf` as `DOMAIN_NAME=…` (never in the committed `.conf`).
-- [ ] **1. What Operations provides.** `aws sso login --profile bmu-personal`, then
+- [x] **1. What Operations provides.** `aws sso login --profile bmu-personal`, then
   `./bmu aws rehearsal-vpc --env personal-rehearsal`. The first time it asks to confirm the account (yes). Expected:
   Terraform's plan lists a VPC, four subnets, an internet gateway, an Elastic IP, a NAT gateway, two route tables and
   four associations, the role `rehearsal-devqar-deployer`, and three policies `rehearsal-devqar-deployer-1` to `-3` with
   their attachments; nothing named `bmu-`. Type `yes`. It saves `VPC_ID`, `APP_SUBNET_IDS` and `LB_SUBNET_IDS`, then
   prints a `[profile bmu-rehearsal-deploy]` section.
-- [ ] **2. The deployer's profile.** Add that section to `~/.aws/config`. Check:
+- [x] **2. The deployer's profile.** Add that section to `~/.aws/config`. Check:
   `aws sts get-caller-identity --profile bmu-rehearsal-deploy` shows an `assumed-role/rehearsal-devqar-deployer/…` ARN.
-- [ ] **3. The certificate, as the deployer.** `./bmu aws deploy --env personal-rehearsal`. Expected: the image
+- [x] **3. The certificate, as the deployer.** `./bmu aws deploy --env personal-rehearsal`. Expected: the image
   repository and the certificate are created, the validation record is printed, and it stops. Add the record in
   Route 53 by hand, as Operations will (a CNAME, the name and value printed). Wait for `ISSUED`.
-- [ ] **4. Deploy as the deployer.** `./bmu aws deploy --env personal-rehearsal` again. Expected: the image is built
+- [x] **4. Deploy as the deployer.** `./bmu aws deploy --env personal-rehearsal` again. Expected: the image is built
   and pushed, Terraform plans the BMU with no CloudFront, no VPC or subnets of its own, two gateway endpoints
   (`CREATE_GATEWAY_ENDPOINTS=true`), the internet-facing load balancer, the WAF and the simulator, and after `yes`
   (5 to 10 minutes) it prints the load balancer's DNS name. Add the name's record in Route 53 (a CNAME to it). Note
   any `AccessDenied` (then step 5). In particular: the certificate's tags, the web ACL and its association
   (`SetWebAcl`), the WAF's logging (log delivery, the resource policy), and the gateway endpoints on the VPC's route
   table.
-- [ ] **5. If something was denied.** Add the permission to the policy, run
+- [x] **5. If something was denied.** Add the permission to the policy, run
   `./bmu aws rehearsal-vpc --env personal-rehearsal` (as administrator; the plan changes only the policies), then step 4
   again; Terraform continues where it stopped. `python3 deploy/iam/split-policy.py --check` still fits in three parts.
-- [ ] **6. The app, as Serena's #197 taught.** From this computer: `https://<DOMAIN_NAME>` opens; sign in as
+- [x] **6. The app, as Serena's #197 taught.** From this computer: `https://<DOMAIN_NAME>` opens; sign in as
   `admin`, make a job with a file (its thumbnail appears: the tasks' write through the endpoint), submit it (it runs
   at once: `ALWAYS_RUN_TIME=true`), see it finish; sign in as `intern` and open a draft (the languages list loads).
   Meanwhile `./bmu aws logs web --env personal-rehearsal` and `worker` show no `AccessDenied` (the app's own roles,
   not the deployer's). From a phone off your network, the name times out.
-- [ ] **7. Day-to-day commands as the deployer.** `./bmu aws status` (it shows the front door), `pause`, `resume`,
+- [x] **7. Day-to-day commands as the deployer.** `./bmu aws status` (it shows the front door), `pause`, `resume`,
   `allow-my-ip` and `logs fakecspace`, each with `--env personal-rehearsal`: none is denied.
-- [ ] **8. Destroy as the deployer.** `./bmu aws destroy --env personal-rehearsal`: it finishes, with no
+- [x] **8. Destroy as the deployer.** `./bmu aws destroy --env personal-rehearsal`: it finishes, with no
   `AccessDenied` (the certificate is deleted with the registry). Delete the name's record in Route 53; keep the
   validation record if the rehearsal may run again (it stays valid for the same name).
-- [ ] **9. Remove the rehearsal.** `aws sso login --profile bmu-personal` if needed, then
+- [x] **9. Remove the rehearsal.** `aws sso login --profile bmu-personal` if needed, then
   `./bmu aws rehearsal-vpc --env personal-rehearsal destroy`; type `yes`. `personal-rehearsal.local.conf` no longer
   has `VPC_ID`, `APP_SUBNET_IDS` or `LB_SUBNET_IDS`; the `[profile bmu-rehearsal-deploy]` section can be removed from
   `~/.aws/config`.
-- [ ] **10. The result.** If the policy changed, commit it (with these notes) before the ask goes to Operations.
+- [x] **10. The result.** If the policy changed, commit it (with these notes) before the ask goes to Operations.
+
+Result (8 November 2026, personal-rehearsal, from `main` after PR 128): **no `AccessDenied` anywhere, so the deployer
+policy needs no change** (step 5 was not needed). `rehearsal-vpc` added 21 resources, none named `bmu-`, and the
+deployer's profile showed the assumed role. The first deploy as the deployer added 5 (the two image repositories, a
+lifecycle policy, and the certificate with its tags); the certificate was `ISSUED` about a minute after the validation
+record was added. The second added 66, among them the web ACL, its association and logging (with the log resource
+policy), both gateway endpoints, the internet-facing load balancer with its HTTPS listener (TLS 1.3 policy), and the
+simulator with its service discovery; the load balancer's security group allowed only this computer's address. In the
+app, admin and intern signed in, the languages list loaded, every thumbnail was written through the endpoint, the job
+ran to Completed, and a phone off the network timed out. The web and worker logs had no `AccessDenied`. `status`,
+`pause`, `resume`, `allow-my-ip`, `logs fakecspace`, `destroy` and `rehearsal-vpc … destroy` all finished, and the
+local conf lost its network IDs. One file of the first job was marked "Upload failed" although it was in S3: an app
+race on `uploaded` (409), not a permission; fixed in PR 131 and checked in section 25. Two slips, for next
+time: the name's record was first created with a placeholder as its value (a runnable command must never hold one),
+and macOS then kept the bad answer cached until `dscacheutil -flushcache`.
 
 ## 25. Uploads that finish together, on real DynamoDB (8 November 2026; 10 minutes, on an AWS environment)
 
