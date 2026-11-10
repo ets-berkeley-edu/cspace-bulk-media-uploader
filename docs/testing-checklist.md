@@ -836,9 +836,11 @@ http://localhost:5173 in Chrome, with the developer tools open on the Network pa
   Finished jobs. Expected: grey tiles, not the images; the requests carry a different `k` and answer `404`
   (`./bmu logs sim web` shows them).
 - [x] **4. Back as staff.** Sign out, sign in as `admin` again: the thumbnails show, with a new `k`.
-  (Steps 1 to 4: passed on the local stack, 9 November 2026.)
-- [ ] **5. On ucb-qa,** after `./bmu aws deploy --env ucb-qa`: repeat steps 1 to 3 with a PAHMA QA staff account and an
+  (Steps 1 to 4: passed, 9 November 2026.)
+- [x] **5. On ucb-qa,** after `./bmu aws deploy --env ucb-qa`: repeat steps 1 to 3 with a PAHMA QA staff account and an
   intern's, as on November 9 (section 23). Expected: the intern sees no thumbnails of the staff-only jobs.
+  (9 November 2026, image `afa14f8`: the intern saw grey tiles; every thumbnail request carried the session's `k` and
+  answered `404`. `POST /api/logout` answers with `clear-site-data: "cache"`.)
 
 ## Not tests, but still open
 
