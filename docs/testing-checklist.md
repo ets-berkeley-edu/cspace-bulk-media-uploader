@@ -961,7 +961,16 @@ NAT gateway costs a few cents an hour while it exists, so do it in one sitting.
 `deploy/environments/personal-rehearsal.local.conf` from section 24 (it holds `ACCOUNT_ID` and `DOMAIN_NAME`; check
 with `ls deploy/environments/personal-rehearsal.local.conf`). Every command runs from the clone's top folder. Two
 profiles: `bmu-personal`, the account's administrator, and `bmu-rehearsal-deploy`, the deployer. `./bmu aws` picks
-the right one for each command (`ADMIN_PROFILE` and `AWS_PROFILE` in `personal-rehearsal.conf`). Sign in once:
+the right one for each command (`ADMIN_PROFILE` and `AWS_PROFILE` in `personal-rehearsal.conf`).
+
+**Terraform's output.** Steps 1 and 9 run Terraform, so their commands pipe it through `tfsummary` (the team's tool,
+`_team/tools/tfsummary` in rtl-team-notes, on your `PATH`). `tfsummary` shortens the plan to one line per resource
+and masks account numbers, addresses and secrets. Terraform's "Enter a value:" prompt still shows, so you review
+the plan and type `yes` as usual. `tee` saves the summary to a file in `/tmp` named for the step, which you can hand
+to Claude to read instead of pasting it. `tfsummary` also keeps the whole output, masked, in `~/.cache/tfsummary/` and
+prints that file's name at the end. `set -o pipefail` keeps the command's own exit status through the pipe.
+
+Sign in once:
 
 ```bash
 aws sso login --profile bmu-personal
@@ -971,13 +980,17 @@ aws sso login --profile bmu-personal
   role:
 
   ```bash
-  ./bmu aws rehearsal-vpc --env personal-rehearsal
+  set -o pipefail; ./bmu aws rehearsal-vpc --env personal-rehearsal 2>&1 | tfsummary | tee /tmp/bmu-checklist-31-step1.txt
   ```
 
-  Expected: Terraform's plan lists the VPC, its subnets and NAT gateway, the role `rehearsal-devqar-deployer` and
-  its three policies, as in section 24, step 1. Type `yes`. It saves `VPC_ID`, `APP_SUBNET_IDS` and `LB_SUBNET_IDS`
-  in the `.local.conf`, and says the deployer's profile is in `~/.aws/config` (from section 24). Check that the
-  policy that was made includes the new statement:
+  Expected: the summary of Terraform's plan lists the VPC, its subnets and NAT gateway, the role
+  `rehearsal-devqar-deployer` and its three policies, as in section 24, step 1. Type `yes`. It saves `VPC_ID`,
+  `APP_SUBNET_IDS` and `LB_SUBNET_IDS` in the `.local.conf`, and says "The deployer's profile bmu-rehearsal-deploy is
+  in ~/.aws/config." (from section 24). The last line is `tfsummary`'s, naming the full log. The summary is in
+  `/tmp/bmu-checklist-31-step1.txt`. (If it prints a `[profile bmu-rehearsal-deploy]` section instead, its role ARN
+  is masked there: `aws configure get role_arn --profile bmu-rehearsal-deploy` shows what `~/.aws/config` has, and the
+  role is `rehearsal-devqar-deployer` in this account.) Check that the policy that was made includes the new
+  statement:
 
   ```bash
   python3 deploy/iam/split-policy.py --check
@@ -1077,8 +1090,13 @@ aws sso login --profile bmu-personal
   removes `VPC_ID`, `APP_SUBNET_IDS` and `LB_SUBNET_IDS` from SSM:
 
   ```bash
-  ./bmu aws rehearsal-vpc destroy --env personal-rehearsal
+  set -o pipefail; ./bmu aws rehearsal-vpc destroy --env personal-rehearsal 2>&1 | tfsummary | tee /tmp/bmu-checklist-31-step9.txt
   ```
+
+  Expected: "This deletes the rehearsal's VPC, NAT gateway and deployer role in account <masked>. Terraform asks
+  first.", the summary of what Terraform destroys, and after `yes`, "Done. The [profile bmu-rehearsal-deploy] section
+  in ~/.aws/config can go too." (keep it for the next rehearsal). The summary is in
+  `/tmp/bmu-checklist-31-step9.txt`.
 
   Then delete the settings (type `personal-rehearsal` when asked). Expected: "This deletes <n> settings of
   'personal-rehearsal' in SSM, …", "The files on this computer stay.", then "Done.":
