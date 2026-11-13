@@ -901,7 +901,7 @@ follows `source_profile` and names that profile's SSO session (`--sso-session`),
 SSO settings of its own. CI checks the cases against a sample configuration
 (`test_the_sign_in_hint_names_what_signs_in`); this checks it against your own `~/.aws/config`.
 
-- [ ] **1. Signed out.** Sign out of IAM Identity Center, then ask for ucb-qa's status:
+- [x] **1. Signed out.** Sign out of IAM Identity Center, then ask for ucb-qa's status:
 
   ```bash
   cd ~/dev/src/rtl/cspace-bulk-media-uploader && aws sso logout && ./bmu aws status --env ucb-qa
@@ -910,11 +910,18 @@ SSO settings of its own. CI checks the cases against a sample configuration
   Expected: "Not signed in to AWS for 'ucb-qa'. Run: aws sso login --sso-session <your session's name>", not
   `--profile bmu-qa-deploy`. (Before section 30's fix, cached role credentials could hide a sign-out for up to an
   hour.)
-- [ ] **2. The named command works.** Run the command it named, then `./bmu aws status --env ucb-qa` again. Expected:
+  (12 November 2026: passed: it named `aws sso login --sso-session berkeley`. The first try, with the role's
+  credentials still cached, ended in a Terraform init error instead of the hint; after `rm -rf ~/.aws/cli/cache` it
+  gave the hint. That gap is section 30.)
+- [x] **2. The named command works.** Run the command it named, then `./bmu aws status --env ucb-qa` again. Expected:
   the environment's status, with no sign-in message.
-- [ ] **3. A personal profile.** `aws sso logout`, then `./bmu aws status` (personal-dev). Expected: it names
+  (12 November 2026: passed: it signed in, and the status showed ucb-qa with web 1 of 1 and worker 1 of 1, image
+  `8fd4737`.)
+- [x] **3. A personal profile.** `aws sso logout`, then `./bmu aws status` (personal-dev). Expected: it names
   `bmu-personal`'s session (`aws sso login --sso-session …`, or `--profile bmu-personal` if that profile has its own
   SSO settings), and that command signs you in.
+  (12 November 2026: passed: it named `aws sso login --sso-session bmu-personal`, which signed in; personal-dev showed
+  "Not deployed".)
 
 ## 30. Signed out, with the role's credentials still cached (12 November 2026; 3 minutes, on ucb-qa's profile)
 
