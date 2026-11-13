@@ -2,11 +2,13 @@
 (the same keys, index and TTL as Storage.create_tables makes locally), sets only settings that exist, keeps Demo
 tools off, and runs the web app and the worker the way the image expects. Terraform's own checks (terraform validate,
 terraform test) cover the configuration itself (deploy/README.md)."""
+import hashlib
 import json
 import os
 import re
 import shutil
 import subprocess
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import boto3
@@ -422,10 +424,59 @@ source_profile = old-style
 ])
 def test_the_sign_in_hint_names_what_signs_in(tmp_path, profile, hint):
     """aws.sh's "Not signed in" message: aws sso login --profile fails for a profile that takes a role from another."""
-    script = (DEPLOY / "aws.sh").read_text()
-    function = re.search(r"^sign_in_hint\(\) \{\n.*?^\}\n", script, re.S | re.M).group(0)
+    function = _aws_sh_functions("sso_profile", "sign_in_hint")
     (tmp_path / "config").write_text(SAMPLE_AWS_CONFIG)
     env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path), "AWS_PROFILE": profile,
            "AWS_CONFIG_FILE": str(tmp_path / "config"), "AWS_SHARED_CREDENTIALS_FILE": str(tmp_path / "credentials")}
     out = subprocess.run(["bash", "-c", f"{function}\nsign_in_hint"], env=env, capture_output=True, text=True, check=True)
     assert out.stdout.strip() == hint
+
+
+def _aws_sh_functions(*names):
+    script = (DEPLOY / "aws.sh").read_text()
+    return "".join(re.search(rf"^{n}\(\) \{{(?: [^\n]*\}}\n|\n.*?^\}}\n)", script, re.S | re.M).group(0) for n in names)
+
+
+def _sso_cache(home, key, expires, refresh=False):
+    """A made-up token file where the SDKs look for one: ~/.aws/sso/cache/<sha1(key)>.json."""
+    cache = home / ".aws" / "sso" / "cache"
+    cache.mkdir(parents=True, exist_ok=True)
+    token = {"accessToken": "made-up", "expiresAt": expires.strftime("%Y-%m-%dT%H:%M:%SZ")}
+    if refresh:
+        token["refreshToken"] = "made-up"
+    (cache / (hashlib.sha1(key.encode()).hexdigest() + ".json")).write_text(json.dumps(token))
+
+
+@pytest.mark.skipif(not shutil.which("aws"), reason="needs the AWS CLI, which reads the sample configuration")
+@pytest.mark.parametrize(("profile", "token", "signed_in"), [
+    ("deployer", None, False),  # aws sso logout with the role's credentials still cached: the hint, not terraform init
+    ("deployer", ("campus", 1, False), True),
+    ("deployer", ("campus", -1, False), False),  # expired
+    ("deployer", ("campus", -1, True), True),  # expired, but the SDK renews it with the refresh token
+    ("old-style-deployer", None, False),
+    ("old-style-deployer", ("https://example.awsapps.com/start", 1, False), True),
+    ("old-style-deployer", ("https://example.awsapps.com/start", -1, True), False),  # no sso-session: no renewing
+])
+def test_cached_role_credentials_without_an_sso_token_are_not_signed_in(tmp_path, profile, token, signed_in):
+    """aws.sh's check_account: sts passes on the CLI's cached role credentials, but Terraform needs the SSO token."""
+    (tmp_path / "config").write_text(SAMPLE_AWS_CONFIG)
+    if token:
+        key, hours, refresh = token
+        _sso_cache(tmp_path, key, datetime.now(timezone.utc) + timedelta(hours=hours), refresh)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "aws"  # answers sts as cached credentials would; everything else is the real CLI
+    fake.write_text(f'#!/bin/bash\ncase "$*" in *"sts get-caller-identity"*) echo 111111111111 ;; '
+                    f'*) exec {shutil.which("aws")} "$@" ;; esac\n')
+    fake.chmod(0o755)
+    env = {"PATH": f"{bin_dir}:{os.environ['PATH']}", "HOME": str(tmp_path), "AWS_PROFILE": profile,
+           "AWS_CONFIG_FILE": str(tmp_path / "config"), "AWS_SHARED_CREDENTIALS_FILE": str(tmp_path / "credentials")}
+    functions = _aws_sh_functions("die", "aws_", "sso_profile", "sign_in_hint", "sso_token_ok", "check_account")
+    out = subprocess.run(["bash", "-c", f"ENV=ucb-qa AWS_REGION=us-west-2 ACCOUNT_ID=111111111111\n{functions}\n"
+                          "check_account && echo signed-in"], env=env, capture_output=True, text=True)
+    if signed_in:
+        assert out.returncode == 0 and out.stdout.strip() == "signed-in", out.stderr
+    else:
+        hint = "aws sso login --sso-session campus" if profile == "deployer" else "aws sso login --profile old-style"
+        assert out.returncode == 1 and out.stderr.strip() == f"Not signed in to AWS for 'ucb-qa'. Run: {hint}"
+        assert "made-up" not in out.stdout + out.stderr

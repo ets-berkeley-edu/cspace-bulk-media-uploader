@@ -901,13 +901,34 @@ SSO settings of its own. CI checks the cases against a sample configuration
   ```
 
   Expected: "Not signed in to AWS for 'ucb-qa'. Run: aws sso login --sso-session <your session's name>", not
-  `--profile bmu-qa-deploy`. If it shows the status instead, the AWS CLI still holds the role's credentials from
-  before (they last up to an hour): try again once they have expired.
+  `--profile bmu-qa-deploy`. (Before section 30's fix, cached role credentials could hide a sign-out for up to an
+  hour.)
 - [ ] **2. The named command works.** Run the command it named, then `./bmu aws status --env ucb-qa` again. Expected:
   the environment's status, with no sign-in message.
 - [ ] **3. A personal profile.** `aws sso logout`, then `./bmu aws status` (personal-dev). Expected: it names
   `bmu-personal`'s session (`aws sso login --sso-session …`, or `--profile bmu-personal` if that profile has its own
   SSO settings), and that command signs you in.
+
+## 30. Signed out, with the role's credentials still cached (12 November 2026; 3 minutes, on ucb-qa's profile)
+
+Branch `fix/aws-sso-token-check`. The AWS CLI keeps the credentials of a role it took (`source_profile`, as
+`bmu-qa-deploy` does) in `~/.aws/cli/cache` for up to an hour, and `aws sso logout` leaves them. `./bmu aws` used to
+take a passing `aws sts get-caller-identity` as signed in, and Terraform, which doesn't read that cache, then failed
+in `terraform init` ("failed to read cached SSO token file"). It now also checks for the SSO token Terraform starts
+from (`~/.aws/sso/cache`): there and not expired, or renewable with its refresh token. CI checks the cases with a fake
+`aws` (`test_cached_role_credentials_without_an_sso_token_are_not_signed_in`); this checks it with the real one.
+
+- [ ] **1. Signed out, credentials cached.** Sign in, use the profile once so the CLI caches the role's credentials,
+  sign out, and ask for ucb-qa's status within the hour:
+
+  ```bash
+  cd ~/dev/src/rtl/cspace-bulk-media-uploader && aws sts get-caller-identity --profile bmu-qa-deploy >/dev/null && aws sso logout && ./bmu aws status --env ucb-qa
+  ```
+
+  Expected: "Not signed in to AWS for 'ucb-qa'. Run: aws sso login --sso-session <your session's name>", and no
+  Terraform error. (Section 29's step 1 no longer needs the cached credentials to expire.)
+- [ ] **2. Signed in.** Run the command it named, then `./bmu aws status --env ucb-qa`. Expected: the environment's
+  status, with no sign-in message.
 
 ## Not tests, but still open
 
