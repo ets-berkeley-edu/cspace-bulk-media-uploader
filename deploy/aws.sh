@@ -216,11 +216,18 @@ check_not_someone_elses() {  # check_not_someone_elses ACCOUNT
 # The command that signs in for AWS_PROFILE. aws sso login --profile works only for a profile with SSO settings of its
 # own: a profile that takes a role (source_profile) signs in through the profile it takes it from, and a profile on an
 # SSO session through that session (--sso-session), as for the UC Berkeley environments.
-sign_in_hint() {
-  local profile="$AWS_PROFILE" source session hops=0
+# sso_profile prints the profile at the end of AWS_PROFILE's source_profile chain, the one whose SSO settings sign in.
+sso_profile() {
+  local profile="$AWS_PROFILE" source hops=0
   while source="$(aws configure get source_profile --profile "$profile" 2>/dev/null)" && [ -n "$source" ] && [ "$hops" -lt 5 ]; do
     profile="$source"; hops=$((hops + 1))
   done
+  echo "$profile"
+}
+
+sign_in_hint() {
+  local profile session
+  profile="$(sso_profile)"
   session="$(aws configure get sso_session --profile "$profile" 2>/dev/null)" || session=""
   if [ -n "$session" ]; then
     echo "aws sso login --sso-session $session"
@@ -229,10 +236,37 @@ sign_in_hint() {
   fi
 }
 
+# Whether the SSO token Terraform starts from is there. The AWS CLI keeps the credentials of a role it took
+# (source_profile) in ~/.aws/cli/cache for up to an hour, and aws sso logout leaves them, so sts get-caller-identity
+# can pass while Terraform, whose SDK doesn't read that cache, has no token and fails in terraform init. The SDKs
+# keep the token in ~/.aws/sso/cache/<SHA-1 of the sso-session's name, or of the start URL>.json (the SSO token
+# provider's documented cache). Good: not expired, or (an sso-session) a refresh token the SDK can renew it with.
+# Reads only the file's expiry and whether it has a refresh token; prints nothing. A profile without SSO passes,
+# as does a computer without python3 (the sts check alone, as before).
+sso_token_ok() {
+  local profile key
+  profile="$(sso_profile)"
+  key="$(aws configure get sso_session --profile "$profile" 2>/dev/null)" ||
+    key="$(aws configure get sso_start_url --profile "$profile" 2>/dev/null)" || return 0
+  [ -n "$key" ] && command -v python3 >/dev/null || return 0
+  python3 - "$HOME/.aws/sso/cache" "$key" "$(aws configure get sso_session --profile "$profile" 2>/dev/null)" <<'PY' 2>/dev/null
+import datetime, hashlib, json, os, sys
+cache, key, session = sys.argv[1:4]
+try:
+    with open(os.path.join(cache, hashlib.sha1(key.encode()).hexdigest() + ".json")) as f:
+        token = json.load(f)
+    expires = datetime.datetime.strptime(token["expiresAt"].replace("UTC", "Z")[:19], "%Y-%m-%dT%H:%M:%S")
+except (OSError, ValueError, KeyError, TypeError, AttributeError):
+    sys.exit(1)
+now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+sys.exit(0 if expires > now or (session and token.get("refreshToken")) else 1)
+PY
+}
+
 # Signed in, and to the account this environment was first deployed to.
 check_account() {
   local who
-  who="$(aws_ sts get-caller-identity --query Account --output text 2>/dev/null)" ||
+  who="$(aws_ sts get-caller-identity --query Account --output text 2>/dev/null)" && sso_token_ok ||
     die "Not signed in to AWS for '$ENV'. Run: $(sign_in_hint)"
   if [ -z "$ACCOUNT_ID" ]; then
     echo "Profile $AWS_PROFILE is signed in to AWS account $who."
