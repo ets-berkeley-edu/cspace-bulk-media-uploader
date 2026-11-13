@@ -866,20 +866,27 @@ then open http://localhost:5173 in Chrome, with the developer tools open on the 
 cd ~/dev/src/rtl/cspace-bulk-media-uploader && ./bmu logs sim web | grep --line-buffered thumbnail
 ```
 
-- [ ] **1. Staff, as before.** Sign in as `admin`, make a job with two JPEG files and one TIFF, and leave it staff only.
+- [x] **1. Staff, as before.** Sign in as `admin`, make a job with two JPEG files and one TIFF, and leave it staff only.
   Open Drafts and expand the job. Expected: the three thumbnails show; the TIFF's may take a refresh or two (5 seconds
   each) while it is made, and appears once it is stored. Choose Run now and wait for the job to finish. Open Finished
   jobs and expand it. Expected: the three thumbnails show, now CollectionSpace's derivatives, each requested once.
-- [ ] **2. An intern, staff-only job.** Sign out and sign in as `intern`. Open Finished jobs, expand the job, and wait 20
+  (9 November 2026: passed. Steps 1 to 4 were run in Claude's built-in browser, its network log and the web log
+  standing in for Chrome's Network panel. Each thumbnail was requested once in Drafts and once in Finished jobs. After
+  the run the TIFF shows a "TIF" tile, not an image: the simulated CollectionSpace serves the TIFF itself as its
+  derivative, which a browser can't show, where real CollectionSpace makes a JPEG. It wasn't requested again.)
+- [x] **2. An intern, staff-only job.** Sign out and sign in as `intern`. Open Finished jobs, expand the job, and wait 20
   seconds (five refreshes). Expected: grey tiles; the Network panel shows no thumbnail requests, and the log in the
   second terminal shows no new lines.
-- [ ] **3. An intern, a draft open to interns.** As `intern`, make a draft with one JPEG file, then open Drafts and
+  (9 November 2026: passed: grey tiles; no thumbnail requests in 24 seconds, and no new lines in the log.)
+- [x] **3. An intern, a draft open to interns.** As `intern`, make a draft with one JPEG file, then open Drafts and
   expand it. Expected: its thumbnail shows, requested from the web app (a staged file, which the server gives an intern
   of a draft open to interns; the editor shows the one made in the browser instead).
-- [ ] **4. An intern, after a run.** Sign out, sign in as `admin`, open the intern's draft, and choose Submit job, then
+  (9 November 2026: passed: one request, answered `200`, and the thumbnail shows.)
+- [x] **4. An intern, after a run.** Sign out, sign in as `admin`, open the intern's draft, and choose Submit job, then
   Run now from Job queue. Once it has finished, sign out and sign in as `intern` again, open Finished jobs and expand
   that job (open to interns, its file now in CollectionSpace). Expected: a grey tile, no thumbnail request in the
   Network panel and no new line in the log, for as long as the page stays open.
+  (9 November 2026: passed: a grey tile; no thumbnail request in 25 seconds, and no new line in the log.)
 - [ ] **5. A failed thumbnail isn't asked for again.** Tick Disable cache in the Network panel. As `admin`, expand the
   first job in Finished jobs. In the Network panel, right-click one thumbnail request and choose Block request URL,
   then collapse and expand the job. Expected: that tile is grey and its request shows as blocked once; wait 20 seconds:
@@ -894,7 +901,7 @@ follows `source_profile` and names that profile's SSO session (`--sso-session`),
 SSO settings of its own. CI checks the cases against a sample configuration
 (`test_the_sign_in_hint_names_what_signs_in`); this checks it against your own `~/.aws/config`.
 
-- [ ] **1. Signed out.** Sign out of IAM Identity Center, then ask for ucb-qa's status:
+- [x] **1. Signed out.** Sign out of IAM Identity Center, then ask for ucb-qa's status:
 
   ```bash
   cd ~/dev/src/rtl/cspace-bulk-media-uploader && aws sso logout && ./bmu aws status --env ucb-qa
@@ -903,11 +910,18 @@ SSO settings of its own. CI checks the cases against a sample configuration
   Expected: "Not signed in to AWS for 'ucb-qa'. Run: aws sso login --sso-session <your session's name>", not
   `--profile bmu-qa-deploy`. (Before section 30's fix, cached role credentials could hide a sign-out for up to an
   hour.)
-- [ ] **2. The named command works.** Run the command it named, then `./bmu aws status --env ucb-qa` again. Expected:
+  (12 November 2026: passed: it named `aws sso login --sso-session berkeley`. The first try, with the role's
+  credentials still cached, ended in a Terraform init error instead of the hint; after `rm -rf ~/.aws/cli/cache` it
+  gave the hint. That gap is section 30.)
+- [x] **2. The named command works.** Run the command it named, then `./bmu aws status --env ucb-qa` again. Expected:
   the environment's status, with no sign-in message.
-- [ ] **3. A personal profile.** `aws sso logout`, then `./bmu aws status` (personal-dev). Expected: it names
+  (12 November 2026: passed: it signed in, and the status showed ucb-qa with web 1 of 1 and worker 1 of 1, image
+  `8fd4737`.)
+- [x] **3. A personal profile.** `aws sso logout`, then `./bmu aws status` (personal-dev). Expected: it names
   `bmu-personal`'s session (`aws sso login --sso-session …`, or `--profile bmu-personal` if that profile has its own
   SSO settings), and that command signs you in.
+  (12 November 2026: passed: it named `aws sso login --sso-session bmu-personal`, which signed in; personal-dev showed
+  "Not deployed".)
 
 ## 30. Signed out, with the role's credentials still cached (12 November 2026; 3 minutes, on ucb-qa's profile)
 
