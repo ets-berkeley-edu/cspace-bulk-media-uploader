@@ -20,9 +20,16 @@
 #                           delete) what Operations provides in UC Berkeley's account, a VPC with public subnets and a
 #                           NAT gateway and a deployer role with only deploy/iam/bmu-deployer-policy.json (and the
 #                           simulator's bmu-simulator-dns-policy.json), as ADMIN_PROFILE
+#   ./bmu aws settings push|show|delete   an environment with SETTINGS=ssm (BP4), as ADMIN_PROFILE: put its settings
+#                           in SSM Parameter Store from its files (shows what changes and asks), list them (marking any
+#                           the files here disagree with), or delete them once the environment is destroyed
 #
 # Which environment: --env NAME or BMU_AWS_ENV (default personal-dev). Its settings are in
 # deploy/environments/NAME.conf; NAME.local.conf (not committed) holds the account number and allowed addresses.
+# With SETTINGS=ssm (design: Deploys, BP4), every setting but AWS_PROFILE, AWS_REGION, BMU_ENV_NAME, ADMIN_PROFILE,
+# SETTINGS and REQUIRE_CLEAN is read from SSM Parameter Store in the account instead (/bmu-<name>/settings/<SETTING>),
+# where ./bmu aws settings push puts them from the files; the files then matter only to settings push. The deployer
+# only reads them: a change is made in the files, then pushed by the account's administrator.
 # CSPACE_TENANTS lists the museums the environment serves, each with its CollectionSpace server
 # ("pahma=https://... bampfa=https://..."); TENANT and CSPACE_URL instead mean a list of one.
 # Sign in first with aws sso login: for a profile that takes a role from another (source_profile, as in UC Berkeley's
@@ -67,20 +74,25 @@ load_env() {
   URL_FILE="$ENV_DIR/$ENV.url"
   [ -f "$CONF" ] || die "No settings for environment '$ENV' ($CONF). Environments: $(ls "$ENV_DIR" | sed -n 's/\.conf$//p' | grep -v '\.local$' | tr '\n' ' ')"
   ACCOUNT_ID="" ALLOWED_CIDRS="" SIMULATED_CSPACE="" ENV_LABEL="" CSPACE_TENANTS="" TENANT="" CSPACE_URL=""
-  WAF_ENABLED="" ORIGIN_DOMAIN="" ORIGIN_CERTIFICATE_ARN="" FRONT_DOOR="" DOMAIN_NAME="" CERTIFICATE_ARN=""
-  REQUIRE_CLEAN="" WAF_MANAGED_RULES=""
+  WAF_ENABLED="" ORIGIN_DOMAIN="" ORIGIN_CERTIFICATE_ARN="" FRONT_DOOR="" DOMAIN_NAME="" PROTECT_DATA="" ALWAYS_RUN_TIME=""
+  REQUIRE_CLEAN="" WAF_MANAGED_RULES="" SETTINGS=""
   VPC_ID="" APP_SUBNET_IDS="" LB_SUBNET_IDS="" CREATE_GATEWAY_ENDPOINTS="" REHEARSAL="" ADMIN_PROFILE=""
   # shellcheck disable=SC1090
   . "$CONF"
   local conf_label="$ENV_LABEL"
   # shellcheck disable=SC1090
   [ -f "$LOCAL" ] && . "$LOCAL"
+  CERTIFICATE_ARN=""   # not a setting: load_certificate reads it from ../registry's state
   : "${AWS_PROFILE:?set AWS_PROFILE in $CONF}" "${AWS_REGION:?set AWS_REGION in $CONF}" "${BMU_ENV_NAME:?set BMU_ENV_NAME in $CONF}"
   NAME="bmu-$BMU_ENV_NAME"   # the cluster's name and the prefix of every resource
-  # A rehearsal's VPC and deployer are the account administrator's to make: the deployer can't make itself.
+  # A rehearsal's VPC and deployer, and the settings in SSM, are the account administrator's to make: the deployer
+  # can't make itself, and only reads the settings.
   DEPLOYER_PROFILE="$AWS_PROFILE"
+  case "$CMD" in settings|rehearsal-vpc) [ -z "$ADMIN_PROFILE" ] || AWS_PROFILE="$ADMIN_PROFILE" ;; esac
+  case "${SETTINGS:=files}" in files|ssm) ;; *) die "SETTINGS must be files or ssm ($CONF, $LOCAL)." ;; esac
+  [ "$SETTINGS" = files ] || [ "$CMD" = settings ] || from_ssm   # settings push reads the files
   case "${REHEARSAL:=false}" in true|false) ;; *) die "REHEARSAL must be true or false ($CONF)." ;; esac
-  [ "$CMD" != rehearsal-vpc ] || [ -z "$ADMIN_PROFILE" ] || AWS_PROFILE="$ADMIN_PROFILE"
+  case "${ALWAYS_RUN_TIME:=false}" in true|false) ;; *) die "ALWAYS_RUN_TIME must be true or false ($CONF, $LOCAL)." ;; esac
   case "${SIMULATED_CSPACE:=false}" in true|false) ;; *) die "SIMULATED_CSPACE must be true or false ($CONF, $LOCAL)." ;; esac
   if [ "$SIMULATED_CSPACE" = true ]; then
     [ "${PROTECT_DATA:-false}" != true ] ||
@@ -187,12 +199,185 @@ tenants_var() {  # MUSEUMS as a Terraform map: {"pahma"="https://...","bampfa"="
 # deploy/terraform/app/fakecspace.tf; Terraform refuses any other with simulated_cspace (variables.tf).
 sim_url() { echo "http://fakecspace.$NAME.internal:8180"; }
 
-save_local() {  # save_local KEY VALUE: set one setting in the environment's .local.conf
+# With SETTINGS=ssm, a setting saved (or removed) by a command goes to SSM, which the commands read, and to the
+# .local.conf as well, so that the files stay a whole copy and a later settings push doesn't undo it. Only the
+# administrator's commands save one there (rehearsal-vpc): the deployer can't write SSM, so a deployer's command that
+# would save a setting stops first (ensure_allowlist, allow-my-ip) and ACCOUNT_ID always comes from SSM (from_ssm).
+save_local() {  # save_local KEY VALUE: set one setting in the environment's .local.conf (and SSM, SETTINGS=ssm)
   local key="$1" value="$2" tmp
+  if [ "$SETTINGS" = ssm ] && [ "$CMD" != settings ] && is_ssm_setting "$key"; then put_setting "$key" "$value"; fi
   tmp="$(mktemp)"
   { [ -f "$LOCAL" ] && grep -v "^$key=" "$LOCAL" || echo "# ./bmu aws settings for '$ENV' on this computer only (not committed)."; } > "$tmp"
   echo "$key=\"$value\"" >> "$tmp"
   mv "$tmp" "$LOCAL"
+}
+
+# ---- settings in SSM Parameter Store (SETTINGS=ssm; design: Deploys, BP4) -------------------------------------------
+# One String parameter per setting, /bmu-<name>/settings/<SETTING>, in the environment's account, so that the deploy
+# pipeline's build and a person's ./bmu aws read the same values. They are private (addresses, Operations' VPC and
+# subnets, the BMU's name) but not secret. ./bmu aws settings push puts them there from the files, as the account's
+# administrator; the deployer policy only reads them (ssm:DescribeParameters, and ssm:GetParameters on
+# parameter/bmu-*/settings/*).
+SSM_SETTINGS="ACCOUNT_ID ALLOWED_CIDRS SIMULATED_CSPACE ENV_LABEL CSPACE_TENANTS TENANT CSPACE_URL WAF_ENABLED
+  ORIGIN_DOMAIN ORIGIN_CERTIFICATE_ARN FRONT_DOOR DOMAIN_NAME PROTECT_DATA ALWAYS_RUN_TIME WAF_MANAGED_RULES VPC_ID
+  APP_SUBNET_IDS LB_SUBNET_IDS CREATE_GATEWAY_ENDPOINTS REHEARSAL"
+# Always from the files: what says how to reach the account, SETTINGS itself, and REQUIRE_CLEAN, a rule about the
+# checkout a deploy is run from, which belongs with the committed code.
+FILE_SETTINGS="AWS_PROFILE AWS_REGION BMU_ENV_NAME ADMIN_PROFILE SETTINGS REQUIRE_CLEAN"
+
+is_ssm_setting() { case " $(echo $SSM_SETTINGS) " in *" $1 "*) true ;; *) false ;; esac; }
+settings_path() { echo "/$NAME/settings"; }
+
+# The account AWS_PROFILE is signed in to; stops with the command that signs in if it isn't.
+signed_in_account() {
+  local who
+  who="$(aws_ sts get-caller-identity --query Account --output text 2>/dev/null)" && sso_token_ok ||
+    die "Not signed in to AWS for '$ENV'. Run: $(sign_in_hint)"
+  echo "$who"
+}
+
+ssm_settings() {  # the environment's settings in SSM, one "SETTING<tab>VALUE" line each, sorted; nothing if none
+  local names
+  names="$(aws_ ssm describe-parameters --parameter-filters "Key=Path,Option=OneLevel,Values=$(settings_path)" \
+    --query 'Parameters[].Name' --output text)" || die "Couldn't list $(settings_path)/ in SSM (see above)."
+  [ -n "$names" ] && [ "$names" != None ] || return 0
+  # shellcheck disable=SC2086
+  set -- $names
+  while [ $# -gt 0 ]; do   # GetParameters takes at most 10 names
+    aws_ ssm get-parameters --names "${@:1:10}" --query 'Parameters[].[Name,Value]' --output text ||
+      die "Couldn't read $(settings_path)/ in SSM (see above)."
+    shift $(( $# < 10 ? $# : 10 ))
+  done | sed "s|^$(settings_path)/||" | sort
+}
+
+setting_in() {  # setting_in SETTING LINES: its value in ssm_settings' LINES; empty if it isn't there
+  printf '%s\n' "$2" | awk -F'\t' -v k="$1" '$1 == k { print substr($0, length(k) + 2); exit }'
+}
+
+put_setting() {  # put_setting SETTING VALUE: in SSM; an empty VALUE deletes it (SSM has no empty values)
+  local name; name="$(settings_path)/$1"
+  if [ -z "$2" ]; then
+    aws_ ssm delete-parameter --name "$name" >/dev/null 2>&1 || true
+    return 0
+  fi
+  aws_ ssm put-parameter --name "$name" --type String --value "$2" --overwrite >/dev/null
+  aws_ ssm add-tags-to-resource --resource-type Parameter --resource-id "$name" --tags Key=project,Value=bmu
+}
+
+# The settings from SSM in place of the files' (load_env), before load_env checks them. The account is checked first,
+# against this computer's ACCOUNT_ID if it has one; then SSM's ACCOUNT_ID must be the account it was read from.
+from_ssm() {
+  local who lines key value file_values="" differ=""
+  export AWS_PAGER=""
+  who="$(signed_in_account)" || exit 1
+  [ -z "$ACCOUNT_ID" ] || [ "$ACCOUNT_ID" = "$who" ] ||
+    die "Profile $AWS_PROFILE is signed in to account $who, but '$ENV' is account $ACCOUNT_ID ($LOCAL). Stopped."
+  lines="$(ssm_settings)"
+  [ -n "$lines" ] || die "'$ENV' keeps its settings in SSM (SETTINGS=ssm), and account $who has none under $(settings_path)/.
+The account's administrator puts them there from $CONF and $LOCAL: ./bmu aws settings push --env $ENV"
+  for key in $SSM_SETTINGS; do
+    file_values="$file_values$key	${!key}
+"
+    printf -v "$key" '%s' "$(setting_in "$key" "$lines")"
+  done
+  [ "$ACCOUNT_ID" = "$who" ] ||
+    die "SSM's ACCOUNT_ID for '$ENV' (${ACCOUNT_ID:-none}) isn't the account it is in ($who): ./bmu aws settings push --env $ENV"
+  while IFS='	' read -r key value; do
+    [ -n "$key" ] || continue
+    is_ssm_setting "$key" || echo "Note: $(settings_path)/$key in SSM isn't a setting ./bmu aws reads; ignored." >&2
+  done <<EOF
+$lines
+EOF
+  for key in $SSM_SETTINGS; do
+    value="$(setting_in "$key" "$file_values")"
+    [ -z "$value" ] || [ "$value" = "${!key}" ] || differ="$differ $key"
+  done
+  [ -z "$differ" ] ||
+    echo "Note: the files on this computer differ from SSM in$differ; SSM's are used (./bmu aws settings show)." >&2
+}
+
+# ./bmu aws settings push|show|delete (SETTINGS=ssm). The account is this computer's ACCOUNT_ID, asked the first time
+# as for a deploy; they run as the environment's ADMIN_PROFILE, if it has one (load_env).
+settings() {
+  load_env
+  [ "$SETTINGS" = ssm ] || die "'$ENV' keeps its settings in $CONF and $LOCAL. To keep them in SSM Parameter Store instead
+(design: Deploys, BP4), add SETTINGS=ssm to $LOCAL, then: ./bmu aws settings push --env $ENV"
+  check_account
+  case "${1:-}" in
+    push) settings_push ;;
+    show) settings_show ;;
+    delete) settings_delete ;;
+    *) die "./bmu aws settings push|show|delete" ;;
+  esac
+}
+
+# The files' settings (after load_env's defaults), compared with SSM's; asks, then writes the changes. Always asks,
+# even with BMU_AWS_YES=1: another computer's files may be out of date, and a setting missing there is deleted.
+settings_push() {
+  local lines key value old changes="" ok
+  lines="$(ssm_settings)"
+  for key in $SSM_SETTINGS; do
+    value="${!key}"; old="$(setting_in "$key" "$lines")"
+    [ "$value" != "$old" ] || continue
+    if [ -z "$old" ]; then changes="$changes  + $key=$value
+"
+    elif [ -z "$value" ]; then changes="$changes  - $key (was $old)
+"
+    else changes="$changes  ~ $key=$value (was $old)
+"
+    fi
+  done
+  if [ -z "$changes" ]; then
+    echo "SSM already has these settings for '$ENV' (account $ACCOUNT_ID, $(settings_path)/)."
+    return 0
+  fi
+  echo "From $CONF and $LOCAL to SSM, account $ACCOUNT_ID, $(settings_path)/:"
+  printf '%s' "$changes"
+  read -r -p "Write these to SSM? The next deploy uses them. [y/N] " ok
+  case "$ok" in y|Y|yes) ;; *) die "Stopped; nothing was changed." ;; esac
+  for key in $SSM_SETTINGS; do
+    value="${!key}"
+    [ "$value" = "$(setting_in "$key" "$lines")" ] || put_setting "$key" "$value"
+  done
+  echo "Done. ./bmu aws plan --env $ENV shows what they change."
+}
+
+settings_show() {
+  local lines key value
+  lines="$(ssm_settings)"
+  echo "'$ENV' in SSM, account $ACCOUNT_ID, $(settings_path)/:"
+  [ -n "$lines" ] || { echo "  none yet (./bmu aws settings push --env $ENV)"; return 0; }
+  while IFS='	' read -r key value; do
+    if ! is_ssm_setting "$key"; then echo "  $key=$value   (not a setting ./bmu aws reads; ignored)"
+    elif [ "${!key}" != "$value" ]; then echo "  $key=$value   (the files here: ${!key:-not set})"
+    else echo "  $key=$value"
+    fi
+  done <<EOF
+$lines
+EOF
+  for key in $SSM_SETTINGS; do
+    [ -z "${!key}" ] || [ -n "$(setting_in "$key" "$lines")" ] || echo "  ($key isn't in SSM; the files here: ${!key})"
+  done
+}
+
+settings_delete() {  # only once the environment is destroyed: a deploy, plan or destroy needs them
+  local lines key value ok
+  for key in app registry rehearsal; do
+    ! state_has_resources "$key" ||
+      die "'$ENV' is still deployed (bmu/$BMU_ENV_NAME/$key.tfstate): destroy it first (./bmu aws destroy, then rehearsal-vpc destroy for a rehearsal)."
+  done
+  lines="$(ssm_settings)"
+  [ -n "$lines" ] || { echo "'$ENV' has no settings in SSM (account $ACCOUNT_ID, $(settings_path)/)."; return 0; }
+  echo "This deletes $(printf '%s\n' "$lines" | grep -c .) settings of '$ENV' in SSM, account $ACCOUNT_ID, $(settings_path)/."
+  echo "The files on this computer stay."
+  read -r -p "Type the environment's name ($ENV) to go ahead: " ok
+  [ "$ok" = "$ENV" ] || die "Stopped; nothing was deleted."
+  while IFS='	' read -r key value; do
+    [ -z "$key" ] || aws_ ssm delete-parameter --name "$(settings_path)/$key" >/dev/null
+  done <<EOF
+$lines
+EOF
+  echo "Done."
 }
 
 # First use of an environment on this computer: if the account already holds Terraform state for this environment's
@@ -266,8 +451,7 @@ PY
 # Signed in, and to the account this environment was first deployed to.
 check_account() {
   local who
-  who="$(aws_ sts get-caller-identity --query Account --output text 2>/dev/null)" && sso_token_ok ||
-    die "Not signed in to AWS for '$ENV'. Run: $(sign_in_hint)"
+  who="$(signed_in_account)" || exit 1
   if [ -z "$ACCOUNT_ID" ]; then
     echo "Profile $AWS_PROFILE is signed in to AWS account $who."
     read -r -p "Is that the account for the '$ENV' environment? [y/N] " ok
@@ -289,6 +473,8 @@ my_ip() {
 
 ensure_allowlist() {
   [ -n "$ALLOWED_CIDRS" ] && return
+  [ "$SETTINGS" = files ] ||
+    die "'$ENV' has no ALLOWED_CIDRS in SSM. Add the allowed ranges to $LOCAL, then the account's administrator runs: ./bmu aws settings push --env $ENV"
   local ip; ip="$(my_ip)"
   echo "The BMU in AWS is open only to listed addresses. Adding this computer's: $ip/32"
   echo "(More later with ./bmu aws allow-my-ip, or edit ALLOWED_CIDRS in $LOCAL and deploy.)"
@@ -593,6 +779,8 @@ status() {
   look
   local url
   echo "Environment: $ENV (account $ACCOUNT_ID, $AWS_REGION); Terraform state in s3://$STATE_BUCKET/bmu/$BMU_ENV_NAME/"
+  if [ "$SETTINGS" = ssm ]; then echo "Settings: SSM Parameter Store, $(settings_path)/ (./bmu aws settings show)"
+  else echo "Settings: $CONF and $LOCAL"; fi
   IMAGE="$(deployed_image)"
   case "$IMAGE" in ""|*"No outputs"*|*Warning*) echo "Not deployed (./bmu aws deploy)."; return 0 ;; esac
   url="$(app_url)"
@@ -693,7 +881,7 @@ destroy() {
   # Review 5.5: an environment whose data matters is never destroyed by the script; its tables and buckets refuse it
   # anyway, but the destroy would get as far as scheduling its KMS keys (with them, the audit files) for deletion.
   [ "${PROTECT_DATA:-false}" != true ] ||
-    die "'$ENV' protects its data (PROTECT_DATA=true), so it can't be destroyed. To destroy it on purpose, set PROTECT_DATA=false in the settings ($CONF or $LOCAL) and deploy first (that turns off the tables' deletion protection), then destroy."
+    die "'$ENV' protects its data (PROTECT_DATA=true), so it can't be destroyed. To destroy it on purpose, set PROTECT_DATA=false in the settings ($CONF or $LOCAL, then settings push if it keeps them in SSM) and deploy first (that turns off the tables' deletion protection), then destroy."
   prepare
   echo "This deletes the '$ENV' BMU in AWS account $ACCOUNT_ID: its jobs, staged files, audit entries, logs and images."
   echo "Records it created in CollectionSpace stay. The KMS keys are deleted after a 7-day waiting period (aws kms cancel-key-deletion stops it)."
@@ -727,6 +915,8 @@ destroy() {
   [ "$FRONT_DOOR" != alb ] ||
     echo "$DOMAIN_NAME's DNS record now points at nothing: after the next deploy, Operations points it at the new load balancer."
   echo "The Terraform state bucket s3://$STATE_BUCKET is kept; it holds the (now empty) state and its history."
+  [ "$SETTINGS" = files ] ||
+    echo "Its settings stay in SSM; once they're no longer needed, the account's administrator runs ./bmu aws settings delete --env $ENV."
 }
 
 # ---- the deployer rehearsal ----------------------------------------------------------------------------------------
@@ -739,7 +929,8 @@ state_has_resources() {  # state_has_resources KEY: whether this environment's K
     python3 -c 'import json, sys; sys.exit(0 if json.load(sys.stdin).get("resources") else 1)' 2>/dev/null
 }
 
-remove_local() {  # remove_local KEY: take one setting out of the environment's .local.conf
+remove_local() {  # remove_local KEY: take one setting out of the environment's .local.conf (and SSM, SETTINGS=ssm)
+  if [ "$SETTINGS" = ssm ] && [ "$CMD" != settings ] && is_ssm_setting "$1"; then put_setting "$1" ""; fi
   [ -f "$LOCAL" ] || return 0
   local tmp; tmp="$(mktemp)"
   grep -v "^$1=" "$LOCAL" > "$tmp" || true
@@ -842,6 +1033,9 @@ case "$CMD" in
     ip="$(my_ip)/32"
     case ",$ALLOWED_CIDRS," in *",$ip,"*) echo "$ip is already allowed." ; exit 0 ;; esac
     new="${ALLOWED_CIDRS:+$ALLOWED_CIDRS,}$ip"
+    # The deployer can't change a setting in SSM: the administrator pushes the change from the files (BP4, BP6).
+    [ "$SETTINGS" = files ] ||
+      die "'$ENV' keeps its settings in SSM. To allow $ip, set ALLOWED_CIDRS=\"$new\" in $LOCAL; the account's administrator then runs ./bmu aws settings push --env $ENV, and the next deploy applies it."
     save_local ALLOWED_CIDRS "$new"; ALLOWED_CIDRS="$new"
     echo "Allowed: $new"
     prepare; tf_init app
@@ -851,6 +1045,7 @@ case "$CMD" in
   reader-secret) reader_secret "${1:-}" ;;
   ci-role) ci_role ;;
   rehearsal-vpc) rehearsal_vpc "${1:-}" ;;
+  settings) settings "${1:-}" ;;
   destroy) destroy ;;
   help|-h|--help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0" ;;
   *) die "Unknown command '$CMD'. ./bmu aws help lists them." ;;

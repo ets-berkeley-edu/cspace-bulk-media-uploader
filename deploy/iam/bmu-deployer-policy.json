@@ -56,6 +56,7 @@
         "s3:ListAllMyBuckets",
         "secretsmanager:GetRandomPassword",
         "secretsmanager:ListSecrets",
+        "ssm:DescribeParameters",
         "sts:GetCallerIdentity",
         "wafv2:CheckCapacity",
         "wafv2:Describe*",
@@ -536,6 +537,16 @@
       ],
       "Resource": [
         "arn:aws:secretsmanager:us-west-2:*:secret:bmu-*"
+      ]
+    },
+    {
+      "Sid": "SettingsRead",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetParameters"
+      ],
+      "Resource": [
+        "arn:aws:ssm:us-west-2:*:parameter/bmu-*/settings/*"
       ]
     },
     {
