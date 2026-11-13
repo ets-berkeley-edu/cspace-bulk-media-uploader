@@ -10,6 +10,8 @@
 - ci-role: CI's ECR Public role, with the account's GitHub OIDC provider created or reused.
 - the front door (FRONT_DOOR, DOMAIN_NAME): its settings, the certificate's DNS record, and no change of front door
   once deployed (check_front_door); REQUIRE_CLEAN (check_clean).
+- the settings in SSM Parameter Store (SETTINGS=ssm; settings push, show and delete): pushed by the administrator,
+  read by every other command, never written by the deployer.
 """
 import json
 import os
@@ -24,6 +26,31 @@ SCRIPT = Path(__file__).resolve().parents[2] / "deploy" / "aws.sh"
 ACCOUNT = "111122223333"
 
 FAKE_AWS = r"""#!/usr/bin/env bash
+arg() {  # arg OPTION ARGS...: the value after OPTION
+  local want="$1"; shift
+  while [ $# -gt 0 ]; do [ "$1" = "$want" ] && { echo "$2"; return; }; shift; done
+}
+# SSM Parameter Store: one file per parameter under $FAKE_LOG_DIR/ssm (its name is the path); writes are logged with
+# the profile that made them.
+SSM="$FAKE_LOG_DIR/ssm"
+case "$*" in
+  *"ssm describe-parameters"*)
+    path="$(arg --parameter-filters "$@" | sed 's/.*Values=//')"
+    ls "$SSM$path" 2>/dev/null | sed "s|^|$path/|" | paste -s -d '\t' - ;;
+  *"ssm get-parameters"*)
+    take=false
+    for a in "$@"; do
+      case "$a" in --names) take=true ;; --*) take=false ;;
+        *) [ "$take" = false ] || printf '%s\t%s\n' "$a" "$(cat "$SSM$a")" ;; esac
+    done ;;
+  *"ssm put-parameter"*)
+    name="$(arg --name "$@")"; mkdir -p "$(dirname "$SSM$name")"; printf '%s' "$(arg --value "$@")" > "$SSM$name"
+    echo "put $name as $(arg --profile "$@")" >> "$FAKE_LOG_DIR/ssm-writes" ;;
+  *"ssm delete-parameter"*)
+    rm -f "$SSM$(arg --name "$@")"; echo "delete $(arg --name "$@") as $(arg --profile "$@")" >> "$FAKE_LOG_DIR/ssm-writes" ;;
+  *"ssm add-tags-to-resource"*) echo "tag $(arg --resource-id "$@") $(arg --tags "$@")" >> "$FAKE_LOG_DIR/ssm-writes" ;;
+  *"s3 cp"*) echo "${FAKE_STATE_JSON:-}" ;;
+esac
 case "$*" in
   *"sts get-caller-identity"*) echo "$FAKE_ACCOUNT" ;;
   *"s3api head-bucket"*) exit "${FAKE_BUCKET_RC:-0}" ;;
@@ -76,7 +103,7 @@ FAKE_DOCKER = r"""#!/usr/bin/env bash
 """
 
 FAKE_CURL = r"""#!/usr/bin/env bash
-echo 200
+case "$*" in *checkip*) echo 198.51.100.9 ;; *) echo 200 ;; esac
 """
 
 CONF = """AWS_PROFILE=bmu-test
@@ -663,3 +690,138 @@ def test_without_require_clean_a_dirty_checkout_deploys_with_a_dirty_tag(clean_c
     r = run(tree, "deploy", museums=f"pahma={QA}")
     assert r.returncode == 0, r.stderr
     assert "-dirty-" in tf_args(tree, "apply-app")["image_uri"]
+
+
+# ---- settings in SSM Parameter Store (SETTINGS=ssm; design: Deploys, BP4) -------------------------------------------
+
+SSM_LOCAL = "SETTINGS=ssm\nADMIN_PROFILE=bmu-admin\n"
+
+
+def ssm(tree):
+    """The stand-in SSM's parameters under /bmu-dev/settings/, as {SETTING: value}."""
+    root = tree / "log" / "ssm" / "bmu-dev" / "settings"
+    return {p.name: p.read_text() for p in root.iterdir()} if root.exists() else {}
+
+
+def ssm_writes(tree):
+    log = tree / "log" / "ssm-writes"
+    return log.read_text().splitlines() if log.exists() else []
+
+
+def push(tree, answers="y\n"):
+    return run(tree, "settings", "push", answers=answers)
+
+
+def test_settings_needs_an_environment_that_keeps_them_in_ssm(tree):
+    write_env(tree)
+    r = push(tree)
+    assert r.returncode == 1
+    assert "add SETTINGS=ssm to" in r.stderr and ssm(tree) == {}
+
+
+def test_settings_push_shows_the_changes_and_writes_them_as_the_administrator_only_when_told(tree):
+    write_env(tree, local_extra=SSM_LOCAL)
+    r = push(tree, answers="n\n")
+    assert r.returncode == 1
+    assert "  + ALLOWED_CIDRS=203.0.113.7/32" in r.stdout and "  + CSPACE_URL=" + QA in r.stdout
+    assert ssm(tree) == {}
+    r = push(tree)
+    assert r.returncode == 0, r.stderr
+    settings = ssm(tree)
+    assert settings["ACCOUNT_ID"] == ACCOUNT and settings["ALLOWED_CIDRS"] == "203.0.113.7/32"
+    assert settings["TENANT"] == "pahma" and settings["CSPACE_URL"] == QA
+    assert settings["FRONT_DOOR"] == "cloudfront"  # load_env's defaults go too, so SSM says what a deploy uses
+    # What says how to reach the account, SETTINGS itself and REQUIRE_CLEAN stay in the files.
+    assert not {"AWS_PROFILE", "AWS_REGION", "BMU_ENV_NAME", "ADMIN_PROFILE", "SETTINGS", "REQUIRE_CLEAN"} & set(settings)
+    writes = [w for w in ssm_writes(tree) if w.startswith("put ")]
+    assert writes and all(w.endswith(" as bmu-admin") for w in writes)  # never as the deployer (bmu-test)
+    assert any("Key=project,Value=bmu" in w for w in ssm_writes(tree))
+    assert "SSM already has these settings" in push(tree).stdout
+
+
+def test_settings_push_removes_a_setting_the_files_no_longer_have(tree):
+    local = write_env(tree, local_extra=SSM_LOCAL + 'ENV_LABEL="AWS · test"\n')
+    push(tree)
+    local.write_text(local.read_text().replace('ENV_LABEL="AWS · test"\n', ""))
+    r = push(tree)
+    assert r.returncode == 0, r.stderr
+    assert "  ~ ENV_LABEL=test (was AWS · test)" in r.stdout and ssm(tree)["ENV_LABEL"] == "test"
+
+
+def test_with_settings_in_ssm_a_command_uses_ssms_and_says_where_the_files_differ(tree):
+    local = write_env(tree, local_extra=SSM_LOCAL)
+    push(tree)
+    local.write_text(local.read_text().replace("203.0.113.7/32", "198.51.100.0/24"))
+    r = run(tree, "plan", museums=f"pahma={QA}")
+    assert r.returncode == 0, r.stderr
+    assert tf_args(tree, "plan-app")["allowed_cidrs"] == '["203.0.113.7/32"]'
+    assert "differ from SSM in ALLOWED_CIDRS; SSM's are used" in r.stderr
+    assert ssm_writes(tree) and all(w.endswith(" as bmu-admin") or w.startswith("tag ") for w in ssm_writes(tree))
+
+
+def test_with_no_settings_in_ssm_a_command_says_who_puts_them_there(tree):
+    write_env(tree, local_extra=SSM_LOCAL)
+    r = run(tree, "plan")
+    assert r.returncode == 1
+    assert "has none under /bmu-dev/settings/" in r.stderr and "./bmu aws settings push --env t" in r.stderr
+
+
+def test_settings_in_ssm_from_another_account_are_refused(tree):
+    write_env(tree, local_extra=SSM_LOCAL)
+    push(tree)
+    (tree / "log" / "ssm" / "bmu-dev" / "settings" / "ACCOUNT_ID").write_text("999988887777")
+    r = run(tree, "plan")
+    assert r.returncode == 1
+    assert "SSM's ACCOUNT_ID for 't' (999988887777) isn't the account it is in" in r.stderr
+
+
+def test_the_deployer_never_writes_a_setting_to_ssm(tree):
+    local = write_env(tree, local_extra=SSM_LOCAL)
+    push(tree)
+    before = ssm_writes(tree)
+    r = run(tree, "allow-my-ip")
+    assert r.returncode == 1
+    assert 'set ALLOWED_CIDRS="203.0.113.7/32,198.51.100.9/32" in' in r.stderr and "settings push --env t" in r.stderr
+    # With no allowed addresses in SSM, a deploy stops instead of adding this computer's.
+    local.write_text(local.read_text().replace('ALLOWED_CIDRS="203.0.113.7/32"\n', ""))
+    push(tree)
+    assert "ALLOWED_CIDRS" not in ssm(tree)
+    before = ssm_writes(tree)
+    r = run(tree, "deploy")
+    assert r.returncode == 1
+    assert "has no ALLOWED_CIDRS in SSM" in r.stderr
+    assert ssm_writes(tree) == before and "ALLOWED_CIDRS" not in local.read_text()
+
+
+def test_settings_show_marks_what_the_files_here_disagree_with(tree):
+    local = write_env(tree, local_extra=SSM_LOCAL)
+    push(tree)
+    (tree / "log" / "ssm" / "bmu-dev" / "settings" / "OLD_SETTING").write_text("x")
+    local.write_text(local.read_text().replace("203.0.113.7/32", "198.51.100.0/24"))
+    r = run(tree, "settings", "show")
+    assert r.returncode == 0, r.stderr
+    assert "  ALLOWED_CIDRS=203.0.113.7/32   (the files here: 198.51.100.0/24)" in r.stdout
+    assert f"  CSPACE_URL={QA}\n" in r.stdout
+    assert "  OLD_SETTING=x   (not a setting ./bmu aws reads; ignored)" in r.stdout
+
+
+def test_settings_delete_waits_until_the_environment_is_destroyed(tree):
+    write_env(tree, local_extra=SSM_LOCAL)
+    push(tree)
+    r = run(tree, "settings", "delete", answers="t\n", state_json='{"resources": [{"type": "x"}]}')
+    assert r.returncode == 1
+    assert "is still deployed" in r.stderr and ssm(tree)
+    r = run(tree, "settings", "delete", answers="nope\n")
+    assert r.returncode == 1 and ssm(tree)
+    r = run(tree, "settings", "delete", answers="t\n")
+    assert r.returncode == 0, r.stderr
+    assert ssm(tree) == {}
+    assert (tree / "deploy" / "environments" / "t.local.conf").exists()  # the files stay
+
+
+def test_status_says_where_the_settings_are(tree):
+    write_env(tree, local_extra=SSM_LOCAL)
+    push(tree)
+    r = run(tree, "status", museums=f"pahma={QA}")
+    assert r.returncode == 0, r.stderr
+    assert "Settings: SSM Parameter Store, /bmu-dev/settings/" in r.stdout

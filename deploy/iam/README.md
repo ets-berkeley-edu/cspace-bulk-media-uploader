@@ -11,7 +11,7 @@ every write is limited to resources named `bmu-*` (log groups `/bmu/*` and `aws-
 
 | File | What |
 | --- | --- |
-| `bmu-deployer-policy.json` | The whole policy: the only copy, reviewed with the Terraform it permits. About 12,300 characters without whitespace |
+| `bmu-deployer-policy.json` | The whole policy: the only copy, reviewed with the Terraform it permits. About 12,400 characters without whitespace |
 | `split-policy.py` | Splits it into the customer managed policies to attach (below) |
 | `bmu-simulator-dns-policy.json` | **Not for Operations.** Route 53 and Cloud Map for the simulated CollectionSpace's private DNS name, given only to the rehearsal's role (below) |
 
@@ -46,10 +46,16 @@ From Serena's stage 2 deployer policy (`ets-berkeley-edu/cspace-media-server`, `
   (`WafLogDelivery`, and `aws-waf-logs-bmu-*` in `Logs`), and the `acm:` and `wafv2:` reads. The load balancer
   statements don't limit the scheme, so they allow an internet-facing one.
 - **Removed**, because the BMU doesn't use them: CloudFront (the BMU has none in this account, so `cloudfront:*` is
-  no longer exempt from the region Deny either), WAF IP sets, alarms (CloudWatch and SNS), SSM parameters, and the ETL
-  token secrets' resource policies, with the reads for CloudFront, SNS and SSM.
+  no longer exempt from the region Deny either), WAF IP sets, alarms (CloudWatch and SNS), writing SSM parameters, and
+  the ETL token secrets' resource policies, with the reads for CloudFront and SNS.
 - **Added**, because the BMU's architecture differs: the staging bucket takes uploads straight from the browser
   (`s3:PutBucketCORS`) and logs its access to a second `bmu-*` bucket (`s3:PutBucketLogging`).
+- **Added November 2026, reading the environment's settings** (`SettingsRead`, and `ssm:DescribeParameters` in
+  `ReadMetadata`): an environment with `SETTINGS=ssm` keeps its settings in SSM Parameter Store under
+  `/bmu-<name>/settings/`, so that the deploy pipeline's build and a deploy from a laptop read the same values
+  (`../README.md`, Settings in SSM Parameter Store). The deployer only reads them (`ssm:GetParameters`); the
+  account's administrator writes them with `./bmu aws settings push`. Adding it changed parts 1 and 3; part 2 is
+  unchanged.
 
 Like Serena's stage 2 policy, it can't create or change a VPC, subnets, routes or gateways. In the existing VPC it
 can create security groups and their rules, and the S3 and DynamoDB gateway endpoints (only when
@@ -66,6 +72,8 @@ can create security groups and their rules, and the S3 and DynamoDB gateway endp
   afterwards; their aliases by name).
 - Read-only `Describe`, `Get` and `List` calls are allowed account-wide: Terraform reads many attributes of each
   resource, the exact list changes with provider versions, and they return only metadata.
+- `ssm:DescribeParameters` has no resource to scope to; it lists parameters' names and metadata, not their values,
+  which `ssm:GetParameters` reads only under `parameter/bmu-*/settings/*`.
 - `iam:PassRole` is limited to `bmu-*` roles and to ECS tasks; the only managed policy that can be attached is
   `AmazonECSTaskExecutionRolePolicy`.
 - The deployer can read and write the BMU's own secrets (`bmu-*`): `./bmu aws` sets them without showing or storing
@@ -82,7 +90,8 @@ can create security groups and their rules, and the S3 and DynamoDB gateway endp
   them (`bmu-simulator-dns-policy.json`). The UC Berkeley environment uses PAHMA's QA CollectionSpace, never the
   simulator; a deploy with `SIMULATED_CSPACE=true` as this role fails with `AccessDenied` on Route 53.
 - **`./bmu aws ci-role`** (CI's ECR Public role and the GitHub OIDC provider) isn't for this role.
-- **A deploy pipeline** (GitHub OIDC and CodeBuild), as for Serena: later.
+- **A deploy pipeline** (GitHub OIDC and CodeBuild), as for Serena: decided (`docs/design.md`, Deploys), not built
+  yet. Its own roles are made by the account's administrator, not by this role.
 - The role can't list its own policies (its IAM reads are limited to `bmu-*` roles). That's expected.
 
 ## Also needed from Operations, outside the policy

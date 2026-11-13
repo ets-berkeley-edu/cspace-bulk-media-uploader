@@ -471,7 +471,8 @@ def test_cached_role_credentials_without_an_sso_token_are_not_signed_in(tmp_path
     fake.chmod(0o755)
     env = {"PATH": f"{bin_dir}:{os.environ['PATH']}", "HOME": str(tmp_path), "AWS_PROFILE": profile,
            "AWS_CONFIG_FILE": str(tmp_path / "config"), "AWS_SHARED_CREDENTIALS_FILE": str(tmp_path / "credentials")}
-    functions = _aws_sh_functions("die", "aws_", "sso_profile", "sign_in_hint", "sso_token_ok", "check_account")
+    functions = _aws_sh_functions("die", "aws_", "sso_profile", "sign_in_hint", "sso_token_ok", "signed_in_account",
+                                  "check_account")
     out = subprocess.run(["bash", "-c", f"ENV=ucb-qa AWS_REGION=us-west-2 ACCOUNT_ID=111111111111\n{functions}\n"
                           "check_account && echo signed-in"], env=env, capture_output=True, text=True)
     if signed_in:
@@ -480,3 +481,41 @@ def test_cached_role_credentials_without_an_sso_token_are_not_signed_in(tmp_path
         hint = "aws sso login --sso-session campus" if profile == "deployer" else "aws sso login --profile old-style"
         assert out.returncode == 1 and out.stderr.strip() == f"Not signed in to AWS for 'ucb-qa'. Run: {hint}"
         assert "made-up" not in out.stdout + out.stderr
+
+
+def _shell_words(aws_sh: str, variable: str) -> set[str]:
+    """The words of a "VARIABLE=..." list in deploy/aws.sh, which may continue over several lines."""
+    match = re.search(rf'^{variable}="([^"]*)"', aws_sh, re.MULTILINE)
+    assert match, f"{variable} isn't in deploy/aws.sh"
+    return set(match.group(1).split())
+
+
+def test_every_setting_is_either_in_ssm_or_in_the_files():
+    """With SETTINGS=ssm (design: Deploys, BP4), load_env reads every setting from SSM but the few that say how to reach
+    the account: a new setting must be listed in SSM_SETTINGS or FILE_SETTINGS, or an environment that keeps its
+    settings in SSM would never get it."""
+    aws_sh = (DEPLOY / "aws.sh").read_text()
+    in_ssm, in_files = _shell_words(aws_sh, "SSM_SETTINGS"), _shell_words(aws_sh, "FILE_SETTINGS")
+    assert in_ssm & in_files == set()
+    load_env = aws_sh[aws_sh.index("load_env() {"):]
+    resets = load_env[: load_env.index('. "$CONF"')]  # what load_env empties before reading the files
+    started_empty = set(re.findall(r'\b([A-Z][A-Z0-9_]+)=""', resets))
+    assert started_empty == (in_ssm | in_files) - {"AWS_PROFILE", "AWS_REGION", "BMU_ENV_NAME"}
+    committed = [f for f in (DEPLOY / "environments").glob("*.conf") if not f.name.endswith(".local.conf")]
+    set_in_committed_files = {name for f in committed
+                              for name in re.findall(r"^([A-Z][A-Z0-9_]+)=", f.read_text(), re.MULTILINE)}
+    assert sorted(set_in_committed_files - in_ssm - in_files) == []
+
+
+def test_the_deployer_only_reads_the_settings_in_ssm():
+    """The account's administrator writes an environment's settings (./bmu aws settings push); the deployer, and so the
+    pipeline's build, only reads them, and only the BMU's."""
+    policy = json.loads((DEPLOY / "iam" / "bmu-deployer-policy.json").read_text())
+    ssm = {st["Sid"]: (sorted(a for a in st["Action"] if a.startswith("ssm:")), st["Resource"])
+           for st in policy["Statement"][1:] if any(a.startswith("ssm:") for a in st["Action"])}
+    assert ssm == {
+        "ReadMetadata": (["ssm:DescribeParameters"], "*"),  # names and metadata only, never values
+        "SettingsRead": (["ssm:GetParameters"], ["arn:aws:ssm:us-west-2:*:parameter/bmu-*/settings/*"]),
+    }
+    aws_sh = (DEPLOY / "aws.sh").read_text()
+    assert 'echo "/$NAME/settings"' in aws_sh and _local("versions.tf", "name") == "bmu-${var.env_name}"

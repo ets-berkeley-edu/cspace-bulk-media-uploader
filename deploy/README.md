@@ -27,10 +27,11 @@ prototype: the image is built from this repository and runs on ECS Fargate. Demo
 | `./bmu aws url` | Prints the address. |
 | `./bmu aws logs web` / `worker` / `fakecspace` | Follows a service's logs, starting with the last 30 minutes. `fakecspace` only with the simulated CollectionSpace. |
 | `./bmu aws pause` / `resume` | Stops or starts both services to save money. The data stays. Terraform shows the change and asks first. |
-| `./bmu aws allow-my-ip` | Adds this computer's current address to the allowlist, and applies it. |
+| `./bmu aws allow-my-ip` | Adds this computer's current address to the allowlist, and applies it. With `SETTINGS=ssm` it says what to add to `ALLOWED_CIDRS` instead. |
 | `./bmu aws reader-secret [museum]` | Sets or changes the sign-in of a museum's read-only CollectionSpace account, which checks its interns' drafts. It asks for the user name and password; see below. The museum can be left out when the environment serves only one. |
 | `./bmu aws destroy` | Deletes everything in AWS for the environment, data included. It asks for the environment's name first. |
 | `./bmu aws rehearsal-vpc [destroy]` | A rehearsal environment only (`REHEARSAL=true`): makes, or deletes, what Operations provides in UC Berkeley's account, a VPC with a NAT gateway and a deployer role with only the deployer policy, signed in as the account's administrator. See "Rehearsing the deploy in your own account". |
+| `./bmu aws settings push` / `show` / `delete` | An environment with `SETTINGS=ssm`, as the account's administrator: puts its settings in SSM Parameter Store from its files (showing what changes and asking), lists them, or deletes them once it is destroyed. See "Settings in SSM Parameter Store". |
 | `./bmu aws ci-role` | Once per account: the role CI assumes to sign in to ECR Public (see "CI's sign-in to ECR Public" below). Prints the command that sets the repository's `ECR_PUBLIC_ROLE_ARN` variable. |
 
 **Picking the environment.** Add `--env NAME`, or set `BMU_AWS_ENV`. The default is `personal-dev`.
@@ -369,6 +370,35 @@ CREATE_GATEWAY_ENDPOINTS=false               # true only if the VPC has no S3 an
 - **The deployer.** In UC Berkeley's account, a role with only `deploy/iam/bmu-deployer-policy.json`, which can't
   create or change a VPC, subnets, routes or gateways, nor anything of CloudFront: in that account the front door
   is `alb`, with the regional WAF.
+
+## Settings in SSM Parameter Store
+
+An environment's settings can be kept in SSM Parameter Store in its own account instead of in the files on one
+person's computer, so that everyone who deploys it, and later the deploy pipeline's build, reads the same values
+(design: Deploys, BP4). Every environment the pipeline deploys will; `personal-dev` keeps its files.
+
+- **Switching it on.** Add `SETTINGS=ssm` to the environment's `.local.conf` (or its `.conf`). From then on every
+  `./bmu aws` command reads the settings from SSM, one String parameter each under `/bmu-<BMU_ENV_NAME>/settings/`,
+  except `AWS_PROFILE`, `AWS_REGION`, `BMU_ENV_NAME`, `ADMIN_PROFILE`, `SETTINGS` and `REQUIRE_CLEAN`, which always
+  come from the files. Its `ACCOUNT_ID` in SSM must be the account it's in. A command whose files disagree with SSM
+  says so ("the files on this computer differ from SSM in …") and uses SSM's.
+- **Putting them there.** `./bmu aws settings push --env <env>`, as the account's administrator (`ADMIN_PROFILE`, as
+  for `rehearsal-vpc`): it lists what would change (`+` added, `~` changed, `-` removed) from the `.conf` and
+  `.local.conf` on this computer and asks first, even with `BMU_AWS_YES=1`, since another computer's files may be out of
+  date. A setting the files no longer have is removed. The next deploy applies the change.
+- **Looking at them.** `./bmu aws settings show --env <env>` lists them, marking any the files here disagree with.
+  `./bmu aws status` says where an environment's settings are.
+- **Deleting them.** `./bmu aws settings delete --env <env>`, once the environment is destroyed (a rehearsal's VPC
+  too): it refuses while any of its Terraform state holds resources, and asks you to type the environment's name. The
+  files stay.
+- **The deployer only reads them.** Its policy allows `ssm:DescribeParameters` and `ssm:GetParameters` on
+  `parameter/bmu-*/settings/*`, nothing else in SSM. So in an environment with `SETTINGS=ssm`, a command that would
+  save a setting stops and says what to change instead: `allow-my-ip` (add the address to `ALLOWED_CIDRS` in the
+  `.local.conf`, then `settings push`), and a first deploy with no `ALLOWED_CIDRS`. `rehearsal-vpc`, which runs as the
+  administrator, saves the VPC's IDs to SSM as well as to the `.local.conf`.
+
+The values are private but not secret (the account number, Operations' VPC and subnets, the allowed ranges, the
+BMU's name): no password or key is ever a setting.
 
 ## Rehearsing the deploy in your own account
 

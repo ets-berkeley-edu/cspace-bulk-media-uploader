@@ -944,6 +944,155 @@ from (`~/.aws/sso/cache`): there and not expired, or renewable with its refresh 
 - [ ] **2. Signed in.** Run the command it named, then `./bmu aws status --env ucb-qa`. Expected: the environment's
   status, with no sign-in message.
 
+## 31. Settings in SSM Parameter Store (13 November 2026; about 40 minutes, in the personal account)
+
+Branch `feature/settings-ssm`, the deploy pipeline's second pull request (design: Deploys, BP4). An environment with
+`SETTINGS=ssm` keeps its settings in SSM Parameter Store in its own account instead of in the files on one computer,
+so that whoever deploys it, and later the pipeline's build, reads the same values. The account's administrator puts
+them there with `./bmu aws settings push`; the deployer only reads them, and its policy gains exactly that
+(`SettingsRead`, and `ssm:DescribeParameters`). CI checks the commands with a stand-in `aws`
+(`backend/tests/test_aws_script.py`); this checks them, and the deployer policy, with the real one.
+
+It uses `personal-rehearsal`, whose deployer role has only the deployer policy, as Operations attaches it. Nothing is
+deployed: the steps make the rehearsal's VPC and deployer role, which `./bmu aws status` needs, then delete them. Its
+NAT gateway costs a few cents an hour while it exists, so do it in one sitting.
+
+**Before you start.** In your BMU clone, on this branch (`git switch feature/settings-ssm && git pull`), with
+`deploy/environments/personal-rehearsal.local.conf` from section 24 (it holds `ACCOUNT_ID` and `DOMAIN_NAME`; check
+with `ls deploy/environments/personal-rehearsal.local.conf`). Every command runs from the clone's top folder. Two
+profiles: `bmu-personal`, the account's administrator, and `bmu-rehearsal-deploy`, the deployer. `./bmu aws` picks
+the right one for each command (`ADMIN_PROFILE` and `AWS_PROFILE` in `personal-rehearsal.conf`). Sign in once:
+
+```bash
+aws sso login --profile bmu-personal
+```
+
+- [ ] **1. The deployer role, with the new policy.** As the administrator, make the rehearsal's VPC and deployer
+  role:
+
+  ```bash
+  ./bmu aws rehearsal-vpc --env personal-rehearsal
+  ```
+
+  Expected: Terraform's plan lists the VPC, its subnets and NAT gateway, the role `rehearsal-devqar-deployer` and
+  its three policies, as in section 24, step 1. Type `yes`. It saves `VPC_ID`, `APP_SUBNET_IDS` and `LB_SUBNET_IDS`
+  in the `.local.conf`, and says the deployer's profile is in `~/.aws/config` (from section 24). Check that the
+  policy that was made includes the new statement:
+
+  ```bash
+  python3 deploy/iam/split-policy.py --check
+  ```
+
+  Expected: three parts, the third ending in `KeyAlias, SettingsRead`.
+- [ ] **2. Switched on, with nothing in SSM yet.** Add the setting to the `.local.conf`, then ask for the status, as
+  the deployer:
+
+  ```bash
+  echo 'SETTINGS=ssm' >> deploy/environments/personal-rehearsal.local.conf
+  ```
+
+  ```bash
+  ./bmu aws status --env personal-rehearsal
+  ```
+
+  Expected: "'personal-rehearsal' keeps its settings in SSM (SETTINGS=ssm), and account <your account> has none
+  under /bmu-devqar/settings/." and, on the next line, "The account's administrator puts them there from
+  deploy/environments/personal-rehearsal.conf and deploy/environments/personal-rehearsal.local.conf: ./bmu aws
+  settings push --env personal-rehearsal". No `AccessDenied`: the deployer may list the parameters.
+- [ ] **3. Put them there, as the administrator.**
+
+  ```bash
+  ./bmu aws settings push --env personal-rehearsal
+  ```
+
+  Expected: "From deploy/environments/personal-rehearsal.conf and deploy/environments/personal-rehearsal.local.conf to
+  SSM, account <your account>, /bmu-devqar/settings/:", then one `+` line per setting, among them `ACCOUNT_ID`,
+  `ALLOWED_CIDRS`, `SIMULATED_CSPACE=true`, `ENV_LABEL=AWS · personal-rehearsal · simulated CollectionSpace`,
+  `FRONT_DOOR=alb`, `DOMAIN_NAME`, `VPC_ID`, `APP_SUBNET_IDS`, `LB_SUBNET_IDS` and `REHEARSAL=true`; none for
+  `AWS_PROFILE`, `ADMIN_PROFILE`, `SETTINGS` or `REQUIRE_CLEAN`. Then "Write these to SSM? The next deploy uses them.
+  [y/N]". Type `y`. Expected: "Done. ./bmu aws plan --env personal-rehearsal shows what they change." Run the same
+  command again. Expected: "SSM already has these settings for 'personal-rehearsal' (account <your account>,
+  /bmu-devqar/settings/)." and no question.
+- [ ] **4. What SSM holds.** As the administrator, list the parameters' names and types (not their values):
+
+  ```bash
+  aws ssm get-parameters-by-path --path /bmu-devqar/settings --profile bmu-personal --query 'Parameters[].[Name,Type]' --output text
+  ```
+
+  Expected: one line per setting from step 3, each `String` (not `SecureString`: none is a secret).
+- [ ] **5. The deployer reads them.**
+
+  ```bash
+  ./bmu aws status --env personal-rehearsal
+  ```
+
+  Expected: "Settings: SSM Parameter Store, /bmu-devqar/settings/ (./bmu aws settings show)", then "Not deployed
+  (./bmu aws deploy).", with no `AccessDenied` and no "differ" note.
+- [ ] **6. The deployer can't write them.** First through `./bmu aws`:
+
+  ```bash
+  ./bmu aws allow-my-ip --env personal-rehearsal
+  ```
+
+  Expected: "'personal-rehearsal' keeps its settings in SSM. To allow <this computer's address>/32, set
+  ALLOWED_CIDRS="…" in deploy/environments/personal-rehearsal.local.conf; the account's administrator then runs
+  ./bmu aws settings push --env personal-rehearsal, and the next deploy applies it." (If this computer's address is
+  already allowed, it says "<address>/32 is already allowed." instead.) Nothing changes. Then try to write a setting
+  directly as the deployer, which the policy must refuse:
+
+  ```bash
+  aws ssm put-parameter --profile bmu-rehearsal-deploy --name /bmu-devqar/settings/ENV_LABEL --type String --value test --overwrite
+  ```
+
+  Expected: "An error occurred (AccessDeniedException) when calling the PutParameter operation: User: …
+  rehearsal-devqar-deployer/… is not authorized to perform: ssm:PutParameter …".
+- [ ] **7. When the files here disagree.** Give the files another label, then look:
+
+  ```bash
+  echo 'ENV_LABEL="AWS · rehearsal · files"' >> deploy/environments/personal-rehearsal.local.conf
+  ```
+
+  ```bash
+  ./bmu aws settings show --env personal-rehearsal
+  ```
+
+  Expected: every setting from step 3, and "ENV_LABEL=AWS · personal-rehearsal · simulated CollectionSpace   (the
+  files here: AWS · rehearsal · files)". Then `./bmu aws status --env personal-rehearsal` starts with "Note: the
+  files on this computer differ from SSM in ENV_LABEL; SSM's are used (./bmu aws settings show)." Take the line out
+  again:
+
+  ```bash
+  sed -i '' '/^ENV_LABEL=/d' deploy/environments/personal-rehearsal.local.conf
+  ```
+
+- [ ] **8. Delete refuses while something is deployed.** The rehearsal's VPC still is:
+
+  ```bash
+  ./bmu aws settings delete --env personal-rehearsal
+  ```
+
+  Expected: "'personal-rehearsal' is still deployed (bmu/devqar/rehearsal.tfstate): destroy it first (./bmu aws
+  destroy, then rehearsal-vpc destroy for a rehearsal)." Nothing is deleted.
+- [ ] **9. Clean up.** Delete the VPC and the deployer role (Terraform asks; type `yes`). With `SETTINGS=ssm` it also
+  removes `VPC_ID`, `APP_SUBNET_IDS` and `LB_SUBNET_IDS` from SSM:
+
+  ```bash
+  ./bmu aws rehearsal-vpc destroy --env personal-rehearsal
+  ```
+
+  Then delete the settings (type `personal-rehearsal` when asked). Expected: "This deletes <n> settings of
+  'personal-rehearsal' in SSM, …", "The files on this computer stay.", then "Done.":
+
+  ```bash
+  ./bmu aws settings delete --env personal-rehearsal
+  ```
+
+  Last, switch the environment back to its files, and check the setting is gone (expected: `0`):
+
+  ```bash
+  sed -i '' '/^SETTINGS=ssm$/d' deploy/environments/personal-rehearsal.local.conf && grep -c '^SETTINGS=' deploy/environments/personal-rehearsal.local.conf
+  ```
+
 ## Not tests, but still open
 
 - The design doc's "For Richard to address" list (from the October 3 comparison of the doc with the prototype).
