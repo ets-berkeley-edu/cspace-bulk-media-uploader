@@ -961,30 +961,43 @@ NAT gateway costs a few cents an hour while it exists, so do it in one sitting.
 `deploy/environments/personal-rehearsal.local.conf` from section 24 (it holds `ACCOUNT_ID` and `DOMAIN_NAME`; check
 with `ls deploy/environments/personal-rehearsal.local.conf`). Every command runs from the clone's top folder. Two
 profiles: `bmu-personal`, the account's administrator, and `bmu-rehearsal-deploy`, the deployer. `./bmu aws` picks
-the right one for each command (`ADMIN_PROFILE` and `AWS_PROFILE` in `personal-rehearsal.conf`). Sign in once:
+the right one for each command (`ADMIN_PROFILE` and `AWS_PROFILE` in `personal-rehearsal.conf`).
+
+**Terraform's output.** Steps 1 and 9 run Terraform, so their commands pipe it through `tfsummary` (the team's tool,
+`_team/tools/tfsummary` in rtl-team-notes, on your `PATH`). `tfsummary` shortens the plan to one line per resource
+and masks account numbers, addresses and secrets. Terraform's "Enter a value:" prompt still shows, so you review
+the plan and type `yes` as usual. `tee` saves the summary to a file in `/tmp` named for the step, which you can hand
+to Claude to read instead of pasting it. `tfsummary` also keeps the whole output, masked, in `~/.cache/tfsummary/` and
+prints that file's name at the end. `set -o pipefail` keeps the command's own exit status through the pipe.
+
+Sign in once:
 
 ```bash
 aws sso login --profile bmu-personal
 ```
 
-- [ ] **1. The deployer role, with the new policy.** As the administrator, make the rehearsal's VPC and deployer
+- [x] **1. The deployer role, with the new policy.** As the administrator, make the rehearsal's VPC and deployer
   role:
 
   ```bash
-  ./bmu aws rehearsal-vpc --env personal-rehearsal
+  set -o pipefail; ./bmu aws rehearsal-vpc --env personal-rehearsal 2>&1 | tfsummary | tee /tmp/bmu-checklist-31-step1.txt
   ```
 
-  Expected: Terraform's plan lists the VPC, its subnets and NAT gateway, the role `rehearsal-devqar-deployer` and
-  its three policies, as in section 24, step 1. Type `yes`. It saves `VPC_ID`, `APP_SUBNET_IDS` and `LB_SUBNET_IDS`
-  in the `.local.conf`, and says the deployer's profile is in `~/.aws/config` (from section 24). Check that the
-  policy that was made includes the new statement:
+  Expected: the summary of Terraform's plan lists the VPC, its subnets and NAT gateway, the role
+  `rehearsal-devqar-deployer` and its three policies, as in section 24, step 1. Type `yes`. It saves `VPC_ID`,
+  `APP_SUBNET_IDS` and `LB_SUBNET_IDS` in the `.local.conf`, and says "The deployer's profile bmu-rehearsal-deploy is
+  in ~/.aws/config." (from section 24). The last line is `tfsummary`'s, naming the full log. The summary is in
+  `/tmp/bmu-checklist-31-step1.txt`. (If it prints a `[profile bmu-rehearsal-deploy]` section instead, its role ARN
+  is masked there: `aws configure get role_arn --profile bmu-rehearsal-deploy` shows what `~/.aws/config` has, and the
+  role is `rehearsal-devqar-deployer` in this account.) Check that the policy that was made includes the new
+  statement:
 
   ```bash
   python3 deploy/iam/split-policy.py --check
   ```
 
   Expected: three parts, the third ending in `KeyAlias, SettingsRead`.
-- [ ] **2. Switched on, with nothing in SSM yet.** Add the setting to the `.local.conf`, then ask for the status, as
+- [x] **2. Switched on, with nothing in SSM yet.** Add the setting to the `.local.conf`, then ask for the status, as
   the deployer:
 
   ```bash
@@ -999,7 +1012,7 @@ aws sso login --profile bmu-personal
   under /bmu-devqar/settings/." and, on the next line, "The account's administrator puts them there from
   deploy/environments/personal-rehearsal.conf and deploy/environments/personal-rehearsal.local.conf: ./bmu aws
   settings push --env personal-rehearsal". No `AccessDenied`: the deployer may list the parameters.
-- [ ] **3. Put them there, as the administrator.**
+- [x] **3. Put them there, as the administrator.**
 
   ```bash
   ./bmu aws settings push --env personal-rehearsal
@@ -1013,14 +1026,14 @@ aws sso login --profile bmu-personal
   [y/N]". Type `y`. Expected: "Done. ./bmu aws plan --env personal-rehearsal shows what they change." Run the same
   command again. Expected: "SSM already has these settings for 'personal-rehearsal' (account <your account>,
   /bmu-devqar/settings/)." and no question.
-- [ ] **4. What SSM holds.** As the administrator, list the parameters' names and types (not their values):
+- [x] **4. What SSM holds.** As the administrator, list the parameters' names and types (not their values):
 
   ```bash
   aws ssm get-parameters-by-path --path /bmu-devqar/settings --profile bmu-personal --query 'Parameters[].[Name,Type]' --output text
   ```
 
   Expected: one line per setting from step 3, each `String` (not `SecureString`: none is a secret).
-- [ ] **5. The deployer reads them.**
+- [x] **5. The deployer reads them.**
 
   ```bash
   ./bmu aws status --env personal-rehearsal
@@ -1028,7 +1041,7 @@ aws sso login --profile bmu-personal
 
   Expected: "Settings: SSM Parameter Store, /bmu-devqar/settings/ (./bmu aws settings show)", then "Not deployed
   (./bmu aws deploy).", with no `AccessDenied` and no "differ" note.
-- [ ] **6. The deployer can't write them.** First through `./bmu aws`:
+- [x] **6. The deployer can't write them.** First through `./bmu aws`:
 
   ```bash
   ./bmu aws allow-my-ip --env personal-rehearsal
@@ -1046,7 +1059,7 @@ aws sso login --profile bmu-personal
 
   Expected: "An error occurred (AccessDeniedException) when calling the PutParameter operation: User: …
   rehearsal-devqar-deployer/… is not authorized to perform: ssm:PutParameter …".
-- [ ] **7. When the files here disagree.** Give the files another label, then look:
+- [x] **7. When the files here disagree.** Give the files another label, then look:
 
   ```bash
   echo 'ENV_LABEL="AWS · rehearsal · files"' >> deploy/environments/personal-rehearsal.local.conf
@@ -1065,7 +1078,7 @@ aws sso login --profile bmu-personal
   sed -i '' '/^ENV_LABEL=/d' deploy/environments/personal-rehearsal.local.conf
   ```
 
-- [ ] **8. Delete refuses while something is deployed.** The rehearsal's VPC still is:
+- [x] **8. Delete refuses while something is deployed.** The rehearsal's VPC still is:
 
   ```bash
   ./bmu aws settings delete --env personal-rehearsal
@@ -1073,12 +1086,17 @@ aws sso login --profile bmu-personal
 
   Expected: "'personal-rehearsal' is still deployed (bmu/devqar/rehearsal.tfstate): destroy it first (./bmu aws
   destroy, then rehearsal-vpc destroy for a rehearsal)." Nothing is deleted.
-- [ ] **9. Clean up.** Delete the VPC and the deployer role (Terraform asks; type `yes`). With `SETTINGS=ssm` it also
+- [x] **9. Clean up.** Delete the VPC and the deployer role (Terraform asks; type `yes`). With `SETTINGS=ssm` it also
   removes `VPC_ID`, `APP_SUBNET_IDS` and `LB_SUBNET_IDS` from SSM:
 
   ```bash
-  ./bmu aws rehearsal-vpc destroy --env personal-rehearsal
+  set -o pipefail; ./bmu aws rehearsal-vpc destroy --env personal-rehearsal 2>&1 | tfsummary | tee /tmp/bmu-checklist-31-step9.txt
   ```
+
+  Expected: "This deletes the rehearsal's VPC, NAT gateway and deployer role in account <masked>. Terraform asks
+  first.", the summary of what Terraform destroys, and after `yes`, "Done. The [profile bmu-rehearsal-deploy] section
+  in ~/.aws/config can go too." (keep it for the next rehearsal). The summary is in
+  `/tmp/bmu-checklist-31-step9.txt`.
 
   Then delete the settings (type `personal-rehearsal` when asked). Expected: "This deletes <n> settings of
   'personal-rehearsal' in SSM, …", "The files on this computer stay.", then "Done.":
@@ -1092,6 +1110,13 @@ aws sso login --profile bmu-personal
   ```bash
   sed -i '' '/^SETTINGS=ssm$/d' deploy/environments/personal-rehearsal.local.conf && grep -c '^SETTINGS=' deploy/environments/personal-rehearsal.local.conf
   ```
+
+**Result (13 November 2026): steps 1 to 9 passed** on `personal-rehearsal`. The deployer read the settings and was
+refused `ssm:PutParameter` by IAM. Step 9 found one bug: once `rehearsal-vpc destroy` had removed `VPC_ID`,
+`settings delete` stopped at the check that a rehearsal has its VPC, so a rehearsal's settings could never be
+deleted. The `settings` commands are now exempt from that check and the load balancer's, as `rehearsal-vpc` is
+(commit "aws.sh: settings commands don't need a rehearsal's VPC", with a test); with it, the delete passed.
+Everything the section made is gone again.
 
 ## Not tests, but still open
 
