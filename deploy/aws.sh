@@ -122,8 +122,8 @@ load_env() {
   ! grep -Eq '^[[:space:]]*(VPC_ID|APP_SUBNET_IDS|LB_SUBNET_IDS|DOMAIN_NAME)=' "$CONF" ||
     die "Put VPC_ID, APP_SUBNET_IDS, LB_SUBNET_IDS and DOMAIN_NAME in $LOCAL, which isn't committed, not in $CONF."
   case "${CREATE_GATEWAY_ENDPOINTS:=false}" in true|false) ;; *) die "CREATE_GATEWAY_ENDPOINTS must be true or false ($LOCAL)." ;; esac
-  if [ "$CMD" = rehearsal-vpc ]; then
-    :   # it makes the VPC, and saves VPC_ID and APP_SUBNET_IDS
+  if [ "$CMD" = rehearsal-vpc ] || [ "$CMD" = settings ]; then
+    :   # rehearsal-vpc makes the VPC and saves its IDs; settings delete runs once it is gone
   elif [ "$REHEARSAL" = true ] && [ -z "$VPC_ID" ]; then
     die "'$ENV' is a rehearsal: first ./bmu aws rehearsal-vpc --env $ENV (it makes the VPC and the deployer, as $ADMIN_PROFILE)."
   elif [ -n "$VPC_ID" ]; then
@@ -132,7 +132,7 @@ load_env() {
     [ -z "$APP_SUBNET_IDS$LB_SUBNET_IDS" ] && [ "$CREATE_GATEWAY_ENDPOINTS" = false ] ||
       die "APP_SUBNET_IDS, LB_SUBNET_IDS and CREATE_GATEWAY_ENDPOINTS need VPC_ID ($LOCAL)."
   fi
-  if [ "$FRONT_DOOR" = alb ] && [ "$CMD" != rehearsal-vpc ]; then
+  if [ "$FRONT_DOOR" = alb ] && [ "$CMD" != rehearsal-vpc ] && [ "$CMD" != settings ]; then
     [ -n "$VPC_ID" ] && [ -n "$LB_SUBNET_IDS" ] ||
       die "FRONT_DOOR=alb needs VPC_ID and LB_SUBNET_IDS: the VPC's public subnets, in two zones, for the internet-facing load balancer ($LOCAL)."
     [ -n "$DOMAIN_NAME" ] ||

@@ -825,3 +825,16 @@ def test_status_says_where_the_settings_are(tree):
     r = run(tree, "status", museums=f"pahma={QA}")
     assert r.returncode == 0, r.stderr
     assert "Settings: SSM Parameter Store, /bmu-dev/settings/" in r.stdout
+
+
+def test_a_rehearsals_settings_can_be_deleted_once_its_vpc_is_gone(tree):
+    """rehearsal-vpc destroy removes VPC_ID (and the subnets); settings delete comes after it (checklist section 31)."""
+    local = write_env(tree, local_extra=SSM_LOCAL + 'REHEARSAL=true\nVPC_ID="vpc-0abc"\nAPP_SUBNET_IDS="subnet-0a,subnet-0b"\n')
+    push(tree)
+    for key in ("VPC_ID", "APP_SUBNET_IDS"):
+        (tree / "log" / "ssm" / "bmu-dev" / "settings" / key).unlink()
+    local.write_text("\n".join(l for l in local.read_text().splitlines() if not l.startswith(("VPC_ID", "APP_SUBNET"))) + "\n")
+    assert "is a rehearsal: first" in run(tree, "plan").stderr  # the other commands still need the VPC
+    r = run(tree, "settings", "delete", answers="t\n")
+    assert r.returncode == 0, r.stderr
+    assert ssm(tree) == {}
