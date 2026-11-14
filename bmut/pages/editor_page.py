@@ -5,6 +5,7 @@ import re
 from collections.abc import Callable
 
 from selenium.webdriver.common.by import By
+from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.support.select import Select
 
 from bmut.files import jpeg
@@ -16,6 +17,7 @@ class EditorPage(Page):
     JOB_NAME = by_id("job-name")
     FILE_INPUT = by_id("file-input")
     COUNTS = by_id("document-counts")  # "2 documents · nothing to fix"
+    DOCUMENTS = by_id("documents-table")  # aria-busy while the job loads and while its checks are out
     SAVE = by_id("save-draft-btn")
     SUBMIT = by_id("submit-job-btn")
     SAVED = by_id("saved-note")
@@ -127,13 +129,7 @@ class EditorPage(Page):
 
     def checks_of(self, n: int) -> list[str]:
         """The document's checks ("Must fix: No object …"), from its details, which this opens."""
-        toggle = by_id(f"document-{n}-toggle-btn")
-        if self.wait_for(toggle).get_attribute("aria-expanded") != "true":
-            self.click(toggle)
-        # The details are drawn once they come into view (DocumentRow.vue, v-lazy)
-        detail = self.wait_for(by_id(f"document-{n}-detail"))
-        self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'})", detail)
-        self.wait_for((By.CSS_SELECTOR, f"#document-{n}-detail .dense-fields"))
+        self.expand(n)
         return [str(e.get_attribute("textContent")).strip()
                 for e in self.driver.find_elements(By.CSS_SELECTOR, f"#document-{n}-detail .check")]
 
@@ -143,11 +139,24 @@ class EditorPage(Page):
         restricted, portal, select, file, toggle-btn, replace-btn, retry-btn…"""
         return by_id(f"document-{n}-{name}")
 
+    def wait_for_checks(self, timeout: float = 30) -> None:
+        """Waits until the editor has the answers to its checks against CollectionSpace (the documents table's
+        aria-busy), as it has once a job opens and after each change. An answer can change documents' statuses, and
+        with them the columns' widths and every row's place: a click sent as it lands can miss what it aimed at."""
+        def answered(driver: WebDriver) -> bool:
+            return any(e.get_attribute("aria-busy") == "false" for e in driver.find_elements(*self.DOCUMENTS))
+
+        self.wait_until(answered, timeout)
+
     def expand(self, n: int) -> None:
-        """Opens the document's details and waits for its fields (drawn once they come into view)."""
+        """Opens the document's details and waits for its fields (drawn once they come into view). It waits for the
+        checks first: Selenium scrolls the button just into view, so a row that moves as their answer lands moves
+        the button from under the click."""
         toggle = self.field(n, "toggle-btn")
+        self.wait_for_checks()
         if self.wait_for(toggle).get_attribute("aria-expanded") != "true":
             self.click(toggle)
+            self.wait_until(lambda d: d.find_element(*toggle).get_attribute("aria-expanded") == "true")
         detail = self.wait_for(self.field(n, "detail"))
         self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'})", detail)
         self.wait_for((By.CSS_SELECTOR, f"#document-{n}-detail .dense-fields"))

@@ -390,7 +390,12 @@
             Clear selection
           </button>
         </v-alert>
-        <v-table id="documents-table" class="border documents-table rounded" density="compact">
+        <v-table
+          id="documents-table"
+          :aria-busy="isLoading || checking.size > 0"
+          class="border documents-table rounded"
+          density="compact"
+        >
           <thead>
             <tr>
               <th class="thumb-col" scope="col"><span class="sr-only">Preview</span></th>
@@ -668,6 +673,9 @@ type Message = {type: 'error' | 'warning' | 'info', text: string}
 const message = ref<Message | null>(null)
 const isBusy = ref(false)
 const checking = reactive(new Set<number>()) // rows waiting for a CollectionSpace check
+// From opening a job until its checks have started. With `checking`, the table's aria-busy: a check's answer can change
+// rows' statuses, and so the column widths and every row's place, so the browser tests wait for it (bmut, EditorPage).
+const isLoading = ref(false)
 const deleting = reactive(new Set<number>()) // rows whose deletion was sent; they stay, marked, until the answer
 const selected = reactive(new Set<number>())
 // The languages vocabulary, for the repeating Language pickers (loaded once, from CollectionSpace).
@@ -855,15 +863,20 @@ async function load(id: string | null) {
     name.value = ''
     return
   }
-  const r = await api.job(id)
-  job.value = r.job
-  rows.value = r.rows
-  name.value = r.job.name
-  if (r.job.status === 'Draft' && !r.job.editingByYou && props.mode !== 'preview') await openForEditing(props.takeOverSince ?? undefined)
-  // Design: checks reflect CollectionSpace as it is now (drafts, and previews of queued jobs). Rows whose lookups
-  // are stale are checked again.
-  if (r.job.status === 'Draft' || r.job.status === 'Queued') void runChecks(r.rows.map((x) => x.n), false)
-  watchRun()
+  isLoading.value = true
+  try {
+    const r = await api.job(id)
+    job.value = r.job
+    rows.value = r.rows
+    name.value = r.job.name
+    if (r.job.status === 'Draft' && !r.job.editingByYou && props.mode !== 'preview') await openForEditing(props.takeOverSince ?? undefined)
+    // Design: checks reflect CollectionSpace as it is now (drafts, and previews of queued jobs). Rows whose lookups
+    // are stale are checked again.
+    if (r.job.status === 'Draft' || r.job.status === 'Queued') void runChecks(r.rows.map((x) => x.n), false)
+    watchRun()
+  } finally {
+    isLoading.value = false
+  }
 }
 
 // A running job's preview lists each document's run state, refreshed while it runs (design: Run duration and the UI).
