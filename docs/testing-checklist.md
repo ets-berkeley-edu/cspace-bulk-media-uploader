@@ -1085,7 +1085,9 @@ aws sso login --profile bmu-personal
   ```
 
   Expected: "'personal-rehearsal' is still deployed (bmu/devqar/rehearsal.tfstate): destroy it first (./bmu aws
-  destroy, then rehearsal-vpc destroy for a rehearsal)." Nothing is deleted.
+  destroy, then rehearsal-vpc destroy for a rehearsal)." Nothing is deleted. (Since the deploy pipeline, the message
+  also names `pipeline destroy`: "… destroy it first (./bmu aws destroy, pipeline destroy, then rehearsal-vpc destroy
+  for a rehearsal).")
 - [x] **9. Clean up.** Delete the VPC and the deployer role (Terraform asks; type `yes`). With `SETTINGS=ssm` it also
   removes `VPC_ID`, `APP_SUBNET_IDS` and `LB_SUBNET_IDS` from SSM:
 
@@ -1117,6 +1119,197 @@ refused `ssm:PutParameter` by IAM. Step 9 found one bug: once `rehearsal-vpc des
 deleted. The `settings` commands are now exempt from that check and the load balancer's, as `rehearsal-vpc` is
 (commit "aws.sh: settings commands don't need a rehearsal's VPC", with a test); with it, the delete passed.
 Everything the section made is gone again.
+
+## 32. The deploy pipeline, proven on personal-rehearsal (14 November 2026; about 3 hours, in the personal account)
+
+Branch `feature/deploy-pipeline`, the pipeline's third pull request; doing this section is the fourth (design:
+Deploys, BP12). The deploy pipeline is the only way an environment with UC Berkeley data is to be deployed: someone
+starts the Deploy workflow in GitHub, it plans in AWS CodeBuild in the environment's own account, a reviewer reads the
+plan there and approves it in GitHub, and the apply applies exactly that plan (`deploy/README.md`, The deploy
+pipeline). This section proves it end to end on `personal-rehearsal`, in the personal account, with the simulated
+CollectionSpace: no museum data. The build's role has only the deployer policy, so the proof also checks that policy
+again. Afterwards everything is deleted, the GitHub environments too. Note here anything that doesn't match, above
+all any `AccessDenied` in a build's log: the action, the resource, and the fix.
+
+**Before you start.**
+
+- This pull request is merged: GitHub runs a workflow started by hand only from `main`. In your BMU clone, on `main`,
+  pulled (`git switch main && git pull`). Every command runs from the clone's top folder.
+- `deploy/environments/personal-rehearsal.local.conf` from section 24, with `ACCOUNT_ID` and `DOMAIN_NAME`, and
+  without `SETTINGS=ssm` (section 31 took it out).
+- Two AWS profiles: `bmu-personal`, the account's administrator, and `bmu-rehearsal-deploy`, the deployer.
+  `./bmu aws` picks the right one for each command. Sign in once: `aws sso login --profile bmu-personal`.
+- `gh` signed in as an administrator of the repository (`gh auth status`): `./bmu aws pipeline` reads the GitHub
+  environments' rules and the repository's OIDC settings through it, and can set the environments' secrets.
+- The AWS console, signed in to the personal account as the administrator: the plans are read there.
+- The Terraform steps pipe their output through `tfsummary` and save it in `/tmp` (as in section 31), to hand to
+  Claude.
+- It costs a few dollars: the NAT gateway, the load balancer and the services, for the hours they exist.
+
+- [ ] **1. The GitHub environments, with their rules.** The pipeline's roles trust them, so they come first. In the
+  repository's Settings › Environments, make two:
+  - `personal-rehearsal-plan`: Deployment branches and tags › Selected branches and tags › add the branch `main`.
+    No reviewers.
+  - `personal-rehearsal`: the same `main` rule, and Required reviewers › yourself. Leave "Prevent self-review"
+    unchecked: you'll start the runs and approve them (allowed here because the environment uses the simulated
+    CollectionSpace; for `ucb-qa` only with `ALLOW_SELF_REVIEW=true` in its committed `.conf`).
+
+  Check:
+
+  ```bash
+  gh api repos/ets-berkeley-edu/cspace-bulk-media-uploader/environments --jq '.environments[].name'
+  ```
+
+  Expected: both names (and any others the repository has).
+- [ ] **2. The rehearsal's VPC and deployer role**, as the administrator, as in section 31, step 1:
+
+  ```bash
+  set -o pipefail; ./bmu aws rehearsal-vpc --env personal-rehearsal 2>&1 | tfsummary | tee /tmp/bmu-checklist-32-step2.txt
+  ```
+
+  Expected: the VPC, its subnets and NAT gateway, the role `rehearsal-devqar-deployer` and its three policies are
+  created (type `yes`); it saves `VPC_ID`, `APP_SUBNET_IDS` and `LB_SUBNET_IDS` in the `.local.conf`.
+- [ ] **3. The settings in SSM**, as in section 31, steps 2 and 3:
+
+  ```bash
+  echo 'SETTINGS=ssm' >> deploy/environments/personal-rehearsal.local.conf
+  ```
+
+  ```bash
+  ./bmu aws settings push --env personal-rehearsal
+  ```
+
+  Expected: the `+` lines, among them `SIMULATED_CSPACE=true`, `FRONT_DOOR=alb`, `DOMAIN_NAME`, `VPC_ID` and
+  `REHEARSAL=true`; type `y`; "Done. …".
+- [ ] **4. The pipeline's AWS side**, as the administrator:
+
+  ```bash
+  set -o pipefail; ./bmu aws pipeline --env personal-rehearsal 2>&1 | tfsummary | tee /tmp/bmu-checklist-32-step4.txt
+  ```
+
+  Expected, in order: "note: self-review is allowed (an environment with the simulated CollectionSpace)"; "The roles
+  trust GitHub's tokens for repo:ets-berkeley-edu@…/cspace-bulk-media-uploader@…:environment:personal-rehearsal-plan
+  and :personal-rehearsal."; then "GitHub's OIDC provider: the account's own (this pipeline doesn't make another)." if
+  the account already has one (CI's ECR Public role made one, section 22), or "… this pipeline makes (or keeps) it."
+  if not. Terraform's plan creates the roles `pipeline-bmu-personal-rehearsal-plan`, `-apply` and `-build`, the build
+  role's three policies `pipeline-bmu-personal-rehearsal-build-1` to `-3` and its inline `pipeline` and
+  `simulator-dns` policies, two CodeBuild projects, the log group `/pipeline/bmu-personal-rehearsal`, the bucket of
+  plans with its settings, and the OIDC provider only in the second case. Nothing named `bmu-…`. Type `yes`. Then
+  "Set them now with gh, signed in as you? Type y or n:": type `y`. It sets the secret `AWS_ROLE_ARN` and the variable
+  `AWS_REGION` on both GitHub environments. It ends with "Next: Actions › Deploy › Run workflow, from main, with the
+  environment personal-rehearsal. …". Check:
+
+  ```bash
+  gh secret list --repo ets-berkeley-edu/cspace-bulk-media-uploader --env personal-rehearsal
+  ```
+
+  Expected: `AWS_ROLE_ARN`. (The same with `--env personal-rehearsal-plan`.)
+- [ ] **5. The first run: the image repositories and the certificate.** In GitHub: Actions › Deploy › Run workflow,
+  "Use workflow from" `main`, environment `personal-rehearsal`, Run workflow. Expected: the plan job's summary shows
+  "Image repositories and certificate | N to add, 0 to change, 0 to destroy", "The BMU | not planned this run", and
+  "Only the image repositories and certificate change this time: approve, then run the deploy again for the rest.",
+  with a link to the build in the AWS console. Open it (signed in as the administrator) and read the plan in the log:
+  the two image repositories, their lifecycle policies, and the certificate for `DOMAIN_NAME`. Nothing in the job's
+  log shows the account number or the plan. Then the apply job waits: Review deployments › `personal-rehearsal` ›
+  Approve and deploy. Expected: its summary says "The image repositories and certificate are applied: run the deploy
+  again for the rest."
+- [ ] **6. The certificate.** Run the workflow again. If the certificate isn't issued yet, the summary says "The
+  certificate waits for its DNS validation record, which is in the build log." and there's nothing to approve: read
+  the record (a CNAME, its name and value) in the build's log, add it in Route 53 if it isn't there already from
+  section 24 (the same name gets the same record), and wait until it's issued:
+
+  ```bash
+  aws acm list-certificates --profile bmu-personal --region us-west-2 --query 'CertificateSummaryList[].[DomainName,Status]' --output text
+  ```
+
+  Expected: your `DOMAIN_NAME`, `ISSUED`. (If the record from section 24 is still in Route 53, the certificate may be
+  issued before this run, which then goes straight to step 7.)
+- [ ] **7. The BMU.** Run the workflow again. Expected: the plan build builds and pushes both images, tagged with the
+  commit's first 12 characters (about 10 minutes the first time), then the summary shows "The BMU | N to add, 0 to
+  change, 0 to destroy" and "Read the plan in the build log, then approve the deploy if it is what you expect." In
+  the build's log: no CloudFront, no VPC or subnets of its own, the gateway endpoints, the internet-facing load
+  balancer, the WAF and the simulator. Approve. The apply build takes 5 to 10 minutes. Expected: "Applied.", and at
+  the end of the apply build's log "AWS · personal-rehearsal · simulated CollectionSpace is deployed at commit …",
+  "DNS: <DOMAIN_NAME> must point at the load balancer …" and "Next: ./bmu aws sim-secrets --env personal-rehearsal".
+  Any `AccessDenied` in either build: note it here (the build's role has only the deployer policy).
+- [ ] **8. The name's DNS record.** In Route 53, point `DOMAIN_NAME` at the load balancer the log named (a CNAME), as
+  in section 24, step 4.
+- [ ] **9. The simulator's read-only account**, which a deploy from a laptop sets itself and the build can't:
+
+  ```bash
+  ./bmu aws sim-secrets --env personal-rehearsal
+  ```
+
+  Expected: "The read-only account for interns' checks is the simulator's bmureader." and "Done: the simulator's
+  read-only account is set (nothing is shown)."
+- [ ] **10. The app.** `./bmu aws status --env personal-rehearsal`. Expected: "Deployed by: its pipeline (Actions ›
+  Deploy); ./bmu aws deploy here is break-glass", the image tag is the commit's first 12 characters, web and worker
+  "running 1 of 1". Then from this computer, `https://<DOMAIN_NAME>`: sign in as `admin`, make a job with a file,
+  submit it (it runs at once), see it finish; sign in as `intern` and open a draft.
+- [ ] **11. A run with no changes.** Run the workflow again. Expected: the plan job's summary says "No changes: the
+  environment matches this commit. Nothing to approve.", and the apply job is skipped.
+- [ ] **12. Pause and resume through the pipeline.**
+
+  ```bash
+  ./bmu aws pause --env personal-rehearsal
+  ```
+
+  Expected: "Saved RUNNING=false in SSM (/bmu-devqar/settings/RUNNING), as bmu-personal." and "The pipeline applies
+  it: Actions › Deploy › Run workflow, from main, with the environment personal-rehearsal." Nothing changes yet. Run
+  the workflow: the plan has changes (the services' task counts), approve it, and once applied `./bmu aws status
+  --env personal-rehearsal` shows "RUNNING=false in SSM: …" and web and worker "running 0 of 0". Then
+  `./bmu aws resume --env personal-rehearsal` ("Saved RUNNING=true …"), run the workflow, approve: both running again.
+- [ ] **13. Break-glass.** First, refused:
+
+  ```bash
+  ./bmu aws deploy --env personal-rehearsal
+  ```
+
+  Expected: "'personal-rehearsal' has a deploy pipeline (pipeline-bmu-personal-rehearsal-…): it deploys it (Actions ›
+  Deploy, from main)." and "Type 'break glass' to go ahead:". Type `no`: "Stopped; nothing was deployed." Then the same
+  command again, typing `break glass`: an ordinary deploy from this computer, as the deployer (Terraform asks; type
+  `yes`), with an image tagged with the commit and the time. Then run the workflow: the plan has changes (back to the
+  commit's image); approve it. That run is the check that the environment matches `main` again.
+- [ ] **14. Clean up, in this order.** Delete the environment (type `personal-rehearsal` when asked):
+
+  ```bash
+  ./bmu aws destroy --env personal-rehearsal
+  ```
+
+  Expected at the end: "Its deploy pipeline stays: the account's administrator deletes it with ./bmu aws pipeline
+  destroy --env personal-rehearsal." Delete the name's CNAME in Route 53 (keep the certificate's validation record
+  for next time, if you like). Then the pipeline, as the administrator (Terraform asks; type `yes`):
+
+  ```bash
+  set -o pipefail; ./bmu aws pipeline destroy --env personal-rehearsal 2>&1 | tfsummary | tee /tmp/bmu-checklist-32-step14.txt
+  ```
+
+  Expected: "This deletes the deploy pipeline of 'personal-rehearsal' …"; if this pipeline made GitHub's OIDC provider
+  (step 4), it says so and asks you to answer no if anything else in the account uses it. Then "Done. Delete the GitHub
+  environments personal-rehearsal-plan and personal-rehearsal too." Then the VPC and the deployer role, the settings
+  (type `personal-rehearsal`), and back to the files:
+
+  ```bash
+  set -o pipefail; ./bmu aws rehearsal-vpc destroy --env personal-rehearsal 2>&1 | tfsummary | tee /tmp/bmu-checklist-32-step14-vpc.txt
+  ```
+
+  ```bash
+  ./bmu aws settings delete --env personal-rehearsal
+  ```
+
+  ```bash
+  sed -i '' '/^SETTINGS=ssm$/d' deploy/environments/personal-rehearsal.local.conf && grep -c '^SETTINGS=' deploy/environments/personal-rehearsal.local.conf
+  ```
+
+  Expected: `0`. Last, the GitHub environments:
+
+  ```bash
+  gh api -X DELETE repos/ets-berkeley-edu/cspace-bulk-media-uploader/environments/personal-rehearsal-plan
+  ```
+
+  ```bash
+  gh api -X DELETE repos/ets-berkeley-edu/cspace-bulk-media-uploader/environments/personal-rehearsal
+  ```
 
 ## Not tests, but still open
 

@@ -21,17 +21,19 @@ prototype: the image is built from this repository and runs on ECS Fargate. Demo
 
 | Command | What it does |
 | --- | --- |
-| `./bmu aws deploy` | Builds the image and pushes it, then shows Terraform's plan and, after you type `yes`, applies it and waits until the app is up. Prints the address and saves it for `./bmu open aws`. |
+| `./bmu aws deploy` | Builds the image and pushes it, then shows Terraform's plan and, after you type `yes`, applies it and waits until the app is up. Prints the address and saves it for `./bmu open aws`. With a real CollectionSpace it first asks you to type the account's number (UC Berkeley data only in UC Berkeley accounts); in an environment with a deploy pipeline it is a break-glass deploy (see "The deploy pipeline"). |
 | `./bmu aws plan` | Shows what a deploy of the running image would change, without changing anything. |
 | `./bmu aws status` | Shows the address, the running tasks, the deployed image, the allowed addresses, and each museum with its server and whether its read-only account is set. |
 | `./bmu aws url` | Prints the address. |
 | `./bmu aws logs web` / `worker` / `fakecspace` | Follows a service's logs, starting with the last 30 minutes. `fakecspace` only with the simulated CollectionSpace. |
-| `./bmu aws pause` / `resume` | Stops or starts both services to save money. The data stays. Terraform shows the change and asks first. |
+| `./bmu aws pause` / `resume` | Stops or starts both services to save money. The data stays. Terraform shows the change and asks first. In an environment with a deploy pipeline, it sets `RUNNING` in SSM instead, as the account's administrator, and the next pipeline run applies it. |
 | `./bmu aws allow-my-ip` | Adds this computer's current address to the allowlist, and applies it. With `SETTINGS=ssm` it says what to add to `ALLOWED_CIDRS` instead. |
 | `./bmu aws reader-secret [museum]` | Sets or changes the sign-in of a museum's read-only CollectionSpace account, which checks its interns' drafts. It asks for the user name and password; see below. The museum can be left out when the environment serves only one. |
 | `./bmu aws destroy` | Deletes everything in AWS for the environment, data included. It asks for the environment's name first. |
 | `./bmu aws rehearsal-vpc [destroy]` | A rehearsal environment only (`REHEARSAL=true`): makes, or deletes, what Operations provides in UC Berkeley's account, a VPC with a NAT gateway and a deployer role with only the deployer policy, signed in as the account's administrator. See "Rehearsing the deploy in your own account". |
 | `./bmu aws settings push` / `show` / `delete` | An environment with `SETTINGS=ssm`, as the account's administrator: puts its settings in SSM Parameter Store from its files (showing what changes and asking), lists them, or deletes them once it is destroyed. See "Settings in SSM Parameter Store". |
+| `./bmu aws pipeline [destroy]` | An environment with `SETTINGS=ssm`, as the account's administrator: makes, or deletes, its deploy pipeline. See "The deploy pipeline". |
+| `./bmu aws sim-secrets` | With the simulated CollectionSpace, in an environment the pipeline deploys: sets the simulator's read-only account, which a deploy from a laptop sets itself. Nothing is shown. |
 | `./bmu aws ci-role` | Once per account: the role CI assumes to sign in to ECR Public (see "CI's sign-in to ECR Public" below). Prints the command that sets the repository's `ECR_PUBLIC_ROLE_ARN` variable. |
 
 **Picking the environment.** Add `--env NAME`, or set `BMU_AWS_ENV`. The default is `personal-dev`.
@@ -399,6 +401,84 @@ person's computer, so that everyone who deploys it, and later the deploy pipelin
 
 The values are private but not secret (the account number, Operations' VPC and subnets, the allowed ranges, the
 BMU's name): no password or key is ever a setting.
+
+Two settings are in SSM only, never in the files, and `settings push` leaves them alone: `REAL_DATA_ACCOUNT`, the
+account an administrator confirmed for UC Berkeley data (`./bmu aws pipeline` writes it), and `RUNNING`, whether the
+services run in an environment with a deploy pipeline (`./bmu aws pause` and `resume` write it). `settings show`
+marks both.
+
+## The deploy pipeline
+
+An environment with UC Berkeley data is deployed by its pipeline, not from someone's laptop (design: Deploys, BP1 to
+BP14; modelled on Serena's). Someone starts it in GitHub, it plans in AWS CodeBuild in the environment's own account,
+a reviewer reads the plan there and approves it in GitHub, and the apply applies exactly that plan. Terraform's plans
+never reach the public repository's Actions logs.
+
+**What it is.**
+
+- `.github/workflows/deploy.yml`, started by hand (Actions › Deploy › Run workflow), from `main`, choosing the
+  environment (`personal-rehearsal` or `ucb-qa`). One run at a time per environment.
+- Two GitHub environments per AWS environment, which you make first (repository Settings › Environments):
+  `<env>-plan` (deployments from `main` only, no reviewer) and `<env>` (from `main` only, with required reviewers and
+  "Prevent self-review", unless the environment's committed `.conf` says `ALLOW_SELF_REVIEW=true`, for QA only; an
+  environment with the simulated CollectionSpace may allow it without). Each gets the secret `AWS_ROLE_ARN` and the
+  variable `AWS_REGION`, which `./bmu aws pipeline` offers to set with `gh`.
+- `deploy/terraform/pipeline`, the pipeline's AWS side, applied by `./bmu aws pipeline` as the account's
+  administrator (`ADMIN_PROFILE`), never by the deployer: the roles `pipeline-bmu-<env>-plan` and `-apply`, which
+  only the matching GitHub environment's jobs can assume, each able only to start its own CodeBuild project and read
+  its status; the projects `pipeline-bmu-<env>-plan` and `-apply` (ARM, Docker, no VPC, the public repository at the
+  run's commit); the build's role `pipeline-bmu-<env>-build`, with the deployer policy's parts as Operations attaches
+  them (and, with the simulator, `iam/bmu-simulator-dns-policy.json`), denied reading or setting any secret's value,
+  changing any SSM parameter and writing the pipeline's, the rehearsal's or CI's Terraform state; the log group
+  `/pipeline/bmu-<env>`, kept a year; and the private bucket `pipeline-bmu-<env>-plans-<account>-<region>`, whose
+  plans are deleted after 7 days. Its state is `bmu/<BMU_ENV_NAME>/pipeline.tfstate`. GitHub's OIDC provider is made
+  only where the account has none; in UC Berkeley's account, Serena's pipeline made it, so destroying Serena's
+  pipeline there needs the provider handed over first.
+- `deploy/pipeline/`: the buildspecs, `prepare.sh` (Terraform at CI's version, checked against its SHA256; the commit
+  checked to be on `main`) and `run-build.sh` (what the workflow's jobs run: it starts a build, waits, and reads only
+  its exported counts).
+
+**A run.** The plan job starts the plan build, which runs `./bmu aws pipeline-plan`: it plans the registry (image
+repositories, certificate), builds and pushes the images tagged with the commit's first 12 characters (skipped if
+already pushed), then plans the BMU, writing the plans' text to its log and saving the plan files. The job's summary
+shows only the counts and a link to the build in the AWS console: sign in to the account and read the plan there. If
+there are changes, the apply job waits for a reviewer in the GitHub environment `<env>`; once approved, the apply
+build runs `./bmu aws pipeline-apply`, which applies exactly those files (the same commit, at most 24 hours old, and
+Terraform refuses a plan whose state has changed). A run with no changes needs no approval: it is the check that the
+environment matches `main`. If the registry changes (a new environment, a new certificate), that run applies only the
+registry: run it again for the rest. A certificate not yet issued stops the run at its validation record, which is
+in the plan build's log.
+
+**What changes for `./bmu aws` once an environment has a pipeline.** `deploy` from a laptop is a break-glass deploy:
+it asks you to type "break glass", and is only for when the pipeline is broken and a deploy is urgent; the next
+pipeline run confirms the environment matches `main`. `pause` and `resume` set `RUNNING` in SSM, as the account's
+administrator, and the next pipeline run applies it. `allow-my-ip` refuses (the allowed ranges are a setting:
+change them in the files, `settings push`, then run the pipeline). `status` says the pipeline deploys it. `plan`,
+`logs`, `url`, `reader-secret` and `destroy` are as before; after a destroy, `./bmu aws pipeline destroy` deletes the
+pipeline, then `settings delete`.
+
+**UC Berkeley data only in UC Berkeley accounts.** For an environment with a real CollectionSpace, `./bmu aws
+pipeline` asks the administrator to type the account's number and records it as `REAL_DATA_ACCOUNT` in SSM; the
+builds refuse UC Berkeley data without it. A deploy from a laptop of such an environment asks the person deploying to
+type the account's number every time.
+
+**Secrets never pass through a build.** Terraform creates each secret empty, and an administrator sets it from a
+laptop: `./bmu aws reader-secret`, or, with the simulated CollectionSpace, `./bmu aws sim-secrets` after the first
+pipeline run (a deploy from a laptop sets the simulator's account itself). The apply build's log ends with the
+command to run if one isn't set.
+
+**Making one.** As the account's administrator, for an environment with `SETTINGS=ssm` whose settings are pushed:
+
+```bash
+./bmu aws pipeline --env <env>
+```
+
+It checks through GitHub's API that both GitHub environments exist with their rules (signed in with `gh` as an
+administrator of the repository), asks for the account's number if the environment has UC Berkeley data, shows
+Terraform's plan and asks, then offers to set the GitHub environments' secret and variable. `./bmu aws pipeline
+--env <env> destroy` deletes it (and GitHub's OIDC provider, if this pipeline made it: answer no if anything else in
+the account uses it); then delete the two GitHub environments. Testing checklist section 32 proves it on
+`personal-rehearsal`.
 
 ## Rehearsing the deploy in your own account
 
