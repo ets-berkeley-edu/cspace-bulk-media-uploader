@@ -73,6 +73,12 @@ env_settings() {
     *) echo "Unknown environment '$1': use sim, qa or shared." >&2; exit 2 ;;
   esac
 }
+# Stopping the test stack, or reading its logs, starts nothing, but Compose still wants every variable
+# docker-compose.yml names. The stack's keys were ./bmu test's own and are gone by then, so placeholders stand in
+# (only where none are set; they never reach a container that starts).
+placeholder_keys() {
+  export BMU_SESSION_KEY_B64="${BMU_SESSION_KEY_B64:-placeholder}" BMU_JOB_KEY_B64="${BMU_JOB_KEY_B64:-placeholder}"
+}
 ui_port() { case "$1" in sim) echo 5173 ;; qa) echo 5273 ;; shared) echo 5673 ;; test) echo 5573 ;; esac; }
 
 compose() {  # compose <env> <args...>
@@ -146,6 +152,7 @@ case "$cmd" in
     if [ -n "$AWS_DEV_URL" ]; then echo "aws ($AWS_ENV): $AWS_DEV_URL   (./bmu aws status checks it)"; else echo "aws ($AWS_ENV): not deployed yet (./bmu aws deploy)"; fi ;;
   logs)
     env="${1:-sim}"; shift || true
+    [ "$env" = test ] && placeholder_keys
     compose "$env" logs -f --tail 100 "$@" ;;
   open)
     case "${1:-home}" in
@@ -195,6 +202,7 @@ case "$cmd" in
     echo "The test stack is still running (./bmu test-down stops it). Failed tests' screenshots: bmut/.run/failures/"
     exit "$status" ;;
   test-down)
+    placeholder_keys
     compose test down ;;
   help|-h|--help)
     sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//' ;;
