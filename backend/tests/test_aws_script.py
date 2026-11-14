@@ -91,7 +91,13 @@ case "$*" in
   *"output -raw alb_dns_name"*) echo "bmu-dev-123.us-west-2.elb.amazonaws.com" ;;
   *"output -raw certificate_arn"*) echo "${FAKE_CERT_ARN-arn:aws:acm:us-west-2:111122223333:certificate/abc}" ;;
   *"output -raw role_arn"*) echo "arn:aws:iam::$FAKE_ACCOUNT:role/bmu-ci-ecr-public-pull" ;;
-  *"state list"*) echo "${FAKE_CI_STATE:-}" ;;
+  *"state list"*)
+    # FAKE_STATE_LIST: none, as for a root never applied; broken, as for a state that can't be read
+    case "${FAKE_STATE_LIST:-}" in
+      none) echo "No state file was found!" >&2; exit 1 ;;
+      broken) echo "Error: Failed to load state: AccessDenied" >&2; exit 1 ;;
+    esac
+    echo "${FAKE_CI_STATE:-}" ;;
   *" plan "*|*" apply "*|*" destroy "*)
     printf '%s\n' "$@" > "$FAKE_LOG_DIR/terraform-$(printf '%s\n' "$@" | grep -m1 -x -E 'plan|apply|destroy')-${1#-chdir=deploy/terraform/}"
     [ "$2" != plan ] || echo "PLANNED tenants=$(printf '%s\n' "$@" | sed -n 's/^tenants=//p')" ;;
@@ -548,6 +554,24 @@ def test_ci_role_keeps_an_oidc_provider_its_own_state_created(tree):
     r = run(tree, "ci-role", oidc_providers=existing, ci_state="aws_iam_openid_connect_provider.github[0]")
     assert r.returncode == 0, r.stderr
     assert "-var=create_oidc_provider=true" in (tree / "log" / "terraform-apply-ci").read_text().splitlines()
+
+
+@pytest.mark.parametrize("providers, create", [("", "true"), (f"arn:aws:iam::{ACCOUNT}:oidc-provider/token.actions.githubusercontent.com", "false")])
+def test_a_root_never_applied_has_no_state_yet_and_holds_no_provider(tree, providers, create):
+    """terraform state list fails with "No state file was found!" before a root's first apply (checklist section 32,
+    step 4): the root holds nothing, so it makes the provider only where the account has none."""
+    write_env(tree)
+    r = run(tree, "ci-role", oidc_providers=providers, state_list="none")
+    assert r.returncode == 0, r.stderr
+    assert f"-var=create_oidc_provider={create}" in (tree / "log" / "terraform-apply-ci").read_text().splitlines()
+
+
+def test_a_state_that_cant_be_read_stops_before_anything_is_planned(tree):
+    write_env(tree)
+    r = run(tree, "ci-role", state_list="broken")
+    assert r.returncode == 1
+    assert "Couldn't read ci's Terraform state" in r.stderr
+    assert not (tree / "log" / "terraform-apply-ci").exists()
 
 
 # ---- the front door (FRONT_DOOR, DOMAIN_NAME) and REQUIRE_CLEAN -------------------------------------------------------
