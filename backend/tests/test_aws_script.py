@@ -12,6 +12,9 @@
   once deployed (check_front_door); REQUIRE_CLEAN (check_clean).
 - the settings in SSM Parameter Store (SETTINGS=ssm; settings push, show and delete): pushed by the administrator,
   read by every other command, never written by the deployer.
+- the deploy pipeline: UC Berkeley data only in a UC Berkeley account (a deploy asks; the build needs
+  REAL_DATA_ACCOUNT), a deploy from here is break-glass once there is a pipeline, pause and resume set RUNNING for it,
+  and the plan build (pipeline-plan) in a checkout, as CodeBuild runs it.
 """
 import json
 import os
@@ -143,8 +146,14 @@ def write_env(tree, url=QA, account=ACCOUNT, local_extra="", museums=None):
     return envs / "t.local.conf"
 
 
-def run(tree, *args, answers="", **fake):
-    env = {k: v for k, v in os.environ.items() if not k.startswith(("FAKE_", "AWS_", "BMU_AWS"))}
+def run(tree, *args, answers="", confirm=True, extra_env=None, **fake):
+    # A deploy with a real CollectionSpace first asks for the account's number (UC Berkeley data only in UC Berkeley
+    # accounts, BP7): answered here unless confirm=False. With the simulator nothing is asked, and the line is left unread.
+    if args and args[0] == "deploy" and confirm:
+        answers = f"{ACCOUNT}\n{answers}"
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("FAKE_", "AWS_", "BMU_AWS", "CODEBUILD_", "PIPELINE_", "PLAN_ID"))}
+    env.update(extra_env or {})
     env["PATH"] = f"{tree / 'bin'}{os.pathsep}{env['PATH']}"
     env["FAKE_ACCOUNT"] = ACCOUNT
     env["FAKE_LOG_DIR"] = str(tree / "log")
@@ -838,3 +847,146 @@ def test_a_rehearsals_settings_can_be_deleted_once_its_vpc_is_gone(tree):
     r = run(tree, "settings", "delete", answers="t\n")
     assert r.returncode == 0, r.stderr
     assert ssm(tree) == {}
+
+
+# ---- the deploy pipeline (design: Deploys) ----------------------------------------------------------------------------
+
+DEPLOYED = '{"resources": [{"type": "x"}]}'  # a state with something in it: here, every one of the environment's
+
+
+def test_a_deploy_with_a_real_collectionspace_asks_for_the_accounts_number(tree):
+    write_env(tree, museums=f"pahma={QA}")
+    r = run(tree, "deploy", answers="999988887777\n", confirm=False)
+    assert r.returncode == 1
+    assert "WARNING: 't' uses a real CollectionSpace: pahma" in r.stdout and "UC Berkeley AWS account" in r.stdout
+    assert "Stopped; nothing was deployed." in r.stderr and "DOCKER" not in r.stdout
+    r = run(tree, "deploy", answers=f"{ACCOUNT}\n", confirm=False)
+    assert r.returncode == 0, r.stderr
+
+
+def test_a_deploy_with_the_simulator_asks_nothing(tree):
+    write_env(tree, local_extra="SIMULATED_CSPACE=true\n")
+    r = run(tree, "deploy", confirm=False, secret_versions=1)
+    assert r.returncode == 0, r.stderr
+    assert "WARNING" not in r.stdout
+
+
+def test_once_an_environment_has_a_pipeline_a_deploy_from_here_is_break_glass(tree):
+    write_env(tree, museums=f"pahma={QA}")
+    r = run(tree, "deploy", answers="yes\n", confirm=False, state_json=DEPLOYED, museums=f"pahma={QA}")
+    assert r.returncode == 1
+    assert "has a deploy pipeline (pipeline-bmu-t-…)" in r.stdout and "as a break-glass deploy" in r.stdout
+    assert "Stopped; nothing was deployed." in r.stderr and "DOCKER" not in r.stdout
+    r = run(tree, "deploy", answers=f"break glass\n{ACCOUNT}\n", confirm=False, state_json=DEPLOYED, museums=f"pahma={QA}")
+    assert r.returncode == 0, r.stderr
+    assert (tree / "log" / "terraform-apply-app").exists()
+
+
+def test_without_a_pipeline_a_deploy_from_here_is_an_ordinary_one(tree):
+    write_env(tree, museums=f"pahma={QA}")
+    r = run(tree, "deploy", museums=f"pahma={QA}")
+    assert r.returncode == 0, r.stderr
+    assert "break glass" not in r.stdout
+
+
+def test_in_a_pipeline_environment_pause_and_resume_set_running_for_the_pipeline(tree):
+    write_env(tree, museums=f"pahma={QA}", local_extra=SSM_LOCAL)
+    push(tree)
+    r = run(tree, "pause", state_json=DEPLOYED, museums=f"pahma={QA}")
+    assert r.returncode == 0, r.stderr
+    assert ssm(tree)["RUNNING"] == "false"
+    assert "put /bmu-dev/settings/RUNNING as bmu-admin" in ssm_writes(tree)  # the administrator, not the deployer
+    assert "The pipeline applies it: Actions › Deploy" in r.stdout
+    assert not (tree / "log" / "terraform-apply-app").exists()  # nothing is applied from here
+    r = run(tree, "status", state_json=DEPLOYED, museums=f"pahma={QA}")
+    assert "Deployed by: its pipeline" in r.stdout and "RUNNING=false in SSM" in r.stdout
+    r = run(tree, "resume", state_json=DEPLOYED, museums=f"pahma={QA}")
+    assert r.returncode == 0, r.stderr
+    assert ssm(tree)["RUNNING"] == "true"
+    # settings push leaves RUNNING alone: it isn't in the files
+    assert "RUNNING" not in push(tree).stdout and ssm(tree)["RUNNING"] == "true"
+
+
+def test_without_a_pipeline_pause_applies_at_once(tree):
+    write_env(tree, museums=f"pahma={QA}")
+    r = run(tree, "pause", museums=f"pahma={QA}")
+    assert r.returncode == 0, r.stderr
+    assert "Paused: no tasks run" in r.stdout and tf_args(tree, "apply-app")["running"] == "false"
+
+
+@pytest.mark.parametrize("line, where", [("ALLOW_SELF_REVIEW=true", "local"), ("RUNNING=false", "local"),
+                                         ("REAL_DATA_ACCOUNT=111122223333", "local"), ("RUNNING=false", "conf")])
+def test_settings_that_belong_elsewhere_are_refused(tree, line, where):
+    """ALLOW_SELF_REVIEW only in the committed .conf (BP8); REAL_DATA_ACCOUNT and RUNNING only in SSM."""
+    local = write_env(tree, local_extra=line + "\n" if where == "local" else "")
+    if where == "conf":
+        conf = tree / "deploy" / "environments" / "t.conf"
+        conf.write_text(conf.read_text() + line + "\n")
+    r = run(tree, "plan")
+    assert r.returncode == 1 and "Remove them from" in r.stderr, r.stderr
+    assert local.exists()
+
+
+def test_pipeline_needs_settings_in_ssm(tree):
+    write_env(tree)
+    r = run(tree, "pipeline")
+    assert r.returncode == 1 and "add SETTINGS=ssm to" in r.stderr
+
+
+@pytest.mark.parametrize("command", ["pipeline-plan", "pipeline-apply"])
+def test_the_build_commands_run_only_in_a_build(tree, command):
+    write_env(tree)
+    r = run(tree, command)
+    assert r.returncode == 1 and "runs only in the pipeline's builds" in r.stderr
+
+
+def plan_build(tree, **fake):
+    """./bmu aws pipeline-plan as the plan build runs it: no profile, the settings from SSM, its result in a file."""
+    result = tree / "log" / "result"
+    env = {"CODEBUILD_BUILD_ID": "pipeline-bmu-t-plan:0123abcd-4567", "PIPELINE_PLANS": "plans-bucket",
+           "PIPELINE_RESULT": str(result), "BMU_AWS_ENV": "t"}
+    r = run(tree, "pipeline-plan", extra_env=env, **fake)
+    return r, (result.read_text() if result.exists() else "")
+
+
+def test_the_plan_build_with_no_changes(clean_checkout):
+    tree = clean_checkout
+    write_env(tree, local_extra=SSM_LOCAL + "SIMULATED_CSPACE=true\n")
+    commit_and_push(tree)
+    push(tree)
+    before = ssm_writes(tree)
+    r, result = plan_build(tree)
+    assert r.returncode == 0, r.stderr
+    assert "PLAN_STATUS=no-changes" in result and "PLAN_ID=0123abcd-4567" in result
+    args = tf_args(tree, "plan-app")
+    commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=tree, capture_output=True, text=True).stdout.strip()
+    assert args["image_uri"] == f"repo/bmu-dev:{commit[:12]}"  # tagged with the commit, not the time
+    assert args["running"] == "true"
+    assert "-detailed-exitcode" in (tree / "log" / "terraform-plan-app").read_text()
+    assert ssm_writes(tree) == before  # the build writes no setting
+
+
+def test_the_plan_build_keeps_a_paused_environment_paused(clean_checkout):
+    tree = clean_checkout
+    write_env(tree, local_extra=SSM_LOCAL + "SIMULATED_CSPACE=true\n")
+    commit_and_push(tree)
+    push(tree)
+    (tree / "log" / "ssm" / "bmu-dev" / "settings" / "RUNNING").write_text("false")
+    r, _ = plan_build(tree)
+    assert r.returncode == 0, r.stderr
+    assert tf_args(tree, "plan-app")["running"] == "false"
+
+
+def test_the_plan_build_needs_an_administrators_confirmation_for_uc_berkeley_data(clean_checkout):
+    tree = clean_checkout
+    write_env(tree, museums=f"pahma={QA}", local_extra=SSM_LOCAL)
+    commit_and_push(tree)
+    push(tree)
+    r, _ = plan_build(tree)
+    assert r.returncode == 1
+    assert "no administrator has confirmed that its account is UC Berkeley's" in r.stderr
+    assert not (tree / "log" / "terraform-plan-registry").exists()
+    (tree / "log" / "ssm" / "bmu-dev" / "settings" / "REAL_DATA_ACCOUNT").write_text(ACCOUNT)
+    r, result = plan_build(tree)
+    assert r.returncode == 0, r.stderr
+    assert "PLAN_STATUS=no-changes" in result

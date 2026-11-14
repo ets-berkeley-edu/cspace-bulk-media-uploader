@@ -208,3 +208,9 @@ jobs:
           terraform init -backend=false -lockfile=readonly
           terraform validate
           terraform test
+      - name: Validate and test the deploy pipeline
+        working-directory: deploy/terraform/pipeline
+        run: |
+          terraform init -backend=false -lockfile=readonly
+          terraform validate
+          terraform test

@@ -90,8 +90,9 @@ can create security groups and their rules, and the S3 and DynamoDB gateway endp
   them (`bmu-simulator-dns-policy.json`). The UC Berkeley environment uses PAHMA's QA CollectionSpace, never the
   simulator; a deploy with `SIMULATED_CSPACE=true` as this role fails with `AccessDenied` on Route 53.
 - **`./bmu aws ci-role`** (CI's ECR Public role and the GitHub OIDC provider) isn't for this role.
-- **A deploy pipeline** (GitHub OIDC and CodeBuild), as for Serena: decided (`docs/design.md`, Deploys), not built
-  yet. Its own roles are made by the account's administrator, not by this role.
+- **The deploy pipeline** (GitHub OIDC and CodeBuild; `../README.md`, The deploy pipeline). Its roles are made by the
+  account's administrator with `./bmu aws pipeline`, not by this role. Its build role gets this policy's parts exactly
+  as Operations attaches them, so a deploy by the pipeline needs nothing this policy doesn't allow.
 - The role can't list its own policies (its IAM reads are limited to `bmu-*` roles). That's expected.
 
 ## Also needed from Operations, outside the policy

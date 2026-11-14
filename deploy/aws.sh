@@ -23,6 +23,21 @@
 #   ./bmu aws settings push|show|delete   an environment with SETTINGS=ssm (BP4), as ADMIN_PROFILE: put its settings
 #                           in SSM Parameter Store from its files (shows what changes and asks), list them (marking any
 #                           the files here disagree with), or delete them once the environment is destroyed
+#   ./bmu aws pipeline [destroy]   as the account's administrator (ADMIN_PROFILE), for an environment with
+#                           SETTINGS=ssm: make (or delete) its deploy pipeline (deploy/terraform/pipeline): the roles the
+#                           deploy workflow assumes, the CodeBuild projects and their role, and GitHub's OIDC provider
+#                           where the account has none
+#   ./bmu aws sim-secrets   with the simulated CollectionSpace, in a pipeline environment: set the simulator's
+#                           read-only account, which a deploy from here sets itself (nothing is shown)
+#   ./bmu aws pipeline-plan | pipeline-apply   only in the pipeline's builds (deploy/pipeline/): no questions, the
+#                           build's own role, the settings from SSM
+#
+# Once an environment has a deploy pipeline (docs/design.md, Deploys), the pipeline deploys it: ./bmu aws deploy from a
+# laptop is a break-glass deploy (it asks you to type "break glass"), pause and resume set RUNNING in SSM for the next
+# pipeline run, as the administrator, and allow-my-ip refuses (the allowed ranges change with settings push). A deploy
+# of an environment with a real CollectionSpace (UC Berkeley's data) asks the person deploying to type the account's
+# number, and the pipeline's builds need the account an administrator confirmed (REAL_DATA_ACCOUNT): UC Berkeley data
+# only in UC Berkeley accounts.
 #
 # Which environment: --env NAME or BMU_AWS_ENV (default personal-dev). Its settings are in
 # deploy/environments/NAME.conf; NAME.local.conf (not committed) holds the account number and allowed addresses.
@@ -75,7 +90,7 @@ load_env() {
   [ -f "$CONF" ] || die "No settings for environment '$ENV' ($CONF). Environments: $(ls "$ENV_DIR" | sed -n 's/\.conf$//p' | grep -v '\.local$' | tr '\n' ' ')"
   ACCOUNT_ID="" ALLOWED_CIDRS="" SIMULATED_CSPACE="" ENV_LABEL="" CSPACE_TENANTS="" TENANT="" CSPACE_URL=""
   WAF_ENABLED="" ORIGIN_DOMAIN="" ORIGIN_CERTIFICATE_ARN="" FRONT_DOOR="" DOMAIN_NAME="" PROTECT_DATA="" ALWAYS_RUN_TIME=""
-  REQUIRE_CLEAN="" WAF_MANAGED_RULES="" SETTINGS=""
+  REQUIRE_CLEAN="" WAF_MANAGED_RULES="" SETTINGS="" ALLOW_SELF_REVIEW="" REAL_DATA_ACCOUNT="" RUNNING=""
   VPC_ID="" APP_SUBNET_IDS="" LB_SUBNET_IDS="" CREATE_GATEWAY_ENDPOINTS="" REHEARSAL="" ADMIN_PROFILE=""
   # shellcheck disable=SC1090
   . "$CONF"
@@ -83,12 +98,24 @@ load_env() {
   # shellcheck disable=SC1090
   [ -f "$LOCAL" ] && . "$LOCAL"
   CERTIFICATE_ARN=""   # not a setting: load_certificate reads it from ../registry's state
+  # BP8: only the committed settings file may allow self-review, so allowing it is a reviewed change.
+  if [ -f "$LOCAL" ] && grep -Eq '^[[:space:]]*(ALLOW_SELF_REVIEW|REAL_DATA_ACCOUNT|RUNNING)=' "$LOCAL" ||
+     grep -Eq '^[[:space:]]*(REAL_DATA_ACCOUNT|RUNNING)=' "$CONF"; then
+    die "ALLOW_SELF_REVIEW goes only in $CONF, the committed file (BP8); REAL_DATA_ACCOUNT and RUNNING only in SSM, where ./bmu aws pipeline, pause and resume put them. Remove them from $LOCAL or $CONF."
+  fi
+  case "${ALLOW_SELF_REVIEW:=false}" in true|false) ;; *) die "ALLOW_SELF_REVIEW must be true or false ($CONF)." ;; esac
   : "${AWS_PROFILE:?set AWS_PROFILE in $CONF}" "${AWS_REGION:?set AWS_REGION in $CONF}" "${BMU_ENV_NAME:?set BMU_ENV_NAME in $CONF}"
   NAME="bmu-$BMU_ENV_NAME"   # the cluster's name and the prefix of every resource
-  # A rehearsal's VPC and deployer, and the settings in SSM, are the account administrator's to make: the deployer
-  # can't make itself, and only reads the settings.
+  # A rehearsal's VPC and deployer, the settings in SSM and the pipeline are the account administrator's to make: the
+  # deployer can't make itself, and only reads the settings.
   DEPLOYER_PROFILE="$AWS_PROFILE"
-  case "$CMD" in settings|rehearsal-vpc) [ -z "$ADMIN_PROFILE" ] || AWS_PROFILE="$ADMIN_PROFILE" ;; esac
+  case "$CMD" in settings|rehearsal-vpc|pipeline) [ -z "$ADMIN_PROFILE" ] || AWS_PROFILE="$ADMIN_PROFILE" ;; esac
+  # The pipeline's builds sign in as the build's own role, and always read the settings from SSM.
+  IN_BUILD=false
+  case "$CMD" in pipeline-plan|pipeline-apply)
+    [ -n "${CODEBUILD_BUILD_ID:-}" ] || die "./bmu aws $CMD runs only in the pipeline's builds (deploy/pipeline/)."
+    IN_BUILD=true SETTINGS=ssm; unset AWS_PROFILE ;;
+  esac
   case "${SETTINGS:=files}" in files|ssm) ;; *) die "SETTINGS must be files or ssm ($CONF, $LOCAL)." ;; esac
   [ "$SETTINGS" = files ] || [ "$CMD" = settings ] || from_ssm   # settings push reads the files
   case "${REHEARSAL:=false}" in true|false) ;; *) die "REHEARSAL must be true or false ($CONF)." ;; esac
@@ -138,13 +165,23 @@ load_env() {
     [ -n "$DOMAIN_NAME" ] ||
       die "FRONT_DOOR=alb needs DOMAIN_NAME in $LOCAL: the BMU's name (from Operations in UC Berkeley's account; in a rehearsal, a name in a DNS zone you control)."
   fi
-  export AWS_PAGER="" AWS_PROFILE AWS_REGION   # Terraform signs in with the same profile
-  # Keys in the shell would win over the profile in Terraform (though not in "aws --profile"): never use them here.
-  unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+  case "${RUNNING:=true}" in true|false) ;; *) die "RUNNING must be true or false (SSM, $(settings_path)/RUNNING)." ;; esac
+  export AWS_PAGER="" AWS_REGION
+  # Terraform signs in with the same profile. In a build, the build's role is in the environment, and is kept.
+  if [ "$IN_BUILD" = false ]; then
+    export AWS_PROFILE
+    # Keys in the shell would win over the profile in Terraform (though not in "aws --profile"): never use them here.
+    unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+  fi
   export TF_IN_AUTOMATION=1
 }
 
-aws_() { aws --profile "$AWS_PROFILE" --region "$AWS_REGION" "$@"; }
+# The AWS CLI with the environment's profile; in the pipeline's builds, the build's role.
+aws_() {
+  if [ -n "${AWS_PROFILE:-}" ]; then aws --profile "$AWS_PROFILE" --region "$AWS_REGION" "$@"
+  else aws --region "$AWS_REGION" "$@"
+  fi
+}
 
 # ---- the museums ----------------------------------------------------------------------------------------------------
 # MUSEUMS is "museum=server museum=server", each server without a trailing /: from CSPACE_TENANTS, or else TENANT and
@@ -223,16 +260,31 @@ SSM_SETTINGS="ACCOUNT_ID ALLOWED_CIDRS SIMULATED_CSPACE ENV_LABEL CSPACE_TENANTS
   APP_SUBNET_IDS LB_SUBNET_IDS CREATE_GATEWAY_ENDPOINTS REHEARSAL"
 # Always from the files: what says how to reach the account, SETTINGS itself, and REQUIRE_CLEAN, a rule about the
 # checkout a deploy is run from, which belongs with the committed code.
-FILE_SETTINGS="AWS_PROFILE AWS_REGION BMU_ENV_NAME ADMIN_PROFILE SETTINGS REQUIRE_CLEAN"
+FILE_SETTINGS="AWS_PROFILE AWS_REGION BMU_ENV_NAME ADMIN_PROFILE SETTINGS REQUIRE_CLEAN ALLOW_SELF_REVIEW"
+# In SSM only, never pushed from the files (settings push leaves them alone) and never written by the build: the account
+# an administrator confirmed for UC Berkeley data (./bmu aws pipeline, BP7), and whether the services run (./bmu aws
+# pause and resume in a pipeline environment, BP5).
+PIPELINE_SETTINGS="REAL_DATA_ACCOUNT RUNNING"
 
 is_ssm_setting() { case " $(echo $SSM_SETTINGS) " in *" $1 "*) true ;; *) false ;; esac; }
+is_pipeline_setting() { case " $PIPELINE_SETTINGS " in *" $1 "*) true ;; *) false ;; esac; }
 settings_path() { echo "/$NAME/settings"; }
 
-# The account AWS_PROFILE is signed in to; stops with the command that signs in if it isn't.
+# Who the AWS calls are made as, for messages.
+signed_in_as() {
+  if [ -n "${AWS_PROFILE:-}" ]; then echo "Profile $AWS_PROFILE"; else echo "The build's role"; fi
+}
+
+# The account AWS_PROFILE (in a build, the build's role) is signed in to; stops with the command that signs in if it
+# isn't. A build has no SSO token: CodeBuild gives it the role's credentials.
 signed_in_account() {
   local who
-  who="$(aws_ sts get-caller-identity --query Account --output text 2>/dev/null)" && sso_token_ok ||
-    die "Not signed in to AWS for '$ENV'. Run: $(sign_in_hint)"
+  if [ "${IN_BUILD:-false}" = true ]; then
+    who="$(aws_ sts get-caller-identity --query Account --output text)" || die "The build's role can't sign in (above)."
+  else
+    who="$(aws_ sts get-caller-identity --query Account --output text 2>/dev/null)" && sso_token_ok ||
+      die "Not signed in to AWS for '$ENV'. Run: $(sign_in_hint)"
+  fi
   echo "$who"
 }
 
@@ -271,7 +323,7 @@ from_ssm() {
   export AWS_PAGER=""
   who="$(signed_in_account)" || exit 1
   [ -z "$ACCOUNT_ID" ] || [ "$ACCOUNT_ID" = "$who" ] ||
-    die "Profile $AWS_PROFILE is signed in to account $who, but '$ENV' is account $ACCOUNT_ID ($LOCAL). Stopped."
+    die "$(signed_in_as) is signed in to account $who, but '$ENV' is account $ACCOUNT_ID ($LOCAL). Stopped."
   lines="$(ssm_settings)"
   [ -n "$lines" ] || die "'$ENV' keeps its settings in SSM (SETTINGS=ssm), and account $who has none under $(settings_path)/.
 The account's administrator puts them there from $CONF and $LOCAL: ./bmu aws settings push --env $ENV"
@@ -280,11 +332,13 @@ The account's administrator puts them there from $CONF and $LOCAL: ./bmu aws set
 "
     printf -v "$key" '%s' "$(setting_in "$key" "$lines")"
   done
+  for key in $PIPELINE_SETTINGS; do printf -v "$key" '%s' "$(setting_in "$key" "$lines")"; done
   [ "$ACCOUNT_ID" = "$who" ] ||
     die "SSM's ACCOUNT_ID for '$ENV' (${ACCOUNT_ID:-none}) isn't the account it is in ($who): ./bmu aws settings push --env $ENV"
   while IFS='	' read -r key value; do
     [ -n "$key" ] || continue
-    is_ssm_setting "$key" || echo "Note: $(settings_path)/$key in SSM isn't a setting ./bmu aws reads; ignored." >&2
+    is_ssm_setting "$key" || is_pipeline_setting "$key" ||
+      echo "Note: $(settings_path)/$key in SSM isn't a setting ./bmu aws reads; ignored." >&2
   done <<EOF
 $lines
 EOF
@@ -348,7 +402,9 @@ settings_show() {
   echo "'$ENV' in SSM, account $ACCOUNT_ID, $(settings_path)/:"
   [ -n "$lines" ] || { echo "  none yet (./bmu aws settings push --env $ENV)"; return 0; }
   while IFS='	' read -r key value; do
-    if ! is_ssm_setting "$key"; then echo "  $key=$value   (not a setting ./bmu aws reads; ignored)"
+    if [ "$key" = REAL_DATA_ACCOUNT ]; then echo "  $key=$value   (set by ./bmu aws pipeline)"
+    elif [ "$key" = RUNNING ]; then echo "  $key=$value   (set by ./bmu aws pause and resume)"
+    elif ! is_ssm_setting "$key"; then echo "  $key=$value   (not a setting ./bmu aws reads; ignored)"
     elif [ "${!key}" != "$value" ]; then echo "  $key=$value   (the files here: ${!key:-not set})"
     else echo "  $key=$value"
     fi
@@ -362,9 +418,9 @@ EOF
 
 settings_delete() {  # only once the environment is destroyed: a deploy, plan or destroy needs them
   local lines key value ok
-  for key in app registry rehearsal; do
+  for key in app registry pipeline rehearsal; do
     ! state_has_resources "$key" ||
-      die "'$ENV' is still deployed (bmu/$BMU_ENV_NAME/$key.tfstate): destroy it first (./bmu aws destroy, then rehearsal-vpc destroy for a rehearsal)."
+      die "'$ENV' is still deployed (bmu/$BMU_ENV_NAME/$key.tfstate): destroy it first (./bmu aws destroy, pipeline destroy, then rehearsal-vpc destroy for a rehearsal)."
   done
   lines="$(ssm_settings)"
   [ -n "$lines" ] || { echo "'$ENV' has no settings in SSM (account $ACCOUNT_ID, $(settings_path)/)."; return 0; }
@@ -459,7 +515,7 @@ check_account() {
     check_not_someone_elses "$who"
     save_local ACCOUNT_ID "$who"; ACCOUNT_ID="$who"
   elif [ "$who" != "$ACCOUNT_ID" ]; then
-    die "Profile $AWS_PROFILE is signed in to account $who, but '$ENV' is account $ACCOUNT_ID ($LOCAL). Stopped."
+    die "$(signed_in_as) is signed in to account $who, but '$ENV' is account $ACCOUNT_ID ($LOCAL). Stopped."
   fi
   STATE_BUCKET="bmu-tfstate-$ACCOUNT_ID-$AWS_REGION"
 }
@@ -625,8 +681,11 @@ applied() {  # applied OUTPUT: a value the app was last applied with; empty if n
 # drafts, queued or running jobs, and ones needing attention or failed, which can still be fixed and run again), and
 # when its name is typed: its staging key is deleted with it, and with the key, its staged and audit files become
 # unreadable. Never where data is protected. Runs after tf_init app; nothing is checked before the first deploy.
-check_museums() {  # check_museums ask|look: ask = this command applies (removing asks first); look = plan only
+# In the pipeline's plan build (build), nobody is asked: a removal is shown with the plan, the reviewer approves it, and
+# REMOVED_MUSEUMS names it in the workflow's summary.
+check_museums() {  # check_museums ask|look|build: ask = this command applies (removing asks first); look = plan only
   local applied museum url now removed="" n ok
+  REMOVED_MUSEUMS=""
   applied="$(applied museums)"
   if [ -z "$applied" ]; then
     # Deployed before environments listed museums: one key and secret for the whole environment, which a deploy now
@@ -664,7 +723,11 @@ or deploy the new server as another environment: a different BMU_ENV_NAME in $LO
     echo "$museum is no longer in the settings. Removing it deletes its read-only account's secret and its staging key"
     echo "(after 7 days), and with the key, its staged files and audit files become unreadable. Its jobs and audit"
     echo "entries stay in the tables. Its users can no longer sign in."
-    [ "$1" = ask ] || { echo "(./bmu aws deploy asks before removing it.)"; continue; }
+    REMOVED_MUSEUMS="${REMOVED_MUSEUMS:+$REMOVED_MUSEUMS }$museum"
+    case "$1" in
+      look) echo "(./bmu aws deploy asks before removing it.)"; continue ;;
+      build) echo "(The reviewer approves its removal with this plan.)"; continue ;;
+    esac
     read -r -p "Type the museum's name ($museum) to remove it: " ok || ok=""
     [ "$ok" = "$museum" ] || die "Stopped; nothing was changed."
   done
@@ -684,8 +747,37 @@ app_url() {  # empty while a first deploy hasn't finished
   tf app output -raw url 2>/dev/null || true
 }
 
+# Once an environment has a pipeline, the pipeline deploys it (BP6): a deploy from here is break-glass, for when the
+# pipeline is broken and a deploy is urgent; the next pipeline run checks the environment matches main.
+need_break_glass() {
+  local typed
+  has_pipeline || return 0
+  echo
+  echo "'$ENV' has a deploy pipeline (pipeline-bmu-$ENV-…): it deploys it (Actions › Deploy, from main)."
+  echo "Deploy it from here only if the pipeline can't, as a break-glass deploy (design: Deploys); CloudTrail records it."
+  read -r -p "Type 'break glass' to go ahead: " typed || typed=""
+  [ "$typed" = "break glass" ] || die "Stopped; nothing was deployed."
+}
+
+# UC Berkeley data only in UC Berkeley AWS accounts (BP7). An environment with a real CollectionSpace (a museum from
+# backend/bmu/tenants/, production or QA: Lyrasis's QA tenants hold a copy of production's records) keeps that museum's
+# data in its account, so every deploy of one shows the rule and waits for the person deploying to type the account's
+# number. With the simulated CollectionSpace, nothing is asked.
+acknowledge_real_data() {
+  [ "$SIMULATED_CSPACE" != true ] || return 0
+  local typed
+  echo
+  echo "WARNING: '$ENV' uses a real CollectionSpace: $(museum_names | tr '\n' ' ')"
+  echo "The BMU keeps UC Berkeley museum data in AWS account $ACCOUNT_ID: staff's sign-ins while their jobs wait, their"
+  echo "staged media, and the records of what it created. UC Berkeley data, from production or QA, is allowed only in a"
+  echo "UC Berkeley AWS account, never in a personal one."
+  read -r -p "If $ACCOUNT_ID is a UC Berkeley account, type its number to go ahead: " typed || typed=""
+  [ "$typed" = "$ACCOUNT_ID" ] || die "Stopped; nothing was deployed."
+  echo
+}
+
 deploy() {
-  load_env; check_account; ensure_allowlist; need_terraform
+  load_env; check_account; need_break_glass; acknowledge_real_data; ensure_allowlist; need_terraform
   command -v docker >/dev/null || die "Docker isn't installed or isn't on the PATH."
   docker info >/dev/null 2>&1 || die "Docker isn't running. Start Docker Desktop and try again."
   check_clean
@@ -725,7 +817,8 @@ deploy() {
     echo "   The first time takes about 5-10 minutes; it finishes when the web app and worker are running."
   fi
   echo "   If a task can't start, Terraform waits up to 20 minutes before saying so: ./bmu aws logs web shows why sooner."
-  app_vars "$image" true "$sim_image"
+  # A deploy starts the services, except in a pipeline environment paused with ./bmu aws pause (RUNNING=false in SSM).
+  app_vars "$image" "$RUNNING" "$sim_image"
   # shellcheck disable=SC2046
   tf app apply -input=false $(approve) "${TF_VARS[@]}"
   [ "$SIMULATED_CSPACE" = false ] || sim_reader_secret
@@ -767,6 +860,28 @@ plan() {
   tf app plan -input=false "${TF_VARS[@]}"
 }
 
+# Pause or resume (BP5). In a pipeline environment, whether the services run is the setting RUNNING in SSM, which the
+# administrator sets here (the deployer can't write SSM) and the next pipeline run applies, with an approved plan.
+# Otherwise it's applied at once, as before.
+pause_resume() {  # pause_resume false|true
+  prepare
+  if has_pipeline; then
+    [ -n "$ADMIN_PROFILE" ] || die "'$ENV' has a deploy pipeline: pause and resume set RUNNING in SSM, as the account's administrator. Set ADMIN_PROFILE in $CONF."
+    AWS_PROFILE="$ADMIN_PROFILE"
+    [ "$(signed_in_account)" = "$ACCOUNT_ID" ] || die "Profile $AWS_PROFILE isn't signed in to account $ACCOUNT_ID. Stopped."
+    if [ "$RUNNING" = "$1" ]; then
+      echo "RUNNING is already $1 in SSM ($(settings_path)/RUNNING)."
+    else
+      put_setting RUNNING "$1"
+      echo "Saved RUNNING=$1 in SSM ($(settings_path)/RUNNING), as $ADMIN_PROFILE."
+    fi
+    echo "The pipeline applies it: Actions › Deploy › Run workflow, from main, with the environment $ENV."
+    return 0
+  fi
+  reapply "$1"
+  if [ "$1" = false ]; then echo "Paused: no tasks run (./bmu aws resume)."; else echo "Running: $(app_url)"; fi
+}
+
 # Apply again with the running image: for a changed setting (pause, resume, the allowlist).
 reapply() {  # reapply RUNNING
   prepare; check_clean; tf_init app; need_deployed; check_front_door; check_museums ask; need_certificate_arn
@@ -781,6 +896,10 @@ status() {
   echo "Environment: $ENV (account $ACCOUNT_ID, $AWS_REGION); Terraform state in s3://$STATE_BUCKET/bmu/$BMU_ENV_NAME/"
   if [ "$SETTINGS" = ssm ]; then echo "Settings: SSM Parameter Store, $(settings_path)/ (./bmu aws settings show)"
   else echo "Settings: $CONF and $LOCAL"; fi
+  if has_pipeline; then
+    echo "Deployed by: its pipeline (Actions › Deploy); ./bmu aws deploy here is break-glass"
+    [ "$RUNNING" = true ] || echo "RUNNING=false in SSM: the next pipeline run pauses it, or keeps it paused (./bmu aws resume)"
+  fi
   IMAGE="$(deployed_image)"
   case "$IMAGE" in ""|*"No outputs"*|*Warning*) echo "Not deployed (./bmu aws deploy)."; return 0 ;; esac
   url="$(app_url)"
@@ -915,6 +1034,8 @@ destroy() {
   [ "$FRONT_DOOR" != alb ] ||
     echo "$DOMAIN_NAME's DNS record now points at nothing: after the next deploy, Operations points it at the new load balancer."
   echo "The Terraform state bucket s3://$STATE_BUCKET is kept; it holds the (now empty) state and its history."
+  ! has_pipeline ||
+    echo "Its deploy pipeline stays: the account's administrator deletes it with ./bmu aws pipeline destroy --env $ENV."
   [ "$SETTINGS" = files ] ||
     echo "Its settings stay in SSM; once they're no longer needed, the account's administrator runs ./bmu aws settings delete --env $ENV."
 }
@@ -988,6 +1109,20 @@ rehearsal_vpc() {  # rehearsal_vpc [destroy]
   echo "Next: ./bmu aws deploy --env $ENV   (as the deployer: note every AccessDenied, checklist section 24)"
 }
 
+# GitHub's OIDC provider can exist only once in an account (BP9): a root makes it only where its own state already holds
+# it, or the account has none. Each list is read whole before it's searched: with pipefail, "terraform state list |
+# grep -q" fails when grep stops at its first match while terraform is still writing (SIGPIPE), and a provider the root
+# made then looks like the account's own, so Terraform plans to destroy it (Serena's pipeline, November 5, 2026).
+oidc_provider_create() {  # oidc_provider_create ci|pipeline: prints true or false; Terraform must be initialised
+  local state providers
+  state="$(tf "$1" state list 2>/dev/null)" ||
+    die "Couldn't read $1's Terraform state (terraform state list) for '$ENV'. Nothing was changed."
+  if grep -q '^aws_iam_openid_connect_provider\.github' <<<"$state"; then echo true; return 0; fi
+  providers="$(aws_ iam list-open-id-connect-providers --query 'OpenIDConnectProviderList[].Arn' --output text)" ||
+    die "Couldn't list the account's OIDC providers. Nothing was changed."
+  if grep -q 'oidc-provider/token\.actions\.githubusercontent\.com' <<<"$providers"; then echo false; else echo true; fi
+}
+
 # The role GitHub Actions assumes to sign in to ECR Public (deploy/terraform/ci): once per account, whichever
 # environment's settings pick the account. Uses the account's GitHub OIDC provider if it already has one that this
 # state doesn't manage, rather than creating a second (IAM allows one per URL).
@@ -998,14 +1133,9 @@ ci_role() {
     -backend-config="bucket=$STATE_BUCKET" -backend-config="key=bmu/ci/ci.tfstate" \
     -backend-config="region=$AWS_REGION" -backend-config="use_lockfile=true" >/dev/null ||
     die "terraform init failed for ci. Run it yourself to see why: terraform -chdir=$TF_DIR/ci init"
-  local create=true
-  if ! tf ci state list 2>/dev/null | grep -q '^aws_iam_openid_connect_provider\.github'; then
-    if aws_ iam list-open-id-connect-providers --query 'OpenIDConnectProviderList[].Arn' --output text |
-        grep -q 'oidc-provider/token\.actions\.githubusercontent\.com'; then
-      create=false
-      echo "The account already has GitHub's OIDC provider: using it."
-    fi
-  fi
+  local create
+  create="$(oidc_provider_create ci)" || exit 1
+  [ "$create" = true ] || echo "The account already has GitHub's OIDC provider: using it."
   # shellcheck disable=SC2046
   tf ci apply -input=false $(approve) -var="account_id=$ACCOUNT_ID" -var="region=$AWS_REGION" \
     -var="create_oidc_provider=$create"
@@ -1014,6 +1144,308 @@ ci_role() {
   echo "Now set the repository's Actions variable (a variable, not a secret: it isn't committed only because it holds"
   echo "the account number). CI's bmut job then signs in to ECR Public before pulling base images:"
   echo "  gh variable set ECR_PUBLIC_ROLE_ARN --repo $CI_REPOSITORY --body '$arn'"
+}
+
+# ---- the deploy pipeline (deploy/terraform/pipeline, deploy/pipeline/, .github/workflows/deploy.yml; design: Deploys) --
+# ./bmu aws pipeline makes an environment's pipeline, as the account's administrator; pipeline-plan and pipeline-apply
+# are what its builds run, with the build's own role and the settings from SSM, asking nothing. Modelled on Serena's.
+PIPELINE_REPO="$CI_REPOSITORY"
+
+has_pipeline() { state_has_resources pipeline; }  # whether ./bmu aws pipeline made this environment's pipeline
+
+# UC Berkeley data only in UC Berkeley accounts (BP7): the build can't ask, so for an environment with a real
+# CollectionSpace it needs the account an administrator typed at ./bmu aws pipeline, saved in SSM where the build can't
+# change it.
+need_real_data_confirmed() {
+  [ "$SIMULATED_CSPACE" != true ] || return 0
+  [ -n "$REAL_DATA_ACCOUNT" ] && [ "$REAL_DATA_ACCOUNT" = "$ACCOUNT_ID" ] ||
+    die "'$ENV' uses a real CollectionSpace, and no administrator has confirmed that its account is UC Berkeley's
+(./bmu aws pipeline --env $ENV asks). UC Berkeley data goes only in UC Berkeley accounts. Stopped."
+}
+
+result() {  # result NAME VALUE: one of the build's exported variables (the buildspec reads $PIPELINE_RESULT)
+  printf '%s=%q\n' "$1" "$2" >> "$PIPELINE_RESULT"
+}
+
+plan_counts() {  # plan_counts PART PLANFILE: what the saved plan does, as Terraform counts it
+  tf "$1" show -json "$2" | python3 -c '
+import json, sys
+count = {"create": 0, "update": 0, "delete": 0}
+for change in json.load(sys.stdin).get("resource_changes", []):
+    for action in change["change"]["actions"]:
+        if action in count:
+            count[action] += 1
+print("%(create)d to add, %(update)d to change, %(delete)d to destroy" % count)'
+}
+
+push_image() {  # push_image IMAGE DOCKER-BUILD-ARGUMENTS...: built and pushed, unless the image is already there
+  local image="$1" repo
+  shift
+  repo="${image#*/}"; repo="${repo%%:*}"
+  if aws_ ecr describe-images --repository-name "$repo" --image-ids "imageTag=${image##*:}" >/dev/null 2>&1; then
+    echo "$image is already pushed."
+    return 0
+  fi
+  docker build --pull --platform linux/arm64 -t "$image" "$@"
+  docker push "$image"
+}
+
+# The plan build: the images (tagged with the commit), then the registry's plan and the app's, their text in this
+# build's log and the files in the bucket of saved plans. Exported for the workflow: PLAN_STATUS (changes, no-changes,
+# registry-only or certificate-pending), the counts, and any museum the plan removes.
+pipeline_plan() {
+  load_env; check_account; need_terraform; need_real_data_confirmed
+  : "${PIPELINE_PLANS:?the bucket of saved plans}" "${PIPELINE_RESULT:?}"
+  ensure_state_bucket
+  local commit id dir code repo image sim_image=""
+  commit="$(git rev-parse HEAD)" id="${CODEBUILD_BUILD_ID##*:}" dir="$(mktemp -d)"
+  : > "$PIPELINE_RESULT"
+  result PLAN_ID "$id"; result REGISTRY_CHANGES "no changes"; result ROOT_CHANGES ""; result REMOVED_MUSEUMS ""
+
+  echo "== The registry: image repositories and the certificate"
+  registry_vars; tf_init registry
+  code=0
+  tf registry plan -input=false -detailed-exitcode -out="$dir/registry.tfplan" "${REGISTRY_VARS[@]}" || code=$?
+  case "$code" in 0) rm -f "$dir/registry.tfplan" ;; 2) ;; *) die "The registry's plan failed (above)." ;; esac
+  if [ "$code" = 2 ]; then
+    result REGISTRY_CHANGES "$(plan_counts registry "$dir/registry.tfplan")"
+    echo "The registry has changes. This run applies only them, since the app's plan depends on them: run the deploy"
+    echo "again afterwards."
+    save_plan "$dir" "$commit" "$id" registry-only
+    return 0
+  fi
+  load_certificate
+  if [ "$FRONT_DOOR" = alb ] && ! certificate_issued; then
+    echo "Run the deploy again once the record is in DNS and the certificate is ISSUED."
+    result PLAN_STATUS certificate-pending
+    return 0
+  fi
+
+  echo "== The images, tagged with the commit (linux/arm64)"
+  repo="$(tf registry output -raw repository_url)"
+  image="$repo:${commit:0:12}"
+  # The registry's short-lived token goes straight from the AWS CLI to Docker; it is never shown or saved.
+  aws_ ecr get-login-password | docker login --username AWS --password-stdin "${repo%%/*}" >/dev/null
+  push_image "$image" -f deploy/Dockerfile .
+  if [ "$SIMULATED_CSPACE" = true ]; then
+    sim_image="$(tf registry output -raw fakecspace_repository_url):${commit:0:12}"
+    push_image "$sim_image" -f deploy/fakecspace.Dockerfile .
+  fi
+
+  echo "== The BMU: the plan the reviewer reads"
+  tf_init app; check_front_door; check_museums build
+  result REMOVED_MUSEUMS "$REMOVED_MUSEUMS"
+  app_vars "$image" "$RUNNING" "$sim_image"
+  code=0
+  tf app plan -input=false -detailed-exitcode -out="$dir/root.tfplan" "${TF_VARS[@]}" || code=$?
+  case "$code" in
+    0) result ROOT_CHANGES "no changes"; result PLAN_STATUS no-changes
+       echo "No changes: '$ENV' matches this commit." ;;
+    2) result ROOT_CHANGES "$(plan_counts app "$dir/root.tfplan")"
+       save_plan "$dir" "$commit" "$id" changes ;;
+    *) die "The plan failed (above)." ;;
+  esac
+}
+
+save_plan() {  # save_plan DIR COMMIT ID STATUS: the plan files and what they are, in the bucket of saved plans
+  COMMIT="$2" ENVIRONMENT="$ENV" STATUS="$4" python3 -c '
+import json, os, time
+print(json.dumps({"commit": os.environ["COMMIT"], "environment": os.environ["ENVIRONMENT"],
+                  "status": os.environ["STATUS"], "made": int(time.time())}))' > "$1/plan.json"
+  aws_ s3 cp --recursive --only-show-errors "$1/" "s3://$PIPELINE_PLANS/plans/$3/"
+  result PLAN_STATUS "$4"
+  echo "Saved as plan $3. The reviewer reads it above, then approves the deploy in GitHub."
+}
+
+# The apply build: exactly the saved plans of PLAN_ID (the workflow passes the plan build's), for this commit and
+# environment, at most 24 hours old. Terraform itself refuses a plan made against a state that has changed since.
+pipeline_apply() {
+  load_env; check_account; need_terraform; need_real_data_confirmed
+  : "${PIPELINE_PLANS:?the bucket of saved plans}" "${PIPELINE_RESULT:?}" "${PLAN_ID:?PLAN_ID, from the plan build}"
+  case "$PLAN_ID" in ""|*[!0-9a-f-]*) die "PLAN_ID isn't a plan build's ID." ;; esac
+  local dir status museum
+  dir="$(mktemp -d)"
+  : > "$PIPELINE_RESULT"
+  aws_ s3 cp --recursive --only-show-errors "s3://$PIPELINE_PLANS/plans/$PLAN_ID/" "$dir/"
+  [ -f "$dir/plan.json" ] || die "No saved plan $PLAN_ID (plans are kept 7 days). Run the deploy again."
+  status="$(COMMIT="$(git rev-parse HEAD)" ENVIRONMENT="$ENV" python3 -c '
+import json, os, sys, time
+plan = json.load(open(sys.argv[1]))
+if plan["commit"] != os.environ["COMMIT"]:
+    sys.exit("Plan %s is of commit %s, not this one: run the deploy again." % (sys.argv[2], plan["commit"]))
+if plan["environment"] != os.environ["ENVIRONMENT"]:
+    sys.exit("Plan %s is for %s, not this environment." % (sys.argv[2], plan["environment"]))
+if time.time() - plan["made"] > 24 * 3600:
+    sys.exit("Plan %s is more than 24 hours old: run the deploy again." % sys.argv[2])
+print(plan["status"])' "$dir/plan.json" "$PLAN_ID")" || exit 1
+  if [ -f "$dir/registry.tfplan" ]; then
+    echo "== The registry"
+    tf_init registry
+    tf registry apply -input=false "$dir/registry.tfplan"
+  fi
+  if [ "$status" = registry-only ]; then
+    result APPLY_STATUS registry-only
+    echo "The registry is applied. Run the deploy again for the rest."
+    return 0
+  fi
+  [ "$status" = changes ] && [ -f "$dir/root.tfplan" ] || die "Plan $PLAN_ID has nothing to apply ($status)."
+  echo "== The BMU. It finishes when the web app and the worker are running."
+  tf_init app
+  tf app apply -input=false "$dir/root.tfplan"
+  result APPLY_STATUS applied
+  echo "$ENV_LABEL is deployed at commit $(git rev-parse --short HEAD): $(app_url)"
+  # The build's address isn't one the load balancer admits, so it can't check /api/health as a deploy from a laptop does.
+  [ "$FRONT_DOOR" != alb ] ||
+    echo "DNS: $DOMAIN_NAME must point at the load balancer $(applied alb_dns_name) (Operations' record)."
+  # What only an administrator can do (BP10): the build can't read or set a secret's value.
+  for museum in $(museum_names); do
+    [ "$(reader_secret_field "$museum" 'length(keys(VersionIdsToStages || `{}`))')" = 0 ] || continue
+    if [ "$SIMULATED_CSPACE" = true ]; then echo "Next: ./bmu aws sim-secrets --env $ENV"; break; fi
+    echo "Next: ./bmu aws reader-secret $museum --env $ENV"
+  done
+}
+
+gh_get() {  # gh_get PATH: a GitHub API read, signed in with gh if it's there, otherwise anonymously; empty on failure
+  if command -v gh >/dev/null && gh auth status >/dev/null 2>&1; then
+    gh api "$1" 2>/dev/null || true
+  else
+    curl -fsS -H "Accept: application/vnd.github+json" "https://api.github.com/$1" 2>/dev/null || true
+  fi
+}
+
+# The GitHub environments must exist, with their rules, before the roles that trust them (BP8): GitHub makes an
+# environment without rules the first time a job names it.
+check_github_environments() {
+  local name json branches problems="" problem
+  for name in "$ENV-plan" "$ENV"; do
+    json="$(gh_get "repos/$PIPELINE_REPO/environments/$name")"
+    if [ -z "$json" ]; then problems="$problems
+  $name: not found"; continue; fi
+    branches="$(gh_get "repos/$PIPELINE_REPO/environments/$name/deployment-branch-policies")"
+    [ -n "$branches" ] || branches='{}'
+    problem="$(NAME="$name" ENVIRONMENT="$ENV" REAL="$([ "$SIMULATED_CSPACE" = true ] && echo false || echo true)" \
+      ALLOW="$ALLOW_SELF_REVIEW" CONF="$CONF" BRANCHES="$branches" python3 -c '
+import json, os, sys
+env, branches = json.load(sys.stdin), json.loads(os.environ["BRANCHES"])
+policy = env.get("deployment_branch_policy") or {}
+names = [(b.get("name"), b.get("type", "branch")) for b in branches.get("branch_policies", [])]
+problems = []
+if not policy.get("custom_branch_policies") or names != [("main", "branch")]:
+    problems.append("deployments from main only (Deployment branches and tags: main)")
+reviewers = [r for r in env.get("protection_rules", []) if r.get("type") == "required_reviewers"]
+if os.environ["NAME"] == os.environ["ENVIRONMENT"]:
+    if not reviewers or not reviewers[0].get("reviewers"):
+        problems.append("a required reviewer")
+    elif not reviewers[0].get("prevent_self_review"):
+        if os.environ["ALLOW"] == "true":
+            print("note: self-review is allowed (ALLOW_SELF_REVIEW=true in " + os.environ["CONF"]
+                  + "; BP8: QA and dev only)", file=sys.stderr)
+        elif os.environ["REAL"] == "true":
+            problems.append("Prevent self-review (it has UC Berkeley data; BP8 allows it only with ALLOW_SELF_REVIEW=true)")
+        else:
+            print("note: self-review is allowed (an environment with the simulated CollectionSpace)", file=sys.stderr)
+print("; ".join(problems))' <<<"$json")"
+    [ -z "$problem" ] || problems="$problems
+  $name needs: $problem"
+  done
+  [ -z "$problems" ] && return 0
+  die "The GitHub environments aren't ready (repository Settings › Environments; deploy/README.md, The deploy pipeline):$problems
+Set them up first: the pipeline's roles trust them. Nothing was changed."
+}
+
+# The roles trust only tokens whose sub claim is "<this>:environment:<name>". GitHub's settings for the repository
+# decide how it begins: repo:<owner>/<name>, or, with immutable subjects, the owner's and repository's IDs too
+# (repo:<owner>@<id>/<name>@<id>), which a repository made again under the same name doesn't have.
+github_subject() {
+  local subject
+  subject="$(gh_get "repos/$PIPELINE_REPO/actions/oidc/customization/sub" | REPO="$PIPELINE_REPO" python3 -c '
+import json, os, sys
+try:
+    sub = json.load(sys.stdin)
+except ValueError:
+    sys.exit(0)
+if sub.get("use_default", True):
+    print(sub.get("sub_claim_prefix") or "repo:" + os.environ["REPO"])' 2>/dev/null || true)"
+  case "$subject" in
+    repo:*) echo "$subject" ;;
+    *) die "Couldn't read how GitHub's OIDC tokens name $PIPELINE_REPO
+(repos/$PIPELINE_REPO/actions/oidc/customization/sub): gh must be signed in as an admin of the repository.
+If the repository uses its own claim keys (use_default false), the pipeline's roles don't support it.
+Nothing was changed." ;;
+  esac
+}
+
+confirm_real_data_account() {  # for an environment with a real CollectionSpace: the account typed, and saved for the build
+  [ "$SIMULATED_CSPACE" != true ] || return 0
+  acknowledge_real_data
+  put_setting REAL_DATA_ACCOUNT "$ACCOUNT_ID"
+}
+
+set_github_secrets() {  # the roles' ARNs as the GitHub environments' AWS_ROLE_ARN, and the region as AWS_REGION
+  local mode env ok=""
+  echo
+  echo "The deploy workflow signs in with these roles: each GitHub environment needs its role's ARN as the secret"
+  echo "AWS_ROLE_ARN (a secret, so the account number is masked in the logs) and the region as the variable AWS_REGION."
+  if command -v gh >/dev/null && gh auth status >/dev/null 2>&1; then
+    # Ends in ": " so that it shows through tfsummary, which passes on only prompts that do.
+    read -r -p "Set them now with gh, signed in as you? Type y or n: " ok || ok=""
+  fi
+  for mode in plan apply; do
+    env="$ENV"; [ "$mode" = apply ] || env="$ENV-plan"
+    case "$ok" in
+      y|Y|yes)
+        tf pipeline output -raw "${mode}_role_arn" | gh secret set AWS_ROLE_ARN --repo "$PIPELINE_REPO" --env "$env"
+        gh variable set AWS_REGION --repo "$PIPELINE_REPO" --env "$env" --body "$AWS_REGION" ;;
+      *)
+        echo "  terraform -chdir=deploy/terraform/pipeline output -raw ${mode}_role_arn |"
+        echo "    gh secret set AWS_ROLE_ARN --repo $PIPELINE_REPO --env $env"
+        echo "  gh variable set AWS_REGION --repo $PIPELINE_REPO --env $env --body $AWS_REGION" ;;
+    esac
+  done
+}
+
+pipeline_root() {  # pipeline_root [destroy]
+  load_env
+  [ "$SETTINGS" = ssm ] ||
+    die "The pipeline reads the settings of '$ENV' from SSM (BP4): add SETTINGS=ssm to $LOCAL, then
+./bmu aws settings push --env $ENV"
+  check_account; need_terraform; ensure_state_bucket
+  tf_init pipeline
+  local create subject parts
+  create="$(oidc_provider_create pipeline)" || exit 1
+  # Deleting needs no answer from GitHub: any subject will do.
+  if [ "${1:-}" = destroy ]; then subject="repo:$PIPELINE_REPO"; else subject="$(github_subject)" || exit 1; fi
+  parts="$(python3 deploy/iam/split-policy.py --json)" || die "deploy/iam/split-policy.py couldn't split the policy."
+  local vars=(-var "account_id=$ACCOUNT_ID" -var "region=$AWS_REGION" -var "environment=$ENV" -var "env_name=$BMU_ENV_NAME"
+              -var "create_oidc_provider=$create" -var "github_subject=$subject" -var "policy_parts=$parts"
+              -var "simulated_cspace=$SIMULATED_CSPACE")
+  case "${1:-}" in
+    "") ;;
+    destroy)
+      echo "This deletes the deploy pipeline of '$ENV' in account $ACCOUNT_ID: the roles GitHub Actions assumes,"
+      echo "the CodeBuild projects and their role, the saved plans and the builds' logs. The environment stays."
+      [ "$create" = false ] || echo "It also deletes GitHub's OIDC provider, which this pipeline made: if anything else"
+      [ "$create" = false ] || echo "in the account uses it (CI's ECR Public role, another app's pipeline), answer no."
+      # shellcheck disable=SC2046
+      tf pipeline destroy -input=false $(approve) "${vars[@]}"
+      echo "Done. Delete the GitHub environments $ENV-plan and $ENV too."
+      return ;;
+    *) die "./bmu aws pipeline [destroy]" ;;
+  esac
+  check_github_environments
+  confirm_real_data_account
+  echo "The roles trust GitHub's tokens for $subject:environment:$ENV-plan and :$ENV."
+  if [ "$create" = true ]; then echo "GitHub's OIDC provider: this pipeline makes (or keeps) it."
+  else echo "GitHub's OIDC provider: the account's own (this pipeline doesn't make another)."
+  fi
+  echo "Terraform shows its plan (the OIDC roles, the CodeBuild projects, their role and policies, a log group and the"
+  echo "bucket of saved plans) and asks."
+  # shellcheck disable=SC2046
+  tf pipeline apply -input=false $(approve) "${vars[@]}"
+  set_github_secrets
+  echo
+  echo "Next: Actions › Deploy › Run workflow, from main, with the environment $ENV. From now on the pipeline deploys"
+  echo "'$ENV'; ./bmu aws deploy here is break-glass."
 }
 
 case "$CMD" in
@@ -1026,8 +1458,8 @@ case "$CMD" in
          case "$u" in https://*) echo "$u" ;; *) echo "'$ENV' isn't deployed (./bmu aws deploy)." ;; esac
        fi ;;
   logs) logs "${1:-}" ;;
-  pause) reapply false; echo "Paused: no tasks run (./bmu aws resume)." ;;
-  resume) reapply true; echo "Running: $(app_url)" ;;
+  pause) pause_resume false ;;
+  resume) pause_resume true ;;
   allow-my-ip)
     load_env
     ip="$(my_ip)/32"
@@ -1046,6 +1478,16 @@ case "$CMD" in
   ci-role) ci_role ;;
   rehearsal-vpc) rehearsal_vpc "${1:-}" ;;
   settings) settings "${1:-}" ;;
+  pipeline) pipeline_root "${1:-}" ;;
+  pipeline-plan) pipeline_plan ;;
+  pipeline-apply) pipeline_apply ;;
+  sim-secrets)
+    load_env
+    [ "$SIMULATED_CSPACE" = true ] ||
+      die "'$ENV' uses a real CollectionSpace: its read-only accounts are set with ./bmu aws reader-secret."
+    check_account; need_terraform; tf_init app; need_deployed
+    sim_reader_secret
+    echo "Done: the simulator's read-only account is set (nothing is shown)." ;;
   destroy) destroy ;;
   help|-h|--help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0" ;;
   *) die "Unknown command '$CMD'. ./bmu aws help lists them." ;;

@@ -471,8 +471,8 @@ def test_cached_role_credentials_without_an_sso_token_are_not_signed_in(tmp_path
     fake.chmod(0o755)
     env = {"PATH": f"{bin_dir}:{os.environ['PATH']}", "HOME": str(tmp_path), "AWS_PROFILE": profile,
            "AWS_CONFIG_FILE": str(tmp_path / "config"), "AWS_SHARED_CREDENTIALS_FILE": str(tmp_path / "credentials")}
-    functions = _aws_sh_functions("die", "aws_", "sso_profile", "sign_in_hint", "sso_token_ok", "signed_in_account",
-                                  "check_account")
+    functions = _aws_sh_functions("die", "aws_", "sso_profile", "sign_in_hint", "sso_token_ok", "signed_in_as",
+                                  "signed_in_account", "check_account")
     out = subprocess.run(["bash", "-c", f"ENV=ucb-qa AWS_REGION=us-west-2 ACCOUNT_ID=111111111111\n{functions}\n"
                           "check_account && echo signed-in"], env=env, capture_output=True, text=True)
     if signed_in:
@@ -496,15 +496,17 @@ def test_every_setting_is_either_in_ssm_or_in_the_files():
     settings in SSM would never get it."""
     aws_sh = (DEPLOY / "aws.sh").read_text()
     in_ssm, in_files = _shell_words(aws_sh, "SSM_SETTINGS"), _shell_words(aws_sh, "FILE_SETTINGS")
-    assert in_ssm & in_files == set()
+    in_ssm_only = _shell_words(aws_sh, "PIPELINE_SETTINGS")  # written by commands, never pushed from the files
+    assert in_ssm & in_files == set() and in_ssm_only & (in_ssm | in_files) == set()
     load_env = aws_sh[aws_sh.index("load_env() {"):]
     resets = load_env[: load_env.index('. "$CONF"')]  # what load_env empties before reading the files
     started_empty = set(re.findall(r'\b([A-Z][A-Z0-9_]+)=""', resets))
-    assert started_empty == (in_ssm | in_files) - {"AWS_PROFILE", "AWS_REGION", "BMU_ENV_NAME"}
+    assert started_empty == (in_ssm | in_files | in_ssm_only) - {"AWS_PROFILE", "AWS_REGION", "BMU_ENV_NAME"}
     committed = [f for f in (DEPLOY / "environments").glob("*.conf") if not f.name.endswith(".local.conf")]
     set_in_committed_files = {name for f in committed
                               for name in re.findall(r"^([A-Z][A-Z0-9_]+)=", f.read_text(), re.MULTILINE)}
     assert sorted(set_in_committed_files - in_ssm - in_files) == []
+    assert set_in_committed_files & in_ssm_only == set()
 
 
 def test_the_deployer_only_reads_the_settings_in_ssm():
@@ -519,3 +521,50 @@ def test_the_deployer_only_reads_the_settings_in_ssm():
     }
     aws_sh = (DEPLOY / "aws.sh").read_text()
     assert 'echo "/$NAME/settings"' in aws_sh and _local("versions.tf", "name") == "bmu-${var.env_name}"
+
+
+# ---- the deploy pipeline (design: Deploys) ----------------------------------------------------------------------------
+
+WORKFLOWS = DEPLOY.parent / ".github" / "workflows"
+
+
+def test_the_buildspecs_install_cis_terraform():
+    """The builds install Terraform at CI's version, checked against its SHA256 (Dependabot reads neither file)."""
+    ci_version = re.search(r'terraform_version: "([0-9.]+)"', (WORKFLOWS / "ci.yml").read_text())
+    assert ci_version
+    pins = set()
+    for mode in ("plan", "apply"):
+        buildspec = (DEPLOY / "pipeline" / f"buildspec-{mode}.yml").read_text()
+        version = re.search(r'TERRAFORM_VERSION: "([0-9.]+)"', buildspec)
+        sha = re.search(r'TERRAFORM_SHA256: "([0-9a-f]{64})"', buildspec)
+        assert version and sha, f"buildspec-{mode}.yml pins Terraform's version and SHA256"
+        assert version.group(1) == ci_version.group(1), f"buildspec-{mode}.yml installs CI's Terraform"
+        assert f"deploy/aws.sh pipeline-{mode}" in buildspec
+        pins.add((version.group(1), sha.group(1)))
+    assert len(pins) == 1, "both buildspecs install the same Terraform"
+
+
+def test_the_deploy_workflow_is_started_by_hand_for_environments_that_exist():
+    text = (WORKFLOWS / "deploy.yml").read_text()
+    code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+    assert "pull_request" not in code  # never pull_request_target: a fork's pull request must never reach AWS
+    assert re.search(r"^on:\n  workflow_dispatch:", text, re.MULTILINE)
+    options = re.search(r"options: \[([^\]]+)\]", text)
+    assert options
+    for env in (e.strip() for e in options.group(1).split(",")):
+        assert (DEPLOY / "environments" / f"{env}.conf").exists(), env
+    # Every action is pinned by its commit (40 hex characters), with the version in a comment.
+    for use in re.findall(r"uses: (\S+)", text):
+        assert re.fullmatch(r"[\w.-]+/[\w.-]+@[0-9a-f]{40}", use), use
+    # The jobs start the projects the pipeline root makes: pipeline-bmu-<environment>-plan and -apply.
+    # The buildspecs and the workflow run these directly, so they keep their executable bit in git.
+    for script in ("prepare.sh", "run-build.sh"):
+        assert os.access(DEPLOY / "pipeline" / script, os.X_OK), f"chmod +x deploy/pipeline/{script}"
+    run_build = (DEPLOY / "pipeline" / "run-build.sh").read_text()
+    assert 'project="pipeline-bmu-$ENVIRONMENT-$mode"' in run_build
+    assert _local_in("pipeline", "versions.tf", "name") == "pipeline-bmu-${var.environment}"
+
+
+def _local_in(root: str, name: str, key: str):
+    with open(DEPLOY / "terraform" / root / name) as f:
+        return _plain(next(b[key] for b in hcl2.load(f).get("locals", []) if key in b))
