@@ -13,6 +13,7 @@ every write is limited to resources named `bmu-*` (log groups `/bmu/*` and `aws-
 | --- | --- |
 | `bmu-deployer-policy.json` | The whole policy: the only copy, reviewed with the Terraform it permits. About 12,400 characters without whitespace |
 | `split-policy.py` | Splits it into the customer managed policies to attach (below) |
+| `bmu-qa-settings-policy.json` | The policy of a second, small role, `rtl-BmuQaSettings`: reading and writing `ucb-qa`'s settings in SSM, nothing else (below) |
 | `bmu-simulator-dns-policy.json` | **Not for Operations.** Route 53 and Cloud Map for the simulated CollectionSpace's private DNS name, given only to the rehearsal's role (below) |
 
 ## The ask
@@ -35,6 +36,24 @@ us-west-2. `--check` only checks that it fits; `backend/tests/test_deploy.py` ch
 
 **Don't name the role `bmu-…`.** The policy lets the deployer create and change `bmu-*` roles (the web app's, the
 worker's and the tasks' execution role), so a role with such a name could change its own permissions.
+
+## The settings role (`rtl-BmuQaSettings`)
+
+Added 16 November 2026, for the deploy pipeline (`../README.md`, Settings in SSM Parameter Store, and "Stage 2: UC
+Berkeley's account", step 6). `ucb-qa` keeps its settings in SSM under `/bmu-qa/settings/`, which the deployer and
+the pipeline's build only read. Someone has to write them (`./bmu aws settings push`, and `RUNNING` for `pause` and
+`resume`), and the person deploying isn't the account's administrator. So: a role **`rtl-BmuQaSettings`**, with the
+same trust as `rtl-BmuQaDeployer`, and `bmu-qa-settings-policy.json` as its only policy (about 500 characters, one
+customer managed or inline policy):
+
+- `ssm:DescribeParameters` (names and metadata, never values; it has no resource to scope to);
+- reading, writing, deleting and tagging parameters under `parameter/bmu-qa/settings/*` in us-west-2, and nothing
+  else in SSM or anywhere;
+- an explicit Deny of writing `REAL_DATA_ACCOUNT`, the account an administrator confirmed for UC Berkeley data
+  (`./bmu aws pipeline`): only an administrator sets it.
+
+What a changed setting does still goes through the pipeline: the next run plans it, and a reviewer approves it.
+Its profile is `SETTINGS_PROFILE` in `ucb-qa.local.conf`. Don't name it `bmu-…`, for the reason above.
 
 ## How it was made
 

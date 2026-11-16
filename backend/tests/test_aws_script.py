@@ -931,6 +931,26 @@ def test_in_a_pipeline_environment_pause_and_resume_set_running_for_the_pipeline
     assert "RUNNING" not in push(tree).stdout and ssm(tree)["RUNNING"] == "true"
 
 
+def test_a_settings_profile_writes_the_settings_and_the_administrator_deletes_them(tree):
+    """In UC Berkeley's account the person deploying isn't the account's administrator: a role that can write only the
+    environment's settings (SETTINGS_PROFILE; deploy/iam/bmu-qa-settings-policy.json) pushes them and pauses or
+    resumes, and the administrator, who made the pipeline, alone deletes them."""
+    write_env(tree, museums=f"pahma={QA}", local_extra=SSM_LOCAL + "SETTINGS_PROFILE=bmu-settings\n")
+    r = push(tree)
+    assert r.returncode == 0, r.stderr
+    puts = [w for w in ssm_writes(tree) if w.startswith("put ")]
+    assert puts and all(w.endswith(" as bmu-settings") for w in puts)
+    assert "SETTINGS_PROFILE" not in ssm(tree)  # it says how to reach the account: always from the files
+    r = run(tree, "pause", state_json=DEPLOYED, museums=f"pahma={QA}")
+    assert r.returncode == 0, r.stderr
+    assert "put /bmu-dev/settings/RUNNING as bmu-settings" in ssm_writes(tree)
+    assert "Saved RUNNING=false in SSM (/bmu-dev/settings/RUNNING), as bmu-settings." in r.stdout
+    r = run(tree, "settings", "delete", answers="t\n")
+    assert r.returncode == 0, r.stderr
+    deletes = [w for w in ssm_writes(tree) if w.startswith("delete ")]
+    assert deletes and all(w.endswith(" as bmu-admin") for w in deletes) and ssm(tree) == {}
+
+
 def test_without_a_pipeline_pause_applies_at_once(tree):
     write_env(tree, museums=f"pahma={QA}")
     r = run(tree, "pause", museums=f"pahma={QA}")

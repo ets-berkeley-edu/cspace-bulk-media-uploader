@@ -523,6 +523,23 @@ def test_the_deployer_only_reads_the_settings_in_ssm():
     assert 'echo "/$NAME/settings"' in aws_sh and _local("versions.tf", "name") == "bmu-${var.env_name}"
 
 
+def test_the_qa_settings_role_writes_only_qas_settings_and_never_the_account_check():
+    """ucb-qa's SETTINGS_PROFILE (deploy/iam/README.md): its settings, RUNNING included, but not REAL_DATA_ACCOUNT,
+    which only an administrator confirms (BP7); nothing outside SSM."""
+    text = (DEPLOY / "iam" / "bmu-qa-settings-policy.json").read_text()
+    assert not re.search(r"\d{12}", text)  # the repository is public
+    statements = {st["Sid"]: st for st in json.loads(text)["Statement"]}
+    assert all(a.startswith("ssm:") for st in statements.values() for a in st["Action"])
+    assert statements["ReadMetadata"]["Action"] == ["ssm:DescribeParameters"]  # names, never values
+    writes = statements["QaSettings"]
+    assert writes["Effect"] == "Allow" and writes["Resource"] == ["arn:aws:ssm:us-west-2:*:parameter/bmu-qa/settings/*"]
+    deny = statements["NotTheAccountCheck"]
+    assert deny["Effect"] == "Deny" and set(deny["Action"]) == set(writes["Action"]) - {"ssm:GetParameters"}
+    assert deny["Resource"] == ["arn:aws:ssm:*:*:parameter/bmu-qa/settings/REAL_DATA_ACCOUNT"]
+    conf = (DEPLOY / "environments" / "ucb-qa.conf").read_text()
+    assert re.search(r"^BMU_ENV_NAME=qa\b", conf, re.M)  # /bmu-qa/settings/ is ucb-qa's
+
+
 # ---- the deploy pipeline (design: Deploys) ----------------------------------------------------------------------------
 
 WORKFLOWS = DEPLOY.parent / ".github" / "workflows"
