@@ -5,7 +5,8 @@ prototype: the image is built from this repository and runs on ECS Fargate. Demo
 
 - **One environment per account.** Each environment has a settings file in `deploy/environments/`.
   - `personal-dev.conf` is Richard's personal account and the default.
-  - `ucb-qa.conf` is the BMU's QA instance (stage 2) in UC Berkeley's account ("Stage 2: UC Berkeley's account" below).
+  - `ucb-qa.conf` is the BMU's QA instance (stage 2) in UC Berkeley's account ("Stage 2: UC Berkeley's account" below),
+    deployed by its deploy pipeline ("The deploy pipeline" below).
   - `personal-rehearsal.conf` rehearses the UC Berkeley deployment in the personal account ("Rehearsing the deploy
     in your own account" below).
 - **Two front doors** (`FRONT_DOOR`). `cloudfront`, the default (personal-dev): CloudFront at a `*.cloudfront.net`
@@ -26,12 +27,12 @@ prototype: the image is built from this repository and runs on ECS Fargate. Demo
 | `./bmu aws status` | Shows the address, the running tasks, the deployed image, the allowed addresses, and each museum with its server and whether its read-only account is set. |
 | `./bmu aws url` | Prints the address. |
 | `./bmu aws logs web` / `worker` / `fakecspace` | Follows a service's logs, starting with the last 30 minutes. `fakecspace` only with the simulated CollectionSpace. |
-| `./bmu aws pause` / `resume` | Stops or starts both services to save money. The data stays. Terraform shows the change and asks first. In an environment with a deploy pipeline, it sets `RUNNING` in SSM instead, as the account's administrator, and the next pipeline run applies it. |
+| `./bmu aws pause` / `resume` | Stops or starts both services to save money. The data stays. Terraform shows the change and asks first. In an environment with a deploy pipeline, it sets `RUNNING` in SSM instead, as `SETTINGS_PROFILE` or the account's administrator, and the next pipeline run applies it. |
 | `./bmu aws allow-my-ip` | Adds this computer's current address to the allowlist, and applies it. With `SETTINGS=ssm` it says what to add to `ALLOWED_CIDRS` instead. |
 | `./bmu aws reader-secret [museum]` | Sets or changes the sign-in of a museum's read-only CollectionSpace account, which checks its interns' drafts. It asks for the user name and password; see below. The museum can be left out when the environment serves only one. |
 | `./bmu aws destroy` | Deletes everything in AWS for the environment, data included. It asks for the environment's name first. |
 | `./bmu aws rehearsal-vpc [destroy]` | A rehearsal environment only (`REHEARSAL=true`): makes, or deletes, what Operations provides in UC Berkeley's account, a VPC with a NAT gateway and a deployer role with only the deployer policy, signed in as the account's administrator. See "Rehearsing the deploy in your own account". |
-| `./bmu aws settings push` / `show` / `delete` | An environment with `SETTINGS=ssm`, as the account's administrator: puts its settings in SSM Parameter Store from its files (showing what changes and asking), lists them, or deletes them once it is destroyed. See "Settings in SSM Parameter Store". |
+| `./bmu aws settings push` / `show` / `delete` | An environment with `SETTINGS=ssm`: puts its settings in SSM Parameter Store from its files (showing what changes and asking) or lists them, as `SETTINGS_PROFILE` or the account's administrator; or deletes them once it is destroyed, as the administrator. See "Settings in SSM Parameter Store". |
 | `./bmu aws pipeline [destroy]` | An environment with `SETTINGS=ssm`, as the account's administrator: makes, or deletes, its deploy pipeline. See "The deploy pipeline". |
 | `./bmu aws sim-secrets` | With the simulated CollectionSpace, in an environment the pipeline deploys: sets the simulator's read-only account, which a deploy from a laptop sets itself. Nothing is shown. |
 | `./bmu aws ci-role` | Once per account: the role CI assumes to sign in to ECR Public (see "CI's sign-in to ECR Public" below). Prints the command that sets the repository's `ECR_PUBLIC_ROLE_ARN` variable. |
@@ -314,7 +315,9 @@ if a month heads past it. Pause or destroy the environment between test sessions
 
 `ucb-qa.conf`: the cspace account, us-west-2, in Operations' dev/QA VPC (next section), with PAHMA's QA
 CollectionSpace, `FRONT_DOOR=alb`, the WAF, and `REQUIRE_CLEAN=true`. Nothing in the Terraform code names an account,
-and no state is moved between accounts: everything is created fresh there.
+and no state is moved between accounts: everything is created fresh there. Steps 1 to 5 are how it was first deployed,
+from a laptop (testing checklist section 23); since then its settings are in SSM (`SETTINGS=ssm`) and its deploy
+pipeline deploys it (step 6).
 
 1. **Sign-in.** A profile `bmu-qa-deploy` in `~/.aws/config` that takes the role `rtl-BmuQaDeployer` (`role_arn`)
    from your IAM Identity Center profile (`source_profile`), with `region = us-west-2` and
@@ -333,6 +336,16 @@ and no state is moved between accounts: everything is created fresh there.
 4. **The read-only account.** `./bmu aws reader-secret pahma --env ucb-qa` (PAHMA QA's `BMU_Reader` account).
 5. **After a destroy**, the certificate is requested again under the same name and uses the same validation record,
    but the new load balancer has a new DNS name: Operations repoints the name's record (BQ32).
+6. **The deploy pipeline** (testing checklist section 33). Three more sign-ins in UC Berkeley's account:
+   - `rtl-BmuQaSettings`, a role that reads and writes only `/bmu-qa/settings/*` in SSM, never `REAL_DATA_ACCOUNT`
+     (`deploy/iam/bmu-qa-settings-policy.json`): a profile in `~/.aws/config` like `bmu-qa-deploy`'s, named in
+     `ucb-qa.local.conf` as `SETTINGS_PROFILE`. `settings push`, `settings show`, `pause` and `resume` run as it.
+   - An administrator of the account, which Richard isn't: an Operations administrator runs `./bmu aws pipeline
+     --env ucb-qa` with him, once, on his computer (`gh` signed in as him; `ADMIN_PROFILE` in `ucb-qa.local.conf` for
+     that time), or gives him a time-limited administrator session. `settings delete` and `pipeline destroy` need one
+     too.
+   - The plans are read in the AWS console (or with `aws logs tail`) with the RTL-Developer permission set, which can
+     read the log group `/pipeline/bmu-ucb-qa`; `rtl-BmuQaDeployer` can't.
 
 `PROTECT_DATA` stays false until acceptance passes, then true before PAHMA staff use it. The personal environments are
 unaffected.
@@ -385,19 +398,24 @@ person's computer, so that everyone who deploys it, and later the deploy pipelin
   come from the files. Its `ACCOUNT_ID` in SSM must be the account it's in. A command whose files disagree with SSM
   says so ("the files on this computer differ from SSM in …") and uses SSM's.
 - **Putting them there.** `./bmu aws settings push --env <env>`, as the account's administrator (`ADMIN_PROFILE`, as
-  for `rehearsal-vpc`): it lists what would change (`+` added, `~` changed, `-` removed) from the `.conf` and
+  for `rehearsal-vpc`), or as `SETTINGS_PROFILE` where the environment has one (below): it lists what would change (`+` added, `~` changed, `-` removed) from the `.conf` and
   `.local.conf` on this computer and asks first, even with `BMU_AWS_YES=1`, since another computer's files may be out of
   date. A setting the files no longer have is removed. The next deploy applies the change.
 - **Looking at them.** `./bmu aws settings show --env <env>` lists them, marking any the files here disagree with.
   `./bmu aws status` says where an environment's settings are.
-- **Deleting them.** `./bmu aws settings delete --env <env>`, once the environment is destroyed (a rehearsal's VPC
-  too): it refuses while any of its Terraform state holds resources, and asks you to type the environment's name. The
+- **Deleting them.** `./bmu aws settings delete --env <env>`, as the administrator, once the environment is destroyed
+  (a rehearsal's VPC too): it refuses while any of its Terraform state holds resources, and asks you to type the environment's name. The
   files stay.
 - **The deployer only reads them.** Its policy allows `ssm:DescribeParameters` and `ssm:GetParameters` on
   `parameter/bmu-*/settings/*`, nothing else in SSM. So in an environment with `SETTINGS=ssm`, a command that would
   save a setting stops and says what to change instead: `allow-my-ip` (add the address to `ALLOWED_CIDRS` in the
   `.local.conf`, then `settings push`), and a first deploy with no `ALLOWED_CIDRS`. `rehearsal-vpc`, which runs as the
   administrator, saves the VPC's IDs to SSM as well as to the `.local.conf`.
+- **A role for the settings (`SETTINGS_PROFILE`).** Where the person deploying isn't the account's administrator
+  (`ucb-qa`, in UC Berkeley's account), a role that can read and write only that environment's settings, and never
+  `REAL_DATA_ACCOUNT`, pushes and shows them and sets `RUNNING`: `SETTINGS_PROFILE` in the `.local.conf` names its
+  profile (`deploy/iam/bmu-qa-settings-policy.json`, `deploy/iam/README.md`). Like the other profiles, it is always
+  read from the files. Without it, all of this is `ADMIN_PROFILE`'s.
 
 The values are private but not secret (the account number, Operations' VPC and subnets, the allowed ranges, the
 BMU's name): no password or key is ever a setting.
@@ -451,8 +469,8 @@ in the plan build's log.
 
 **What changes for `./bmu aws` once an environment has a pipeline.** `deploy` from a laptop is a break-glass deploy:
 it asks you to type "break glass", and is only for when the pipeline is broken and a deploy is urgent; the next
-pipeline run confirms the environment matches `main`. `pause` and `resume` set `RUNNING` in SSM, as the account's
-administrator, and the next pipeline run applies it. `allow-my-ip` refuses (the allowed ranges are a setting:
+pipeline run confirms the environment matches `main`. `pause` and `resume` set `RUNNING` in SSM, as `SETTINGS_PROFILE` or
+the account's administrator, and the next pipeline run applies it. `allow-my-ip` refuses (the allowed ranges are a setting:
 change them in the files, `settings push`, then run the pipeline). `status` says the pipeline deploys it. `plan`,
 `logs`, `url`, `reader-secret` and `destroy` are as before; after a destroy, `./bmu aws pipeline destroy` deletes the
 pipeline, then `settings delete`.
@@ -478,7 +496,8 @@ administrator of the repository), asks for the account's number if the environme
 Terraform's plan and asks, then offers to set the GitHub environments' secret and variable. `./bmu aws pipeline
 --env <env> destroy` deletes it (and GitHub's OIDC provider, if this pipeline made it: answer no if anything else in
 the account uses it); then delete the two GitHub environments. Testing checklist section 32 proves it on
-`personal-rehearsal`.
+`personal-rehearsal`; section 33 moves `ucb-qa` onto it, where an Operations administrator runs `./bmu aws pipeline`
+with Richard ("Stage 2: UC Berkeley's account", step 6).
 
 ## Rehearsing the deploy in your own account
 

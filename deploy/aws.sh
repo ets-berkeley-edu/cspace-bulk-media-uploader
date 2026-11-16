@@ -20,9 +20,10 @@
 #                           delete) what Operations provides in UC Berkeley's account, a VPC with public subnets and a
 #                           NAT gateway and a deployer role with only deploy/iam/bmu-deployer-policy.json (and the
 #                           simulator's bmu-simulator-dns-policy.json), as ADMIN_PROFILE
-#   ./bmu aws settings push|show|delete   an environment with SETTINGS=ssm (BP4), as ADMIN_PROFILE: put its settings
-#                           in SSM Parameter Store from its files (shows what changes and asks), list them (marking any
-#                           the files here disagree with), or delete them once the environment is destroyed
+#   ./bmu aws settings push|show|delete   an environment with SETTINGS=ssm (BP4): put its settings in SSM Parameter
+#                           Store from its files (shows what changes and asks) or list them (marking any the files here
+#                           disagree with), as SETTINGS_PROFILE if it has one, else ADMIN_PROFILE; or delete them once
+#                           the environment is destroyed, as ADMIN_PROFILE
 #   ./bmu aws pipeline [destroy]   as the account's administrator (ADMIN_PROFILE), for an environment with
 #                           SETTINGS=ssm: make (or delete) its deploy pipeline (deploy/terraform/pipeline): the roles the
 #                           deploy workflow assumes, the CodeBuild projects and their role, and GitHub's OIDC provider
@@ -34,7 +35,7 @@
 #
 # Once an environment has a deploy pipeline (docs/design.md, Deploys), the pipeline deploys it: ./bmu aws deploy from a
 # laptop is a break-glass deploy (it asks you to type "break glass"), pause and resume set RUNNING in SSM for the next
-# pipeline run, as the administrator, and allow-my-ip refuses (the allowed ranges change with settings push). A deploy
+# pipeline run, as SETTINGS_PROFILE or the administrator, and allow-my-ip refuses (the allowed ranges change with settings push). A deploy
 # of an environment with a real CollectionSpace (UC Berkeley's data) asks the person deploying to type the account's
 # number, and the pipeline's builds need the account an administrator confirmed (REAL_DATA_ACCOUNT): UC Berkeley data
 # only in UC Berkeley accounts.
@@ -42,9 +43,11 @@
 # Which environment: --env NAME or BMU_AWS_ENV (default personal-dev). Its settings are in
 # deploy/environments/NAME.conf; NAME.local.conf (not committed) holds the account number and allowed addresses.
 # With SETTINGS=ssm (design: Deploys, BP4), every setting but AWS_PROFILE, AWS_REGION, BMU_ENV_NAME, ADMIN_PROFILE,
-# SETTINGS and REQUIRE_CLEAN is read from SSM Parameter Store in the account instead (/bmu-<name>/settings/<SETTING>),
-# where ./bmu aws settings push puts them from the files; the files then matter only to settings push. The deployer
-# only reads them: a change is made in the files, then pushed by the account's administrator.
+# SETTINGS_PROFILE, SETTINGS and REQUIRE_CLEAN is read from SSM Parameter Store in the account instead
+# (/bmu-<name>/settings/<SETTING>), where ./bmu aws settings push puts them from the files; the files then matter only
+# to settings push. The deployer only reads them: a change is made in the files, then pushed by the account's
+# administrator, or, where the environment has one, by SETTINGS_PROFILE, a role that can write only its settings (in
+# UC Berkeley's account, where the person deploying isn't the account's administrator; deploy/iam/README.md).
 # CSPACE_TENANTS lists the museums the environment serves, each with its CollectionSpace server
 # ("pahma=https://... bampfa=https://..."); TENANT and CSPACE_URL instead mean a list of one.
 # Sign in first with aws sso login: for a profile that takes a role from another (source_profile, as in UC Berkeley's
@@ -81,6 +84,7 @@ while [ $# -gt 0 ]; do
 done
 set -- ${ARGS[@]+"${ARGS[@]}"}
 CMD="${1:-help}"; shift || true
+SUBCMD="${1:-}"   # settings push|show|delete, pipeline [destroy], …
 
 # ---- settings -----------------------------------------------------------------------------------------------------
 load_env() {
@@ -91,7 +95,7 @@ load_env() {
   ACCOUNT_ID="" ALLOWED_CIDRS="" SIMULATED_CSPACE="" ENV_LABEL="" CSPACE_TENANTS="" TENANT="" CSPACE_URL=""
   WAF_ENABLED="" ORIGIN_DOMAIN="" ORIGIN_CERTIFICATE_ARN="" FRONT_DOOR="" DOMAIN_NAME="" PROTECT_DATA="" ALWAYS_RUN_TIME=""
   REQUIRE_CLEAN="" WAF_MANAGED_RULES="" SETTINGS="" ALLOW_SELF_REVIEW="" REAL_DATA_ACCOUNT="" RUNNING=""
-  VPC_ID="" APP_SUBNET_IDS="" LB_SUBNET_IDS="" CREATE_GATEWAY_ENDPOINTS="" REHEARSAL="" ADMIN_PROFILE=""
+  VPC_ID="" APP_SUBNET_IDS="" LB_SUBNET_IDS="" CREATE_GATEWAY_ENDPOINTS="" REHEARSAL="" ADMIN_PROFILE="" SETTINGS_PROFILE=""
   # shellcheck disable=SC1090
   . "$CONF"
   local conf_label="$ENV_LABEL"
@@ -107,9 +111,11 @@ load_env() {
   : "${AWS_PROFILE:?set AWS_PROFILE in $CONF}" "${AWS_REGION:?set AWS_REGION in $CONF}" "${BMU_ENV_NAME:?set BMU_ENV_NAME in $CONF}"
   NAME="bmu-$BMU_ENV_NAME"   # the cluster's name and the prefix of every resource
   # A rehearsal's VPC and deployer, the settings in SSM and the pipeline are the account administrator's to make: the
-  # deployer can't make itself, and only reads the settings.
+  # deployer can't make itself, and only reads the settings. Where SETTINGS_PROFILE is set, it writes the settings
+  # instead (settings push and show; pause and resume in pipeline_pause), and the administrator deletes them.
   DEPLOYER_PROFILE="$AWS_PROFILE"
-  case "$CMD" in settings|rehearsal-vpc|pipeline) [ -z "$ADMIN_PROFILE" ] || AWS_PROFILE="$ADMIN_PROFILE" ;; esac
+  case "$CMD" in rehearsal-vpc|pipeline) [ -z "$ADMIN_PROFILE" ] || AWS_PROFILE="$ADMIN_PROFILE" ;; esac
+  [ "$CMD" != settings ] || [ -z "$(settings_writer)" ] || AWS_PROFILE="$(settings_writer)"
   # The pipeline's builds sign in as the build's own role, and always read the settings from SSM.
   IN_BUILD=false
   case "$CMD" in pipeline-plan|pipeline-apply)
@@ -260,7 +266,7 @@ SSM_SETTINGS="ACCOUNT_ID ALLOWED_CIDRS SIMULATED_CSPACE ENV_LABEL CSPACE_TENANTS
   APP_SUBNET_IDS LB_SUBNET_IDS CREATE_GATEWAY_ENDPOINTS REHEARSAL"
 # Always from the files: what says how to reach the account, SETTINGS itself, and REQUIRE_CLEAN, a rule about the
 # checkout a deploy is run from, which belongs with the committed code.
-FILE_SETTINGS="AWS_PROFILE AWS_REGION BMU_ENV_NAME ADMIN_PROFILE SETTINGS REQUIRE_CLEAN ALLOW_SELF_REVIEW"
+FILE_SETTINGS="AWS_PROFILE AWS_REGION BMU_ENV_NAME ADMIN_PROFILE SETTINGS_PROFILE SETTINGS REQUIRE_CLEAN ALLOW_SELF_REVIEW"
 # In SSM only, never pushed from the files (settings push leaves them alone) and never written by the build: the account
 # an administrator confirmed for UC Berkeley data (./bmu aws pipeline, BP7), and whether the services run (./bmu aws
 # pause and resume in a pipeline environment, BP5).
@@ -269,6 +275,11 @@ PIPELINE_SETTINGS="REAL_DATA_ACCOUNT RUNNING"
 is_ssm_setting() { case " $(echo $SSM_SETTINGS) " in *" $1 "*) true ;; *) false ;; esac; }
 is_pipeline_setting() { case " $PIPELINE_SETTINGS " in *" $1 "*) true ;; *) false ;; esac; }
 settings_path() { echo "/$NAME/settings"; }
+# Who writes the settings: SETTINGS_PROFILE where the environment has one (a role that can write only its settings),
+# else the account's administrator. settings delete is always the administrator's.
+settings_writer() {
+  if [ -n "$SETTINGS_PROFILE" ] && [ "$SUBCMD" != delete ]; then echo "$SETTINGS_PROFILE"; else echo "$ADMIN_PROFILE"; fi
+}
 
 # Who the AWS calls are made as, for messages.
 signed_in_as() {
@@ -326,7 +337,7 @@ from_ssm() {
     die "$(signed_in_as) is signed in to account $who, but '$ENV' is account $ACCOUNT_ID ($LOCAL). Stopped."
   lines="$(ssm_settings)"
   [ -n "$lines" ] || die "'$ENV' keeps its settings in SSM (SETTINGS=ssm), and account $who has none under $(settings_path)/.
-The account's administrator puts them there from $CONF and $LOCAL: ./bmu aws settings push --env $ENV"
+The account's administrator (or SETTINGS_PROFILE) puts them there from $CONF and $LOCAL: ./bmu aws settings push --env $ENV"
   for key in $SSM_SETTINGS; do
     file_values="$file_values$key	${!key}
 "
@@ -351,7 +362,7 @@ EOF
 }
 
 # ./bmu aws settings push|show|delete (SETTINGS=ssm). The account is this computer's ACCOUNT_ID, asked the first time
-# as for a deploy; they run as the environment's ADMIN_PROFILE, if it has one (load_env).
+# as for a deploy; they run as the environment's SETTINGS_PROFILE or ADMIN_PROFILE, if it has one (settings_writer).
 settings() {
   load_env
   [ "$SETTINGS" = ssm ] || die "'$ENV' keeps its settings in $CONF and $LOCAL. To keep them in SSM Parameter Store instead
@@ -530,7 +541,7 @@ my_ip() {
 ensure_allowlist() {
   [ -n "$ALLOWED_CIDRS" ] && return
   [ "$SETTINGS" = files ] ||
-    die "'$ENV' has no ALLOWED_CIDRS in SSM. Add the allowed ranges to $LOCAL, then the account's administrator runs: ./bmu aws settings push --env $ENV"
+    die "'$ENV' has no ALLOWED_CIDRS in SSM. Add the allowed ranges to $LOCAL, then the account's administrator (or SETTINGS_PROFILE) runs: ./bmu aws settings push --env $ENV"
   local ip; ip="$(my_ip)"
   echo "The BMU in AWS is open only to listed addresses. Adding this computer's: $ip/32"
   echo "(More later with ./bmu aws allow-my-ip, or edit ALLOWED_CIDRS in $LOCAL and deploy.)"
@@ -861,19 +872,19 @@ plan() {
 }
 
 # Pause or resume (BP5). In a pipeline environment, whether the services run is the setting RUNNING in SSM, which the
-# administrator sets here (the deployer can't write SSM) and the next pipeline run applies, with an approved plan.
-# Otherwise it's applied at once, as before.
+# settings' writer (SETTINGS_PROFILE, else the administrator) sets here (the deployer can't write SSM) and the next
+# pipeline run applies, with an approved plan. Otherwise it's applied at once, as before.
 pause_resume() {  # pause_resume false|true
   prepare
   if has_pipeline; then
-    [ -n "$ADMIN_PROFILE" ] || die "'$ENV' has a deploy pipeline: pause and resume set RUNNING in SSM, as the account's administrator. Set ADMIN_PROFILE in $CONF."
-    AWS_PROFILE="$ADMIN_PROFILE"
+    [ -n "$(settings_writer)" ] || die "'$ENV' has a deploy pipeline: pause and resume set RUNNING in SSM, as SETTINGS_PROFILE or the account's administrator. Set SETTINGS_PROFILE or ADMIN_PROFILE in $LOCAL or $CONF."
+    AWS_PROFILE="$(settings_writer)"
     [ "$(signed_in_account)" = "$ACCOUNT_ID" ] || die "Profile $AWS_PROFILE isn't signed in to account $ACCOUNT_ID. Stopped."
     if [ "$RUNNING" = "$1" ]; then
       echo "RUNNING is already $1 in SSM ($(settings_path)/RUNNING)."
     else
       put_setting RUNNING "$1"
-      echo "Saved RUNNING=$1 in SSM ($(settings_path)/RUNNING), as $ADMIN_PROFILE."
+      echo "Saved RUNNING=$1 in SSM ($(settings_path)/RUNNING), as $AWS_PROFILE."
     fi
     echo "The pipeline applies it: Actions › Deploy › Run workflow, from main, with the environment $ENV."
     return 0
@@ -1473,7 +1484,7 @@ case "$CMD" in
     new="${ALLOWED_CIDRS:+$ALLOWED_CIDRS,}$ip"
     # The deployer can't change a setting in SSM: the administrator pushes the change from the files (BP4, BP6).
     [ "$SETTINGS" = files ] ||
-      die "'$ENV' keeps its settings in SSM. To allow $ip, set ALLOWED_CIDRS=\"$new\" in $LOCAL; the account's administrator then runs ./bmu aws settings push --env $ENV, and the next deploy applies it."
+      die "'$ENV' keeps its settings in SSM. To allow $ip, set ALLOWED_CIDRS=\"$new\" in $LOCAL; the account's administrator (or SETTINGS_PROFILE) then runs ./bmu aws settings push --env $ENV, and the next deploy applies it."
     save_local ALLOWED_CIDRS "$new"; ALLOWED_CIDRS="$new"
     echo "Allowed: $new"
     prepare; tf_init app
