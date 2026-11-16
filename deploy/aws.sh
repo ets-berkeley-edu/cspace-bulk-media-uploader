@@ -1113,10 +1113,16 @@ rehearsal_vpc() {  # rehearsal_vpc [destroy]
 # it, or the account has none. Each list is read whole before it's searched: with pipefail, "terraform state list |
 # grep -q" fails when grep stops at its first match while terraform is still writing (SIGPIPE), and a provider the root
 # made then looks like the account's own, so Terraform plans to destroy it (Serena's pipeline, November 5, 2026).
+# A root never applied has no state yet: terraform state list then fails with "No state file was found!", which means
+# the root holds nothing, not that its state can't be read (checklist section 32, step 4).
 oidc_provider_create() {  # oidc_provider_create ci|pipeline: prints true or false; Terraform must be initialised
   local state providers
-  state="$(tf "$1" state list 2>/dev/null)" ||
-    die "Couldn't read $1's Terraform state (terraform state list) for '$ENV'. Nothing was changed."
+  if ! state="$(tf "$1" state list 2>&1)"; then
+    case "$state" in
+      *"No state file was found"*) state="" ;;
+      *) die "Couldn't read $1's Terraform state (terraform state list) for '$ENV'. Nothing was changed." ;;
+    esac
+  fi
   if grep -q '^aws_iam_openid_connect_provider\.github' <<<"$state"; then echo true; return 0; fi
   providers="$(aws_ iam list-open-id-connect-providers --query 'OpenIDConnectProviderList[].Arn' --output text)" ||
     die "Couldn't list the account's OIDC providers. Nothing was changed."
