@@ -1141,12 +1141,21 @@ all any `AccessDenied` in a build's log: the action, the resource, and the fix.
   `./bmu aws` picks the right one for each command. Sign in once: `aws sso login --profile bmu-personal`.
 - `gh` signed in as an administrator of the repository (`gh auth status`): `./bmu aws pipeline` reads the GitHub
   environments' rules and the repository's OIDC settings through it, and can set the environments' secrets.
-- The AWS console, signed in to the personal account as the administrator: the plans are read there.
+- The AWS console, signed in to the personal account as the administrator: the plans are read there. Sign in through
+  the AWS access portal (the `…awsapps.com/start` page `aws sso login` opens), the account, then AdministratorAccess ›
+  Management console; a link to a build opens the IAM user sign-in page otherwise. Or read the latest plan build's
+  log from the terminal, shortened, to hand to Claude:
+
+  ```bash
+  aws logs tail /pipeline/bmu-personal-rehearsal --log-stream-name-prefix plan --since 15m --profile bmu-personal --region us-west-2 | tfsummary | tee /tmp/bmu-checklist-32-plan.txt
+  ```
+
 - The Terraform steps pipe their output through `tfsummary` and save it in `/tmp` (as in section 31), to hand to
-  Claude.
+  Claude. When Terraform asks "Enter a value:", the short view may stop at the plan without showing the question:
+  if the output stops there, Terraform is waiting; type `yes`. The full log in `~/.cache/tfsummary/` has everything.
 - It costs a few dollars: the NAT gateway, the load balancer and the services, for the hours they exist.
 
-- [ ] **1. The GitHub environments, with their rules.** The pipeline's roles trust them, so they come first. In the
+- [x] **1. The GitHub environments, with their rules.** The pipeline's roles trust them, so they come first. In the
   repository's Settings › Environments, make two:
   - `personal-rehearsal-plan`: Deployment branches and tags › Selected branches and tags › add the branch `main`.
     No reviewers.
@@ -1161,7 +1170,7 @@ all any `AccessDenied` in a build's log: the action, the resource, and the fix.
   ```
 
   Expected: both names (and any others the repository has).
-- [ ] **2. The rehearsal's VPC and deployer role**, as the administrator, as in section 31, step 1:
+- [x] **2. The rehearsal's VPC and deployer role**, as the administrator, as in section 31, step 1:
 
   ```bash
   set -o pipefail; ./bmu aws rehearsal-vpc --env personal-rehearsal 2>&1 | tfsummary | tee /tmp/bmu-checklist-32-step2.txt
@@ -1169,7 +1178,7 @@ all any `AccessDenied` in a build's log: the action, the resource, and the fix.
 
   Expected: the VPC, its subnets and NAT gateway, the role `rehearsal-devqar-deployer` and its three policies are
   created (type `yes`); it saves `VPC_ID`, `APP_SUBNET_IDS` and `LB_SUBNET_IDS` in the `.local.conf`.
-- [ ] **3. The settings in SSM**, as in section 31, steps 2 and 3:
+- [x] **3. The settings in SSM**, as in section 31, steps 2 and 3:
 
   ```bash
   echo 'SETTINGS=ssm' >> deploy/environments/personal-rehearsal.local.conf
@@ -1181,7 +1190,7 @@ all any `AccessDenied` in a build's log: the action, the resource, and the fix.
 
   Expected: the `+` lines, among them `SIMULATED_CSPACE=true`, `FRONT_DOOR=alb`, `DOMAIN_NAME`, `VPC_ID` and
   `REHEARSAL=true`; type `y`; "Done. …".
-- [ ] **4. The pipeline's AWS side**, as the administrator:
+- [x] **4. The pipeline's AWS side**, as the administrator:
 
   ```bash
   set -o pipefail; ./bmu aws pipeline --env personal-rehearsal 2>&1 | tfsummary | tee /tmp/bmu-checklist-32-step4.txt
@@ -1204,7 +1213,7 @@ all any `AccessDenied` in a build's log: the action, the resource, and the fix.
   ```
 
   Expected: `AWS_ROLE_ARN`. (The same with `--env personal-rehearsal-plan`.)
-- [ ] **5. The first run: the image repositories and the certificate.** In GitHub: Actions › Deploy › Run workflow,
+- [x] **5. The first run: the image repositories and the certificate.** In GitHub: Actions › Deploy › Run workflow,
   "Use workflow from" `main`, environment `personal-rehearsal`, Run workflow. Expected: the plan job's summary shows
   "Image repositories and certificate | N to add, 0 to change, 0 to destroy", "The BMU | not planned this run", and
   "Only the image repositories and certificate change this time: approve, then run the deploy again for the rest.",
@@ -1213,7 +1222,7 @@ all any `AccessDenied` in a build's log: the action, the resource, and the fix.
   log shows the account number or the plan. Then the apply job waits: Review deployments › `personal-rehearsal` ›
   Approve and deploy. Expected: its summary says "The image repositories and certificate are applied: run the deploy
   again for the rest."
-- [ ] **6. The certificate.** Run the workflow again. If the certificate isn't issued yet, the summary says "The
+- [x] **6. The certificate.** Run the workflow again. If the certificate isn't issued yet, the summary says "The
   certificate waits for its DNS validation record, which is in the build log." and there's nothing to approve: read
   the record (a CNAME, its name and value) in the build's log, add it in Route 53 if it isn't there already from
   section 24 (the same name gets the same record), and wait until it's issued:
@@ -1224,7 +1233,7 @@ all any `AccessDenied` in a build's log: the action, the resource, and the fix.
 
   Expected: your `DOMAIN_NAME`, `ISSUED`. (If the record from section 24 is still in Route 53, the certificate may be
   issued before this run, which then goes straight to step 7.)
-- [ ] **7. The BMU.** Run the workflow again. Expected: the plan build builds and pushes both images, tagged with the
+- [x] **7. The BMU.** Run the workflow again. Expected: the plan build builds and pushes both images, tagged with the
   commit's first 12 characters (about 10 minutes the first time), then the summary shows "The BMU | N to add, 0 to
   change, 0 to destroy" and "Read the plan in the build log, then approve the deploy if it is what you expect." In
   the build's log: no CloudFront, no VPC or subnets of its own, the gateway endpoints, the internet-facing load
@@ -1232,9 +1241,9 @@ all any `AccessDenied` in a build's log: the action, the resource, and the fix.
   the end of the apply build's log "AWS · personal-rehearsal · simulated CollectionSpace is deployed at commit …",
   "DNS: <DOMAIN_NAME> must point at the load balancer …" and "Next: ./bmu aws sim-secrets --env personal-rehearsal".
   Any `AccessDenied` in either build: note it here (the build's role has only the deployer policy).
-- [ ] **8. The name's DNS record.** In Route 53, point `DOMAIN_NAME` at the load balancer the log named (a CNAME), as
+- [x] **8. The name's DNS record.** In Route 53, point `DOMAIN_NAME` at the load balancer the log named (a CNAME), as
   in section 24, step 4.
-- [ ] **9. The simulator's read-only account**, which a deploy from a laptop sets itself and the build can't:
+- [x] **9. The simulator's read-only account**, which a deploy from a laptop sets itself and the build can't:
 
   ```bash
   ./bmu aws sim-secrets --env personal-rehearsal
@@ -1242,13 +1251,23 @@ all any `AccessDenied` in a build's log: the action, the resource, and the fix.
 
   Expected: "The read-only account for interns' checks is the simulator's bmureader." and "Done: the simulator's
   read-only account is set (nothing is shown)."
-- [ ] **10. The app.** `./bmu aws status --env personal-rehearsal`. Expected: "Deployed by: its pipeline (Actions ›
+- [x] **10. The app.** `./bmu aws status --env personal-rehearsal`. Expected: "Deployed by: its pipeline (Actions ›
   Deploy); ./bmu aws deploy here is break-glass", the image tag is the commit's first 12 characters, web and worker
   "running 1 of 1". Then from this computer, `https://<DOMAIN_NAME>`: sign in as `admin`, make a job with a file,
   submit it (it runs at once), see it finish; sign in as `intern` and open a draft.
-- [ ] **11. A run with no changes.** Run the workflow again. Expected: the plan job's summary says "No changes: the
+
+  The load balancer admits only `ALLOWED_CIDRS`. If this computer's address (`curl -s https://checkip.amazonaws.com`)
+  isn't among them, `allow-my-ip` isn't the way in a pipeline environment: add it to `ALLOWED_CIDRS` in the
+  `.local.conf`, `./bmu aws settings push --env personal-rehearsal`, and run the workflow. Expected plan: 1 to add (the
+  load balancer's rule for the address), 1 to change (the staging bucket's policy), 0 to destroy; approve it. To see
+  the worker run the job, read its log once (`./bmu aws logs worker` follows the log and never ends):
+
+  ```bash
+  aws logs tail /bmu/devqar/worker --since 1h --profile bmu-personal --region us-west-2 | tail -30
+  ```
+- [x] **11. A run with no changes.** Run the workflow again. Expected: the plan job's summary says "No changes: the
   environment matches this commit. Nothing to approve.", and the apply job is skipped.
-- [ ] **12. Pause and resume through the pipeline.**
+- [x] **12. Pause and resume through the pipeline.**
 
   ```bash
   ./bmu aws pause --env personal-rehearsal
@@ -1256,10 +1275,12 @@ all any `AccessDenied` in a build's log: the action, the resource, and the fix.
 
   Expected: "Saved RUNNING=false in SSM (/bmu-devqar/settings/RUNNING), as bmu-personal." and "The pipeline applies
   it: Actions › Deploy › Run workflow, from main, with the environment personal-rehearsal." Nothing changes yet. Run
-  the workflow: the plan has changes (the services' task counts), approve it, and once applied `./bmu aws status
-  --env personal-rehearsal` shows "RUNNING=false in SSM: …" and web and worker "running 0 of 0". Then
-  `./bmu aws resume --env personal-rehearsal` ("Saved RUNNING=true …"), run the workflow, approve: both running again.
-- [ ] **13. Break-glass.** First, refused:
+  the workflow: the plan is 0 to add, 3 to change, 0 to destroy (`desired_count` of web, worker and fakecspace, and
+  the output `running` from true to false). Approve it, and once applied `./bmu aws status
+  --env personal-rehearsal` shows "RUNNING=false in SSM: …" and all three "running 0 of 0" (ECS takes a minute to
+  stop the tasks; ask again if they're still running). Then `./bmu aws resume --env personal-rehearsal` ("Saved
+  RUNNING=true …"), run the workflow (the reverse plan), approve: all three running 1 of 1 again.
+- [x] **13. Break-glass.** First, refused:
 
   ```bash
   ./bmu aws deploy --env personal-rehearsal
@@ -1268,9 +1289,11 @@ all any `AccessDenied` in a build's log: the action, the resource, and the fix.
   Expected: "'personal-rehearsal' has a deploy pipeline (pipeline-bmu-personal-rehearsal-…): it deploys it (Actions ›
   Deploy, from main)." and "Type 'break glass' to go ahead:". Type `no`: "Stopped; nothing was deployed." Then the same
   command again, typing `break glass`: an ordinary deploy from this computer, as the deployer (Terraform asks; type
-  `yes`), with an image tagged with the commit and the time. Then run the workflow: the plan has changes (back to the
-  commit's image); approve it. That run is the check that the environment matches `main` again.
-- [ ] **14. Clean up, in this order.** Delete the environment (type `personal-rehearsal` when asked):
+  `yes`), with an image tagged with the commit and the time. Its plan is 3 to add, 3 to change, 3 to destroy: the
+  three task definitions are replaced (a new image), and the services change in place to use them. Then run the
+  workflow: the reverse plan (back to the commit's image); approve it. That run is the check that the environment
+  matches `main` again: `status` shows the image tagged with the commit's first 12 characters.
+- [x] **14. Clean up, in this order.** Delete the environment (type `personal-rehearsal` when asked):
 
   ```bash
   ./bmu aws destroy --env personal-rehearsal
@@ -1285,9 +1308,12 @@ all any `AccessDenied` in a build's log: the action, the resource, and the fix.
   ```
 
   Expected: "This deletes the deploy pipeline of 'personal-rehearsal' …"; if this pipeline made GitHub's OIDC provider
-  (step 4), it says so and asks you to answer no if anything else in the account uses it. Then "Done. Delete the GitHub
-  environments personal-rehearsal-plan and personal-rehearsal too." Then the VPC and the deployer role, the settings
-  (type `personal-rehearsal`), and back to the files:
+  (step 4), it says so and asks you to answer no if anything else in the account uses it. Terraform's plan: 22 to
+  destroy, all named `pipeline-bmu-personal-rehearsal-…` (and the OIDC provider only if this pipeline made it). Then
+  "Done. Delete the GitHub environments personal-rehearsal-plan and personal-rehearsal too." Then the VPC and the
+  deployer role (22 to destroy; it ends with "The [profile bmu-rehearsal-deploy] section in ~/.aws/config can go
+  too.", which you may keep for next time), the settings (type `personal-rehearsal`; they are under
+  `/bmu-devqar/settings/`), and back to the files:
 
   ```bash
   set -o pipefail; ./bmu aws rehearsal-vpc destroy --env personal-rehearsal 2>&1 | tfsummary | tee /tmp/bmu-checklist-32-step14-vpc.txt
@@ -1310,6 +1336,32 @@ all any `AccessDenied` in a build's log: the action, the resource, and the fix.
   ```bash
   gh api -X DELETE repos/ets-berkeley-edu/cspace-bulk-media-uploader/environments/personal-rehearsal
   ```
+
+**Result (14 to 16 November 2026): steps 1 to 14 passed** on `personal-rehearsal`, at `main`'s commit 6ec8f8b, with
+no `AccessDenied` in any build: the build's role, with only the deployer policy, built and pushed both images,
+planned and applied everything. Step 4 found one bug: `./bmu aws pipeline` stopped at its first check, because
+`terraform state list` fails with "No state file was found!" before a root's first apply, and any failure there was
+taken for a state that can't be read. That message now means the root holds nothing (commit "aws.sh: a root never
+applied has no state yet, and holds no OIDC provider", with tests); with it, the pipeline was made with 22 resources,
+using the account's own GitHub OIDC provider. The runs:
+
+- Step 5, run 43635719960: the image repositories and certificate, approved and applied. The job's public log shows
+  neither the account number nor the plan.
+- Steps 6 and 7, run 43636238654: the certificate was already issued (section 24's validation record), so the run
+  went straight to the BMU: both images tagged `6ec8f8b56124`, 66 to add, approved, applied.
+- Steps 8 to 10: the name's CNAME, `sim-secrets`, and the app. An admin's job ran against the simulator (Media,
+  files and Relations created), and an intern's draft used the read-only account. This computer's address was added
+  to `ALLOWED_CIDRS` through `settings push` and a run (1 to add, 1 to change), as step 10 now says.
+- Step 11, run 43646436303: no changes; the apply job was skipped and never waited for review.
+- Step 12: pause, run 43922732684 (3 to change), all three services 0 of 0; resume, run 43926533807, all three 1 of 1.
+- Step 13: "no" stopped the deploy; the break-glass deploy (3 to add, 3 to change, 3 to destroy: the task definitions
+  replaced) applied; run 43931610848 put the commit's image back.
+- Step 14: the environment's destroy (73 in all, with the certificate and image repositories), the pipeline's (22,
+  leaving the account's OIDC provider) and the VPC's (22), the 12 settings, `SETTINGS=ssm`, and both GitHub
+  environments. Everything the section made is gone again.
+
+The expected text of steps 10, 12, 13 and 14 now gives the counts the runs showed, and "Before you start" says how to
+read a plan build's log from the terminal and that tfsummary's short view can hide Terraform's question.
 
 ## Not tests, but still open
 
