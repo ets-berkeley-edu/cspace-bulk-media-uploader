@@ -147,11 +147,11 @@ On branch `feature/vuetify-finished` (or `main` once it is merged), in `./bmu up
 
 On branch `feature/vuetify-demo-tools` (or `main` once it is merged), in `./bmu up sim`. The pane was rebuilt; Claude saw it only in screenshots against a stand-in API, and never used its controls against the real demo endpoints.
 
-- [ ] The pane opens and collapses with its triangle; collapsed, it shows the one-line summary; the state survives a reload.
+- [ ] *Automated:* `test_the_pane_opens_collapses_and_remembers`. The pane opens and collapses with its triangle; collapsed, it shows the one-line summary; the state survives a reload.
 - [ ] Slow down file transfers: set Browser uploads to 1 MB/s and add a large file; the upload is visibly slow. Set it back to Full speed.
-- [ ] Make CollectionSpace fail: add a failure for the upload step, run a job, and see the document fail; the failure's "left" count goes down; Clear failures removes it.
-- [ ] Change terms: delete a person, rename a language; the change is listed in the pane and shows in a draft's checks.
-- [ ] Reset: Reset simulated CollectionSpace; Delete all jobs… asks first, Cancel closes it, Delete all jobs empties the lists and the message appears.
+- [ ] *Automated:* `test_a_failure_is_counted_down_and_cleared`. Make CollectionSpace fail: add a failure for the upload step, run a job, and see the document fail; the failure's "left" count goes down; Clear failures removes it.
+- [ ] *Partly automated:* `test_changed_terms_are_listed_and_checked`, which sees the deleted person at Submit (the editor and Drafts reuse a term's lookup for 10 minutes); how a draft shows the renamed language by hand. Change terms: delete a person, rename a language; the change is listed in the pane and shows in a draft's checks.
+- [ ] *Automated:* `test_reset_the_simulated_collectionspace`, `test_delete_all_jobs_asks_first`. Reset: Reset simulated CollectionSpace; Delete all jobs… asks first, Cancel closes it, Delete all jobs empties the lists and the message appears.
 - [ ] "Sample objects" and "Check scripts and other commands" open; Copy puts a command on the clipboard.
 - [ ] Dark mode: the pane is readable, and native lists and checkboxes across the app (the editor's rows, Show filters, page size) are dark, not white.
 - [ ] `./bmu up qa` (Demo off): the pane says demo tools are off and still lists the commands.
@@ -195,10 +195,10 @@ On branch `feature/demo-reset` (it contains `feature/queue-collisions`), or `mai
 
 On branch `feature/demo-reset` (or `main` once it is merged), after `./bmu down sim` and `./bmu up sim`. Claude ran it only in the tests.
 
-- [ ] With a draft, a queued job and a finished job, change the schedule, then Demo tools, Reset everything…, confirm. Expect empty Drafts, Job queue and Finished jobs, the schedule back to every day at 7:00 PM, and to be still signed in.
-- [ ] Cancel in the confirmation changes nothing.
-- [ ] While a job is running (slow the run down first), Reset everything is refused with a message naming the job.
-- [ ] After a reset, make and run a new job: it works as on a fresh start.
+- [ ] *Automated:* `test_reset_everything_asks_first`, `test_reset_everything`. With a draft, a queued job and a finished job, change the schedule, then Demo tools, Reset everything…, confirm. Expect empty Drafts, Job queue and Finished jobs, the schedule back to every day at 7:00 PM, and to be still signed in.
+- [ ] *Automated:* `test_reset_everything_asks_first`. Cancel in the confirmation changes nothing.
+- [ ] *Automated:* `test_reset_everything_is_refused_while_a_job_runs`. While a job is running (slow the run down first), Reset everything is refused with a message naming the job.
+- [ ] *Automated:* `test_a_new_job_after_a_reset`. After a reset, make and run a new job: it works as on a fresh start.
 - [ ] `./bmu up qa`: the pane has no Reset everything button (Demo tools are off there).
 
 ## 2i. Roles, part 1: staff and interns (15 minutes)
@@ -1542,6 +1542,19 @@ match, above all any `AccessDenied`: the action, the resource, and the fix.
 
 **Result:** not yet done. Record here the runs' numbers, the plans' counts, and anything that didn't match, in a pull
 request of its own (as section 32's results were).
+
+## 34. The Selenium tests: Demo tools (16 November 2026; 10 minutes)
+
+Branch `test/bmut-demo-tools`. Tests only: no change to the app. Nine more checks in `bmut/tests/test_demo_tools.py` (`bmut/README.md` lists them), automating most of sections 2e and 2h; those steps are marked above. The file runs last (`conftest.FILE_ORDER`), because Delete all jobs and Reset everything delete every other file's jobs.
+
+Claude ran the new file twice and `./bmu test` once, each on a fresh stack: 77 tests passed (68 before), about 5½ minutes of tests after the stack's start-up.
+
+Still by hand: 2e's slowed browser upload, how a draft shows a renamed language, Copy to the clipboard, dark mode and `./bmu up qa`; 2h's `./bmu up qa`.
+
+One thing the tests showed, not changed here: after Demo tools deletes a person, a draft that uses it doesn't show "no longer exists" in the editor or in Drafts for up to 10 minutes (`rows.LOOKUP_TTL_SECONDS`); Submit checks afresh and refuses the job. Section 2e, step 4 expected it at once. Say whether the editor should check terms afresh when a draft is opened.
+
+- [ ] On the pull request, the `bmut` job passes. Note how long it took.
+- [ ] `./bmu test -k test_demo_tools --headed`: watch Reset everything refused while "bmut demo running" runs, then the lists empty after it.
 
 ## Not tests, but still open
 

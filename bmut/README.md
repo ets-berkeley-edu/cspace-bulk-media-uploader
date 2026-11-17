@@ -40,8 +40,8 @@ plus the tests.
   first has open held by it. A failed test saves a screenshot of each browser it used.
 - **The files run in `conftest.py`'s `FILE_ORDER`**: what only looks first (sign-in, then the tabs), then what changes
   the stack's data (the job flow, then roles, three kinds of result, Submit for review, Drafts and Job queue, Create /
-  edit job, Finished jobs, and jobs that collide in the queue). Each file's tests run in file order, never in parallel
-  or shuffled. A new file goes where its changes belong.
+  edit job, Finished jobs, jobs that collide in the queue, and last Demo tools, which deletes every job). Each file's
+  tests run in file order, never in parallel or shuffled. A new file goes where its changes belong.
 - **A test that builds on an earlier one** says so with `@pytest.mark.after("test_name")`: if that test didn't pass,
   it's skipped rather than failing for the same reason.
 
@@ -61,6 +61,7 @@ plus the tests.
 | `tests/test_editor.py` | Create / edit job (sections 2a, 2b), as `admin` and a second `admin` session: editing each kind of field, kept after a reload; handling, Restricted and Exclude with the status chip and Public portal column; deleting a document; "Change selected documents"; sorting by each column, paging, page size and "Show documents with problems"; a group, through to its run; a failed browser upload and Retry; the locked banner and Take over |
 | `tests/test_finished_jobs.py` | Finished jobs (section 2d) and Replace file (2a), as `admin` and `intern`: jobs that need attention, fail and complete (failures set in Demo tools); the list, its sorting and Expand all; a job's details and results, with "Show technical details"; Fix and reschedule or Reschedule; "Removed" on a completed job; Fix and Delete off for an intern; deleting from the list and from the results; Fix and reschedule with a replacement file, to Completed |
 | `tests/test_queue_collisions.py` | Jobs that collide in the queue (section 2g), as `admin` and `intern`: a second "Create new object" for the same object refused at Submit, "create if missing" submitting; a move, Run now or Hold that would fail asks first; "Move anyway" flags the job in both browsers; Reorder to avoid failures; "Run now anyway", and the run: B Completed, A Needs attention with "Object already exists" |
+| `tests/test_demo_tools.py` | Demo tools (sections 2e, 2h), as `admin`; runs last, since it deletes every job: the pane collapsing and remembering it; a failure counted down by a run and cleared; a deleted person and a renamed language listed in the pane, and the person in a draft's checks; Delete all jobs… and Reset simulated CollectionSpace; Reset everything…, refused while a slowed-down job runs, Cancel changing nothing, then empty lists and the default schedule, still signed in; a new job after it, to Completed |
 
 The files are named for the simulator's sample Objects (the fakecspace package's BMU set, `seeds.py`: `BMU_OBJECTS`
 and `BMU_SENSITIVE_OBJECTS`; the simulator's image seeds it at every start), or for object numbers it doesn't have (20-0777, 20-0990 and up) where a test needs a missing
