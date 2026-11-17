@@ -26,10 +26,10 @@ FAILURES = Path(__file__).parent / ".run" / "failures"
 _outcomes: dict[str, str] = {}
 
 # The test files in the order they run (the rest after them, alphabetically): what only looks first, then what
-# changes the stack's data (README: The order the tests run in).
+# changes the stack's data (README: The order the tests run in). Demo tools last: it deletes every job.
 FILE_ORDER = ["test_sign_in.py", "test_tabs.py", "test_job_flow.py", "test_roles.py", "test_three_kinds_of_result.py",
               "test_submit_for_review.py", "test_drafts_and_queue.py", "test_editor.py", "test_finished_jobs.py",
-              "test_queue_collisions.py"]
+              "test_queue_collisions.py", "test_demo_tools.py"]
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
