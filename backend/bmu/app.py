@@ -1209,7 +1209,8 @@ def _routes(app: FastAPI) -> None:
                 log.warning("uploaded: job %s document %s changed while it was saved, reading it again", job_id, n)
         result = _recheck_after_change(s, sess, job_id, n)
         if row["upload"]["s"] == "done" and row["file"].rsplit(".", 1)[-1].lower() in TIFF_EXTENSIONS:
-            background.add_task(tiff_thumbnail_step, s.storage, sess.tenant, job_id, n)  # the thumbnail step (a Lambda in AWS)
+            # The thumbnail step runs here in the web app, in AWS too: the design's thumbnail Lambda isn't built.
+            background.add_task(tiff_thumbnail_step, s.storage, sess.tenant, job_id, n)
         return result
 
     # ---- thumbnails (design: User interface, Thumbnails) -------------------------------------------
