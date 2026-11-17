@@ -200,6 +200,7 @@ def test_staff_change_a_draft_between_open_to_interns_and_staff_only(api, login,
     assert "editingSession" not in j and "editingBy" not in j
     r = intern.patch(f"/api/jobs/{job}", json={"name": "x"})
     assert r.status_code == 409 and r.json()["detail"]["code"] == "not_editing"
+    assert r.json()["detail"]["message"].startswith("This draft is for staff only now, so an intern can't edit it")
     assert intern.post(f"/api/jobs/{job}/open").status_code == 403
     assert _audit(services, "Intern access changed") == ["Made “Test job” staff only.", "Opened “Test job” to interns."]  # newest first
 

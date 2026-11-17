@@ -1145,7 +1145,7 @@ Two CollectionSpace roles, BMU\_Intern and BMU\_Staff, replace BMU\_Scheduler an
 - A job that ran and returned to Drafts can be open to interns again. Interns can edit it but not delete it.
 - An intern gives a finished draft to staff with "Submit for review…" (see Submit for review, below), which makes it staff only and marks it "Needs review". Staff can reopen it to interns. This replaced "Hand over to staff…", which made the draft staff only without a mark.
 - In a staff-only job an intern still sees the text of every document, including protected files (file name, object number, field values). The images are never shown to them.
-- As built: `POST /api/jobs/{id}/intern-access` sets it, on drafts only, and only staff may call it. Making a draft staff only ends an intern's editing of it at once. The audit entry is "Intern access changed". An intern's own way to give a draft to staff is `POST /api/jobs/{id}/review` (Submit for review): for any draft that is open to interns, not only one they created, as long as no one else is editing it.
+- As built: `POST /api/jobs/{id}/intern-access` sets it, on drafts only, and only staff may call it. Making a draft staff only ends an intern's editing of it at once; the intern's next change is refused (`not_editing`, so the page becomes read-only) with the reason: the draft is for staff only now (decided November 17, 2026). The audit entry is "Intern access changed". An intern's own way to give a draft to staff is `POST /api/jobs/{id}/review` (Submit for review): for any draft that is open to interns, not only one they created, as long as no one else is editing it.
 
 **Submitting interns' work**
 
