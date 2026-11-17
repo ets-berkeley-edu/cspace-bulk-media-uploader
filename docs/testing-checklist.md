@@ -1545,4 +1545,4 @@ request of its own (as section 32's results were).
 
 ## Not tests, but still open
 
-- The design doc's "For Richard to address" list (from the October 3 comparison of the doc with the prototype).
+- The design doc's Open questions and findings, in particular its "Blocking production" and "Before going live" items.
