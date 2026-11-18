@@ -25,3 +25,5 @@ globalThis.visualViewport = globalThis.visualViewport || Object.assign(new Event
 }) as VisualViewport
 // putFocusNextTick scrolls to what it focuses.
 Element.prototype.scrollIntoView = Element.prototype.scrollIntoView || (() => {})
+// The router opens each new page at the top (router.ts, scrollBehavior); jsdom has no layout to scroll.
+window.scrollTo = () => {}

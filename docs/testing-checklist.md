@@ -1600,6 +1600,15 @@ One change to the app, from what the tests showed (decided November 17, 2026): w
 - [ ] `./bmu test -k test_delete_selected_while_it_works --headed`: watch the three rows dim and read "Deleting…".
 - [ ] By hand, as in section 2j, step 6: as `intern` in one browser, open a draft that is open to interns; as `admin` in a private window, make it staff only from Drafts. Back as the intern, change a description: the message reads "This draft is for staff only now, so an intern can't edit it and your change wasn't saved. Everything you changed before was saved.", and the page is read-only.
 
+## 36. Focus without a jump back to the heading (18 November 2026; 10 minutes, on your local stack)
+
+Branch `fix/focus-prevent-scroll`. When a page opens, its heading takes the keyboard half a second later (`loadingComplete`). That `focus()` also scrolled the page, so someone who started scrolling in that half second was jumped back to the top (the cause of the bmut flake fixed in #170). The heading now takes the focus without scrolling (`putFocusNextTick` with `scroll: false` calls `focus({preventScroll: true})`), and the router opens each new page at the top instead. Moving within the editor (`/job` to `/job/<id>` when a draft is first saved) leaves the page where it is, as before. A document's Delete and its Cancel scroll only if the button they focus is out of sight.
+
+- [ ] `./bmu up sim`, sign in as `admin`, open a draft with 20 or more documents and, at once, scroll down: the page stays where you scrolled.
+- [ ] Scroll down Drafts, then open Job queue: it opens at the top. Scroll down the editor, open Drafts, then come back to the editor: it opens at the top.
+- [ ] With VoiceOver on (Cmd-F5), open each tab: VoiceOver reads the page's heading ("Drafts", "Job queue", "Finished jobs", "Create / edit job").
+- [ ] In the editor, scroll so that a document's row is the last one in sight and press its Delete with the keyboard: the confirmation scrolls into sight with Cancel focused. Press Cancel: the focus is back on Delete, and the page moves only if Delete was out of sight.
+
 ## Not tests, but still open
 
 - The design doc's Open questions and findings, in particular its "Blocking production" and "Before going live" items.

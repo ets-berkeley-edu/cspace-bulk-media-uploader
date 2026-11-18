@@ -664,11 +664,11 @@ const deleteTitle = computed(() => deletable.value ? DELETE_TITLE : props.row.re
 const isConfirmingDelete = ref(false)
 const askDelete = () => {
   isConfirmingDelete.value = true
-  putFocusNextTick(`document-${props.row.n}-delete-cancel-btn`, {scroll: false})
+  putFocusNextTick(`document-${props.row.n}-delete-cancel-btn`, {scrollBlock: 'nearest'})
 }
 const cancelDelete = () => {
   isConfirmingDelete.value = false
-  putFocusNextTick(`document-${props.row.n}-delete-btn`, {scroll: false})
+  putFocusNextTick(`document-${props.row.n}-delete-btn`, {scrollBlock: 'nearest'})
 }
 const doDelete = () => {
   isConfirmingDelete.value = false
