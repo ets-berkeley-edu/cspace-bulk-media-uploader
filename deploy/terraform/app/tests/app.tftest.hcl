@@ -68,6 +68,11 @@ run "names_and_sizes" {
     condition     = length(aws_vpc.main) == 1 && aws_ecs_service.web.network_configuration[0].assign_public_ip && length(aws_vpc_endpoint.s3) == 1 && length(aws_vpc_endpoint.dynamodb) == 1
     error_message = "Without vpc_id, the BMU creates its own VPC: tasks with public IPs, and S3 and DynamoDB gateway endpoints."
   }
+
+  assert {
+    condition     = aws_lb.main.enable_http2 == false
+    error_message = "The load balancer speaks HTTP/1.1 only, as Operations asked (enable_http2 = false)."
+  }
 }
 
 run "paused" {

@@ -22,6 +22,10 @@ resource "aws_lb" "main" {
 
   idle_timeout               = 120
   drop_invalid_header_fields = true
+  # HTTP/1.1 only from browsers, as UC Berkeley's Operations asked (18 November 2026): they had turned HTTP/2 off on
+  # ucb-qa's load balancer, and without this every deploy would turn it back on. Uploads go straight to S3, so only
+  # pages with many small requests (the editor's thumbnails) are a little slower.
+  enable_http2 = false
 }
 
 resource "aws_lb_target_group" "web" {
