@@ -68,7 +68,10 @@ const routes: RouteRecordRaw[] = [
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
-  routes
+  routes,
+  // A new page opens at the top (its heading takes the focus without scrolling: loadingComplete). Moving within the
+  // editor, as from /job to /job/<id> when a draft is first saved, leaves the page where it is.
+  scrollBehavior: (to, from) => to.name === from.name ? false : {top: 0}
 })
 
 export default router

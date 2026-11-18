@@ -27,7 +27,10 @@ const clearScreenReaderAlert = () => {
 
 /**
  * Move keyboard focus to the element with this id (or to cssSelector inside it) once it exists, trying for up to
- * three seconds: for content that appears after a request or a transition.
+ * three seconds: for content that appears after a request or a transition. With scroll (the default) the element is
+ * then scrolled smoothly to scrollBlock; with scroll: false the page doesn't move at all (focus() would otherwise
+ * jump to the element, half a second after the user may have started scrolling). Screen readers follow the focus
+ * either way.
  */
 export function putFocusNextTick(
   id: string,
@@ -45,7 +48,7 @@ export function putFocusNextTick(
       el = el && cssSelector ? el.querySelector<HTMLElement>(cssSelector) : el
       if (el) {
         el.classList.add('scroll-margins')
-        el.focus()
+        el.focus({preventScroll: !scroll})
         if (scroll) {
           el.scrollIntoView({behavior: 'smooth', block: scrollBlock})
         }

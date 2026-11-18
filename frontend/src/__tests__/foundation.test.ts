@@ -4,10 +4,12 @@ import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 import {createPinia, setActivePinia} from 'pinia'
 import {mount} from '@vue/test-utils'
 import {nextTick} from 'vue'
+import type {RouteLocationNormalized} from 'vue-router'
 import {ApiError, api, request} from '@/api'
 import {getMyProfile, logIn} from '@/api/auth'
 import {alertScreenReader, putFocusNextTick} from '@/lib/utils'
 import vuetify from '@/plugins/vuetify'
+import router from '@/router'
 import {useContextStore} from '@/stores/context'
 
 type Call = {url: string, init: RequestInit}
@@ -152,6 +154,39 @@ describe('screen reader and focus helpers (from BOA)', () => {
     await nextTick()
     vi.advanceTimersByTime(10000)
     expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('putFocusNextTick with scroll: false moves the focus without moving the page', async () => {
+    vi.useFakeTimers()
+    Element.prototype.scrollIntoView = vi.fn()
+    document.body.innerHTML = '<h1 id="page-title" tabindex="-1">Drafts</h1><button id="go">Go</button>'
+    const heading = document.getElementById('page-title') as HTMLElement
+    const button = document.getElementById('go') as HTMLElement
+    const headingFocus = vi.spyOn(heading, 'focus')
+    const buttonFocus = vi.spyOn(button, 'focus')
+
+    putFocusNextTick('page-title', {scroll: false})
+    await nextTick()
+    vi.advanceTimersByTime(500)
+    expect(headingFocus).toHaveBeenCalledWith({preventScroll: true})
+    expect(document.activeElement).toBe(heading)
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled()
+
+    // By default the browser may scroll on focus too; the smooth scroll then puts the element where it belongs.
+    putFocusNextTick('go')
+    await nextTick()
+    vi.advanceTimersByTime(500)
+    expect(buttonFocus).toHaveBeenCalledWith({preventScroll: false})
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalledTimes(1)
+    document.body.innerHTML = ''
+  })
+
+  it('a new page opens at the top; moving within the editor leaves the page where it is', () => {
+    const scrollBehavior = router.options.scrollBehavior!
+    const at = (path: string) => router.resolve(path) as RouteLocationNormalized
+    expect(scrollBehavior(at('/queue'), at('/drafts'), null)).toEqual({top: 0})
+    expect(scrollBehavior(at('/job'), at('/queue'), null)).toEqual({top: 0})
+    expect(scrollBehavior(at('/job/abc'), at('/job'), null)).toBe(false)
   })
 })
 

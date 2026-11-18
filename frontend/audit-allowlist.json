@@ -1,10 +1,1 @@
-[
-  {
-    "id": "GHSA-fc5q-39xc-vjpf",
-    "packages": [
-      "picomatch"
-    ],
-    "reason": "No fixed version yet: the advisory covers every picomatch release, 4.0.7 (the newest) included. Build and test tooling only (vite, vitest, sass's file watcher, tinyglobby, and the build plugins of vue-router and vite-plugin-vuetify): not in the built BMU frontend, and the glob patterns come only from this repository's own config.",
-    "review_by": "2026-12-15"
-  }
-]
+[]
