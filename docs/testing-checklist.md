@@ -1604,10 +1604,16 @@ One change to the app, from what the tests showed (decided November 17, 2026): w
 
 Branch `fix/focus-prevent-scroll`. When a page opens, its heading takes the keyboard half a second later (`loadingComplete`). That `focus()` also scrolled the page, so someone who started scrolling in that half second was jumped back to the top (the cause of the bmut flake fixed in #170). The heading now takes the focus without scrolling (`putFocusNextTick` with `scroll: false` calls `focus({preventScroll: true})`), and the router opens each new page at the top instead. Moving within the editor (`/job` to `/job/<id>` when a draft is first saved) leaves the page where it is, as before. A document's Delete and its Cancel scroll only if the button they focus is out of sight.
 
-- [ ] *Automated:* `test_scrolling_as_the_editor_opens_is_kept`. `./bmu up sim`, sign in as `admin`, open a draft with 20 or more documents and, at once, scroll down: the page stays where you scrolled.
-- [ ] *Partly automated:* `test_a_new_page_opens_at_the_top`, from Drafts to the editor; Drafts to Job queue and the editor to Drafts by hand. Scroll down Drafts, then open Job queue: it opens at the top. Scroll down the editor, open Drafts, then come back to the editor: it opens at the top.
-- [ ] *Partly automated:* `test_each_page_puts_the_focus_on_its_heading` checks that each tab's heading gets the focus and names the page; what VoiceOver says by hand. With VoiceOver on (Cmd-F5), open each tab: VoiceOver reads the page's heading ("Drafts", "Job queue", "Finished jobs", "Create / edit job").
-- [ ] *Automated:* `test_delete_brings_its_confirmation_into_sight`. In the editor, scroll so that a document's row is the last one in sight and press its Delete with the keyboard: the confirmation scrolls into sight with Cancel focused. Press Cancel: the focus is back on Delete, and the page moves only if Delete was out of sight.
+- [x] *Automated:* `test_scrolling_as_the_editor_opens_is_kept`. `./bmu up sim`, sign in as `admin`, open a draft with 20 or more documents and, at once, scroll down: the page stays where you scrolled.
+- [x] *Partly automated:* `test_a_new_page_opens_at_the_top`, from Drafts to the editor; Job queue to Drafts and the editor to Drafts by hand, as follows. Do every step in the browser's DevTools Console (Cmd-Option-J) and don't touch the page meanwhile: the tabs scroll out of sight with the page, and a scroll of the mouse wheel or trackpad would change the result. The page you go to must be taller than the window, or it can only open at the top: on it, `document.documentElement.scrollHeight - innerHeight` must be more than 0 (add drafts, or make the window shorter, until it is).
+  1. `document.getElementById('tab-queue').click()`, then `window.scrollTo(0, document.documentElement.scrollHeight)`, then `scrollY`: more than 0.
+  2. `document.getElementById('tab-drafts').click()`, then `scrollY` at once and again 3 seconds later: `0` both times.
+  3. With a draft open in the editor: `document.getElementById('tab-job').click()`, scroll it to the bottom as in 1, then step 2 again: `0` both times.
+  Don't use the address bar or reload instead: a page loaded afresh always opens at the top, so that proves nothing.
+- [x] *Partly automated:* `test_each_page_puts_the_focus_on_its_heading` checks that each tab's heading gets the focus and names the page; what VoiceOver says by hand. With VoiceOver on (Cmd-F5), open each tab: VoiceOver reads the page's heading ("Drafts", "Job queue", "Finished jobs", "Create / edit job"). Close DevTools first, and click each tab with the mouse: VoiceOver may read the tab first, then, about half a second later, "<page>, heading level 1" ("Create slash edit job" for the editor). Its caption panel shows what it says.
+- [x] *Automated:* `test_delete_brings_its_confirmation_into_sight`. In the editor, scroll so that a document's row is the last one in sight and press its Delete with the keyboard: the confirmation scrolls into sight with Cancel focused. Press Cancel: the focus is back on Delete, and the page moves only if Delete was out of sight.
+
+Result (18 November 2026, `./bmu up sim` from `test/bmut-focus-scroll`, which has PR 171, in Chrome): every step passes. The four bmut tests passed on PR 174's CI. By hand, with nothing touching the page: Job queue scrolled to 70, then Drafts opened at 0 and was still at 0 three seconds later (it could have scrolled to 125); the editor scrolled to 1855, then Drafts opened at 0 and stayed there (125 possible). VoiceOver read "<page>, heading level 1" for each of the four tabs. A first try, clicking the tabs and scrolling on the page, once seemed to leave Drafts at its bottom; repeated from the Console without touching the page it opened at the top every time, and a headless Chrome on the same stack agreed.
 
 ## 37. npm audit and pip-audit fail a pull request only for what it changes (18 November 2026; 20 minutes, on GitHub)
 
@@ -1630,9 +1636,9 @@ Claude ran the new file twice and `./bmu test` once, each on a fresh stack: 87 t
 
 The first test's first version failed on CI and was unreliable: it scrolled to the very bottom, so the editor getting a line shorter as it settled pulled the page up 28 pixels, and it didn't wait for Drafts' own focus, whose timer could focus the editor's heading before the scroll (a heading that already has the focus never scrolls), so with the fix undone it failed only one run in three. It now scrolls to 400 pixels above the bottom, allows the page to settle by up to 100 pixels, waits for Drafts' focus, and fails if the heading already had the focus when it scrolled; with the fix undone it failed five runs out of five, and passed three out of three with it.
 
-Still by hand: what VoiceOver says; Drafts to Job queue and the editor to Drafts opening at the top.
+Still by hand: what VoiceOver says; Job queue to Drafts and the editor to Drafts opening at the top (both done 18 November 2026: section 36).
 
-- [ ] On the pull request, the `bmut` job passes.
+- [x] On the pull request, the `bmut` job passes.
 
 ## Not tests, but still open
 
