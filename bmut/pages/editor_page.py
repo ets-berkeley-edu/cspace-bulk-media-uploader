@@ -154,11 +154,11 @@ class EditorPage(Page):
         checks first: Selenium scrolls the button just into view, so a row that moves as their answer lands moves
         the button from under the click.
 
-        The page itself can still move after that. Half a second after the editor opens, it puts the focus on its
-        heading (stores/context.ts, loadingComplete), and focus() scrolls the heading into view: up to the top of
-        the page. If that lands between Selenium scrolling the button into view and its mouse press, the press goes
-        where the button was, and nothing opens. The focus moves only once per opening, so a click that opened
-        nothing is sent once more."""
+        Until 18 November 2026 the page could still move after that: half a second after the editor opens it puts
+        the focus on its heading (stores/context.ts, loadingComplete), and that focus() scrolled the page to the top.
+        If that landed between Selenium scrolling the button into view and its mouse press, the press went where the
+        button was, and nothing opened. The focus no longer scrolls (lib/utils.ts, putFocusNextTick;
+        test_focus_and_scroll.py checks it), but a click that opened nothing is still sent once more, as a guard."""
         toggle = self.field(n, "toggle-btn")
 
         def is_open(driver: WebDriver) -> bool:

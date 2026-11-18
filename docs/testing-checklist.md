@@ -1604,10 +1604,10 @@ One change to the app, from what the tests showed (decided November 17, 2026): w
 
 Branch `fix/focus-prevent-scroll`. When a page opens, its heading takes the keyboard half a second later (`loadingComplete`). That `focus()` also scrolled the page, so someone who started scrolling in that half second was jumped back to the top (the cause of the bmut flake fixed in #170). The heading now takes the focus without scrolling (`putFocusNextTick` with `scroll: false` calls `focus({preventScroll: true})`), and the router opens each new page at the top instead. Moving within the editor (`/job` to `/job/<id>` when a draft is first saved) leaves the page where it is, as before. A document's Delete and its Cancel scroll only if the button they focus is out of sight.
 
-- [ ] `./bmu up sim`, sign in as `admin`, open a draft with 20 or more documents and, at once, scroll down: the page stays where you scrolled.
-- [ ] Scroll down Drafts, then open Job queue: it opens at the top. Scroll down the editor, open Drafts, then come back to the editor: it opens at the top.
-- [ ] With VoiceOver on (Cmd-F5), open each tab: VoiceOver reads the page's heading ("Drafts", "Job queue", "Finished jobs", "Create / edit job").
-- [ ] In the editor, scroll so that a document's row is the last one in sight and press its Delete with the keyboard: the confirmation scrolls into sight with Cancel focused. Press Cancel: the focus is back on Delete, and the page moves only if Delete was out of sight.
+- [ ] *Automated:* `test_scrolling_as_the_editor_opens_is_kept`. `./bmu up sim`, sign in as `admin`, open a draft with 20 or more documents and, at once, scroll down: the page stays where you scrolled.
+- [ ] *Partly automated:* `test_a_new_page_opens_at_the_top`, from Drafts to the editor; Drafts to Job queue and the editor to Drafts by hand. Scroll down Drafts, then open Job queue: it opens at the top. Scroll down the editor, open Drafts, then come back to the editor: it opens at the top.
+- [ ] *Partly automated:* `test_each_page_puts_the_focus_on_its_heading` checks that each tab's heading gets the focus and names the page; what VoiceOver says by hand. With VoiceOver on (Cmd-F5), open each tab: VoiceOver reads the page's heading ("Drafts", "Job queue", "Finished jobs", "Create / edit job").
+- [ ] *Automated:* `test_delete_brings_its_confirmation_into_sight`. In the editor, scroll so that a document's row is the last one in sight and press its Delete with the keyboard: the confirmation scrolls into sight with Cancel focused. Press Cancel: the focus is back on Delete, and the page moves only if Delete was out of sight.
 
 ## 37. npm audit and pip-audit fail a pull request only for what it changes (18 November 2026; 20 minutes, on GitHub)
 
@@ -1621,6 +1621,16 @@ Branch `ci/npm-audit-changed-packages`. `npm audit` asks GitHub's live advisory 
 - [ ] On a scratch branch (not merged), add an allowlist entry for a made-up advisory (`"id": "GHSA-zzzz-zzzz-zzzz"`, a reason, a `review_by` a month out) and open a draft pull request: `npm-audit` fails with "GHSA-zzzz-zzzz-zzzz is no longer reported: remove it", because the pull request added the entry. Close it without merging and delete the branch.
 - [ ] After the merge, the push to `main` runs the step "npm audit, every advisory" and passes.
 - [ ] The next time an advisory is published, passes its review date or is withdrawn without a change here (npm or Python): open pull requests that don't touch the package or the entry show a warning in the job's summary and pass; `main`'s next push and the Monday `audit.yml` run fail until it is fixed (a new pin, or the allowlist).
+
+## 38. The Selenium tests: focus without a jump back (18 November 2026; 5 minutes)
+
+Branch `test/bmut-focus-scroll`. Tests only: no change to the app. Four more checks in `bmut/tests/test_focus_and_scroll.py` (`bmut/README.md` lists them), for section 36; its steps are marked. The first scrolls the editor from a script in the page, because the heading takes the focus half a second after the editor opens and a Selenium round trip can take longer; it fails if it scrolled too late to test anything. `EditorPage.expand`'s docstring no longer blames the heading's focus for moving the page; its second click stays, as a guard.
+
+Claude ran the new file twice and `./bmu test` once, each on a fresh stack: 87 tests passed (83 before). Each new test was also run with the change it checks undone in the stack's frontend (plain `focus()`, no `scrollBehavior`, Delete and Cancel back to `scroll: false`), and failed.
+
+Still by hand: what VoiceOver says; Drafts to Job queue and the editor to Drafts opening at the top.
+
+- [ ] On the pull request, the `bmut` job passes.
 
 ## Not tests, but still open
 
