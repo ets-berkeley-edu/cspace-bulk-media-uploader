@@ -38,11 +38,22 @@ jobs:
     # The weekly audit.yml runs npm audit too; this catches a vulnerable package on the pull request that adds it.
     # npm audit reads package-lock.json, so no install is needed. scripts/audit.js fails on every advisory except those
     # in frontend/audit-allowlist.json, each with a reason and a review date.
+    # npm audit asks GitHub's live advisory database, so a new advisory, a review date passing or an advisory withdrawn
+    # used to fail every open pull request at once, with nothing in them to blame. A pull request now fails only for
+    # what it changes: an unlisted advisory in a package it adds, removes or moves to another version in
+    # package-lock.json, or an allowlist entry it adds or changes. The rest are ::warning:: lines and in the job's
+    # summary. A push to main checks everything, as before, so main still turns red and the list is still kept up.
+    # A pull request's checkout is its merge commit, whose first parent (HEAD^1, hence fetch-depth 2) is the base.
     runs-on: ubuntu-latest
     defaults: { run: { working-directory: frontend } }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: { persist-credentials: false }
+        with: { fetch-depth: 2, persist-credentials: false }
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version: "22.23.4" }
-      - run: node scripts/audit.js
+      - name: npm audit, failing only for what the pull request changes
+        if: github.event_name == 'pull_request'
+        run: node scripts/audit.js --changed-since HEAD^1
+      - name: npm audit, every advisory
+        if: github.event_name != 'pull_request'
+        run: node scripts/audit.js

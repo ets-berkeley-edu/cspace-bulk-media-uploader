@@ -1609,6 +1609,15 @@ Branch `fix/focus-prevent-scroll`. When a page opens, its heading takes the keyb
 - [ ] With VoiceOver on (Cmd-F5), open each tab: VoiceOver reads the page's heading ("Drafts", "Job queue", "Finished jobs", "Create / edit job").
 - [ ] In the editor, scroll so that a document's row is the last one in sight and press its Delete with the keyboard: the confirmation scrolls into sight with Cancel focused. Press Cancel: the focus is back on Delete, and the page moves only if Delete was out of sight.
 
+## 37. npm audit fails a pull request only for what it changes (18 November 2026; 15 minutes, on GitHub)
+
+Branch `ci/npm-audit-changed-packages`. `npm audit` asks GitHub's live advisory database, so a new advisory, an allowlist entry's review date passing or an advisory withdrawn failed every open pull request at once (Security runs on 31 October, 8, 17 and 18 November 2026; on the 18th GitHub withdrew GHSA-fc5q-39xc-vjpf a day after it was allowlisted). On a pull request, security.yml's `npm-audit` job now runs `node scripts/audit.js --changed-since HEAD^1`: it fails on an unlisted advisory only in a package whose versions the pull request changes in `frontend/package-lock.json` (added, removed or moved to another version), and on an allowlist entry the pull request adds or changes; the rest are `::warning::` lines and in the job's summary. A push to `main` and the weekly `audit.yml` run check everything, as before. The job still runs on every pull request and push. `frontend/scripts/audit.test.js` covers the lockfile comparison and the new rules; Claude also ran the script against the withdrawn picomatch entry: with `--changed-since` the check passed with one warning, without it it failed, as `main` did.
+
+- [ ] On this pull request, the `npm-audit` job runs the step "npm audit, failing only for what the pull request changes", says "Compared with HEAD^1: 0 package(s) changed in package-lock.json." and passes.
+- [ ] On a scratch branch (not merged), add an allowlist entry for a made-up advisory (`"id": "GHSA-zzzz-zzzz-zzzz"`, a reason, a `review_by` a month out) and open a draft pull request: `npm-audit` fails with "GHSA-zzzz-zzzz-zzzz is no longer reported: remove it", because the pull request added the entry. Close it without merging and delete the branch.
+- [ ] After the merge, the push to `main` runs the step "npm audit, every advisory" and passes.
+- [ ] The next time an advisory is published, passes its review date or is withdrawn without a change here: open pull requests that don't touch the package or the entry show a warning in the job's summary and pass; `main`'s next push and the Monday `audit.yml` run fail until the allowlist is fixed.
+
 ## Not tests, but still open
 
 - The design doc's Open questions and findings, in particular its "Blocking production" and "Before going live" items.
