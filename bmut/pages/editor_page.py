@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 
+from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.support.select import Select
@@ -151,12 +152,28 @@ class EditorPage(Page):
     def expand(self, n: int) -> None:
         """Opens the document's details and waits for its fields (drawn once they come into view). It waits for the
         checks first: Selenium scrolls the button just into view, so a row that moves as their answer lands moves
-        the button from under the click."""
+        the button from under the click.
+
+        The page itself can still move after that. Half a second after the editor opens, it puts the focus on its
+        heading (stores/context.ts, loadingComplete), and focus() scrolls the heading into view: up to the top of
+        the page. If that lands between Selenium scrolling the button into view and its mouse press, the press goes
+        where the button was, and nothing opens. The focus moves only once per opening, so a click that opened
+        nothing is sent once more."""
         toggle = self.field(n, "toggle-btn")
+
+        def is_open(driver: WebDriver) -> bool:
+            return driver.find_element(*toggle).get_attribute("aria-expanded") == "true"
+
         self.wait_for_checks()
-        if self.wait_for(toggle).get_attribute("aria-expanded") != "true":
+        self.wait_for(toggle)
+        if not is_open(self.driver):
             self.click(toggle)
-            self.wait_until(lambda d: d.find_element(*toggle).get_attribute("aria-expanded") == "true")
+            try:
+                # A click that lands opens the details at once: 3 seconds only allows for a slow CI machine
+                self.wait_until(is_open, timeout=3)
+            except TimeoutException:
+                self.click(toggle)  # still closed (it was just checked), so this can only open it
+                self.wait_until(is_open)
         detail = self.wait_for(self.field(n, "detail"))
         self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'})", detail)
         self.wait_for((By.CSS_SELECTOR, f"#document-{n}-detail .dense-fields"))
