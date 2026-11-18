@@ -20,13 +20,18 @@ from bmut.pages.layout_page import TABS, LayoutPage
 
 ADMIN = ("admin", "admin")  # the simulator's synthetic account: its password is its username
 DOCUMENTS = 24
+# How far the editor may move by itself as it settles after opening (pixels): a line or so.
+MOVES_AS_IT_SETTLES = 100
 # The draft the first test made, for the tests after it.
 made: dict[str, str] = {}
 
 # Opens Create / edit job from its tab and, as soon as the editor shows (the browser tab's title is set as it does),
-# scrolls to the bottom: well inside the half second before the heading takes the focus. Then waits 1.5 seconds and
-# reports where the page is and what has the focus. The script runs in the page, because a Selenium round trip after
-# the click can take longer than that half second, and the test would then scroll only after the focus had moved.
+# scrolls down to 400 pixels above the bottom: well inside the half second before the heading takes the focus. Then
+# waits 1.5 seconds and reports where the page is, whether the heading was out of sight and without the focus when it
+# scrolled (so a focus that scrolled would have had to move the page), and what has the focus. The script runs in the
+# page, because a Selenium round trip after the click can take longer than that half second, and the test would then
+# scroll only after the focus had moved. Not to the very bottom: the editor can still get a line shorter as it settles
+# (CI's slower runner did, by 28 pixels), and the browser then pulls a page scrolled to the bottom up with it.
 SCROLL_AS_THE_EDITOR_OPENS = """
 const done = arguments[arguments.length - 1]
 const start = performance.now()
@@ -35,10 +40,14 @@ const opened = setInterval(() => {
   if (!document.title.startsWith('Create / edit job')) return
   clearInterval(opened)
   requestAnimationFrame(() => {
-    window.scrollTo(0, document.documentElement.scrollHeight)
+    window.scrollTo(0, document.documentElement.scrollHeight - window.innerHeight - 400)
     const scrolledAt = performance.now() - start
     const scrolledTo = window.scrollY
-    setTimeout(() => done({scrolledAt, scrolledTo, after: window.scrollY, focus: document.activeElement?.id}), 1500)
+    const heading = document.getElementById('page-title').getBoundingClientRect()
+    const headingOutOfSight = heading.bottom < 0 || heading.top > window.innerHeight
+    const focusWhenScrolled = document.activeElement?.id
+    setTimeout(() => done({scrolledAt, scrolledTo, headingOutOfSight, focusWhenScrolled, after: window.scrollY,
+                           focus: document.activeElement?.id}), 1500)
   })
 }, 10)
 """
@@ -73,13 +82,21 @@ def test_scrolling_as_the_editor_opens_is_kept(admin: WebDriver, base_url: str) 
     editor.choose_files(editor.FILE_INPUT, [jpeg(f"12-5678_s{i:02}.jpg") for i in range(1, DOCUMENTS + 1)])
     editor.wait_for_text(editor.COUNTS, f"{DOCUMENTS} documents", timeout=120)
     editor.wait_for_checks()
-    DraftsPage(admin, base_url).open_tab()
+    drafts = DraftsPage(admin, base_url)
+    drafts.open_tab()
+    # Drafts' own focus first: its timer looks the heading up by id half a second after Drafts opens, so if it were
+    # still waiting it could focus the editor's heading instead, before the scroll, and the editor's focus would then
+    # find its heading already focused, which never scrolls.
+    drafts.wait_for_focus("page-title")
 
     admin.set_script_timeout(15)
     seen: dict[str, Any] = admin.execute_async_script(SCROLL_AS_THE_EDITOR_OPENS)
     assert seen["scrolledAt"] < 450, f"scrolled too late to test anything: {seen}"
-    assert seen["scrolledTo"] > 300, f"the editor didn't scroll: {seen}"
-    assert seen["after"] == seen["scrolledTo"], f"the page moved: {seen}"
+    assert seen["headingOutOfSight"], f"the heading was still in sight, so its focus wouldn't scroll: {seen}"
+    assert seen["focusWhenScrolled"] != "page-title", f"the heading already had the focus: {seen}"
+    # A focus that scrolls takes the page back to the heading, near the top (from about 2800 pixels to about 320);
+    # the page settling as it opens moves it by a line at most.
+    assert abs(seen["after"] - seen["scrolledTo"]) <= MOVES_AS_IT_SETTLES, f"the page moved: {seen}"
     assert seen["focus"] == "page-title", seen
 
 

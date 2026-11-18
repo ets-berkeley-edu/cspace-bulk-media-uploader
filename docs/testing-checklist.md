@@ -1628,6 +1628,8 @@ Branch `test/bmut-focus-scroll`. Tests only: no change to the app. Four more che
 
 Claude ran the new file twice and `./bmu test` once, each on a fresh stack: 87 tests passed (83 before). Each new test was also run with the change it checks undone in the stack's frontend (plain `focus()`, no `scrollBehavior`, Delete and Cancel back to `scroll: false`), and failed.
 
+The first test's first version failed on CI and was unreliable: it scrolled to the very bottom, so the editor getting a line shorter as it settled pulled the page up 28 pixels, and it didn't wait for Drafts' own focus, whose timer could focus the editor's heading before the scroll (a heading that already has the focus never scrolls), so with the fix undone it failed only one run in three. It now scrolls to 400 pixels above the bottom, allows the page to settle by up to 100 pixels, waits for Drafts' focus, and fails if the heading already had the focus when it scrolled; with the fix undone it failed five runs out of five, and passed three out of three with it.
+
 Still by hand: what VoiceOver says; Drafts to Job queue and the editor to Drafts opening at the top.
 
 - [ ] On the pull request, the `bmut` job passes.
