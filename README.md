@@ -8,6 +8,8 @@ It implements the design for **PAHMA**. Not built yet: the other tenants, the TI
 screen (the audit entries are written), the Restricted Media option and tuning for 1,000-document jobs. The AWS
 deployment is built (`deploy/README.md`); what it leaves for later is listed there.
 
+For museum staff, [BMU v2.0: what's changing](docs/bmu-v2-whats-changing.md) compares it with the legacy BMU.
+
 ## What it does
 
 - **Sign in** with your CollectionSpace account (HTTP Basic). The BMU reads your permissions
