@@ -88,7 +88,9 @@ run. `ALLOW_SELF_REVIEW` goes only in a committed `.conf`.
 A pull request that changes only documentation (`docs/`, `*.md`, `LICENSE`, issue/PR templates) skips `backend`,
 `frontend`, `bmut` and `terraform`; the `changes` job decides, and a skipped job counts as passing. `dependencies` and
 `.github/workflows/security.yml` (`gitleaks` over the whole history, and `npm audit`) run on every pull request and
-push, whatever changed: never add a path filter or a docs-only condition to them. A gitleaks match that isn't a
+push, whatever changed: never add a path filter or a docs-only condition to them. On a pull request, `npm audit`
+fails only for what it changes (`audit.js --changed-since HEAD^1`) and warns of the rest; on a push to main and in
+`audit.yml` it fails on everything. A gitleaks match that isn't a
 secret goes in `.gitleaksignore`, by fingerprint, with a comment saying why. Actions are pinned by commit SHA with
 the version in a comment; Dependabot moves both.
 
@@ -180,7 +182,8 @@ Built like the team's other apps (BOA, Damien, Diablo); `README.md`, Frontend, h
 - A list that loads from the server shows "Loading…" until the first answer, never its empty message.
 - `npm audit` stays clean; don't add a package that breaks it. CI runs it through `frontend/scripts/audit.js`, which
   fails on any advisory not in `frontend/audit-allowlist.json`, on an entry past its review date, and on an entry no
-  longer reported. Add an entry only for an advisory with no usable fix, with the reason it can't reach production and
+  longer reported. On a pull request (`--changed-since HEAD^1`) these fail only for packages whose versions it changes
+  in `package-lock.json` and for entries it adds or changes; the others are warnings, to fix on `main`. Add an entry only for an advisory with no usable fix, with the reason it can't reach production and
   a review date a month or so out.
 
 ### Tests
