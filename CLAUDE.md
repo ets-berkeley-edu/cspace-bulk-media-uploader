@@ -71,7 +71,8 @@ npm run build:demo                          # build with Demo tools
 ```
 
 CI (`.github/workflows/ci.yml`) runs `pytest -q`, then `npm run lint`, `typecheck`, `test` and `build`, and a
-`dependencies` job: the requirements files are in step (below) and `pip-audit` finds no known vulnerabilities, and a
+`dependencies` job: the requirements files are in step (below) and `pip-audit` finds no known vulnerabilities
+(`backend/pip_audit_check.py`), and a
 `terraform` job: `terraform fmt -check`, `validate` for the five configurations in `deploy/terraform`, and
 `terraform test` for `registry`, `app`, `ci`, `rehearsal` and `pipeline` (no AWS sign-in; the Terraform version is pinned in the job, and
 the deploy pipeline's buildspecs must pin the same one), and a `bmut` job:
@@ -88,9 +89,9 @@ run. `ALLOW_SELF_REVIEW` goes only in a committed `.conf`.
 A pull request that changes only documentation (`docs/`, `*.md`, `LICENSE`, issue/PR templates) skips `backend`,
 `frontend`, `bmut` and `terraform`; the `changes` job decides, and a skipped job counts as passing. `dependencies` and
 `.github/workflows/security.yml` (`gitleaks` over the whole history, and `npm audit`) run on every pull request and
-push, whatever changed: never add a path filter or a docs-only condition to them. On a pull request, `npm audit`
-fails only for what it changes (`audit.js --changed-since HEAD^1`) and warns of the rest; on a push to main and in
-`audit.yml` it fails on everything. A gitleaks match that isn't a
+push, whatever changed: never add a path filter or a docs-only condition to them. On a pull request, `pip-audit`
+and `npm audit` fail only for what it changes (`pip_audit_check.py` and `audit.js` with `--changed-since HEAD^1`) and
+warn of the rest; on a push to main and in `audit.yml` they fail on everything. A gitleaks match that isn't a
 secret goes in `.gitleaksignore`, by fingerprint, with a comment saying why. Actions are pinned by commit SHA with
 the version in a comment; Dependabot moves both.
 
