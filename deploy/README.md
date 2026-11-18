@@ -341,9 +341,10 @@ pipeline deploys it (step 6).
      (`deploy/iam/bmu-qa-settings-policy.json`): a profile in `~/.aws/config` like `bmu-qa-deploy`'s, named in
      `ucb-qa.local.conf` as `SETTINGS_PROFILE`. `settings push`, `settings show`, `pause` and `resume` run as it.
    - An administrator of the account, which Richard isn't: an Operations administrator runs `./bmu aws pipeline
-     --env ucb-qa` with him, once, on his computer (`gh` signed in as him; `ADMIN_PROFILE` in `ucb-qa.local.conf` for
-     that time), or gives him a time-limited administrator session. `settings delete` and `pipeline destroy` need one
-     too.
+     --env ucb-qa` once, from their own clone of the repository, with their own administrator sign-in and
+     `gh` signed in as an administrator of the repository. Their `ucb-qa.local.conf` holds only `ADMIN_PROFILE`: the
+     other settings come from SSM. It was done this way on 17 November 2026, as for Serena's pipeline. `settings delete`
+     and `pipeline destroy` need one too.
    - The plans are read in the AWS console (or with `aws logs tail`) with the RTL-Developer permission set, which can
      read the log group `/pipeline/bmu-ucb-qa`; `rtl-BmuQaDeployer` can't.
 
@@ -497,7 +498,7 @@ Terraform's plan and asks, then offers to set the GitHub environments' secret an
 --env <env> destroy` deletes it (and GitHub's OIDC provider, if this pipeline made it: answer no if anything else in
 the account uses it); then delete the two GitHub environments. Testing checklist section 32 proves it on
 `personal-rehearsal`; section 33 moves `ucb-qa` onto it, where an Operations administrator runs `./bmu aws pipeline`
-with Richard ("Stage 2: UC Berkeley's account", step 6).
+from their own clone ("Stage 2: UC Berkeley's account", step 6).
 
 ## Rehearsing the deploy in your own account
 

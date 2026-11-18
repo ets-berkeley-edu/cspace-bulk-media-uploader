@@ -1380,14 +1380,17 @@ match, above all any `AccessDenied`: the action, the resource, and the fix.
   merged (`ucb-qa.conf`'s `SETTINGS=ssm` is on `main`), and nobody deploys `ucb-qa` from a laptop until step 7.
 - In your BMU clone, on `main`, pulled and clean (`git switch main && git pull && git status --short` shows
   nothing): `REQUIRE_CLEAN=true` still holds for every command that applies or plans from here. Every command runs from
-  the clone's top folder.
+  the clone's top folder. If your clone is busy on another branch, a second worktree on `main` does as well (`git
+  worktree add ../cspace-bulk-media-uploader-main main`), with `ucb-qa.local.conf` and `ucb-qa.url` copied into its
+  `deploy/environments/`; the commands then start with `cd` to it.
 - `deploy/environments/ucb-qa.local.conf` from section 23 (the account, the VPC and subnets, `DOMAIN_NAME`,
   `ALLOWED_CIDRS`). `settings push` copies it to SSM, so check it's what `ucb-qa` runs now: its `ALLOWED_CIDRS` is the
   list the last deploy applied.
 - Your profiles in UC Berkeley's account, all through your IAM Identity Center sign-in: `bmu-qa-deploy`
   (`rtl-BmuQaDeployer`), `bmu-qa-settings` (`rtl-BmuQaSettings`, step 2), and the RTL-Developer permission set, with
   which you read the plans. Sign in once: `aws sso login --sso-session berkeley`.
-- `gh` signed in as an administrator of the repository (`gh auth status`): `./bmu aws pipeline` reads the GitHub
+- `gh` signed in (`gh auth status`), to check the environments and their secrets. The Operations administrator's
+  `gh` (step 5) is signed in as an administrator of the repository: `./bmu aws pipeline` reads the GitHub
   environments' rules and the repository's OIDC settings through it, and sets the environments' secrets.
 - The Terraform steps pipe their output through `tfsummary` and save it in `/tmp`, to hand to Claude; it masks the
   account number. When Terraform asks "Enter a value:", the short view may stop at the plan without showing the
@@ -1402,12 +1405,12 @@ match, above all any `AccessDenied`: the action, the resource, and the fix.
   Or open the build from the plan job's summary in the AWS console, signed in through the AWS access portal with
   RTL-Developer.
 
-- [ ] **1. The GitHub environments, with their rules.** The pipeline's roles trust them, so they come first. In the
+- [x] **1. The GitHub environments, with their rules.** The pipeline's roles trust them, so they come first. In the
   repository's Settings › Environments, make two:
   - `ucb-qa-plan`: Deployment branches and tags › Selected branches and tags › add the branch `main`. No reviewers.
-  - `ucb-qa`: the same `main` rule, and Required reviewers › yourself (BP8: you alone, for now). Leave "Prevent
-    self-review" unchecked: `ucb-qa.conf` allows it (`ALLOW_SELF_REVIEW=true`). Leave "Allow administrators to bypass
-    configured protection rules" as it is.
+  - `ucb-qa`: the same `main` rule, and Required reviewers › yourself and the team `rtl-ops` (BP8; either may
+    approve). Leave "Prevent self-review" unchecked: `ucb-qa.conf` allows it (`ALLOW_SELF_REVIEW=true`). Leave "Allow
+    administrators to bypass configured protection rules" as it is.
 
   Check:
 
@@ -1416,7 +1419,7 @@ match, above all any `AccessDenied`: the action, the resource, and the fix.
   ```
 
   Expected: `ucb-qa` and `ucb-qa-plan` (and any others the repository has).
-- [ ] **2. The settings role's profile.** Add a profile for `rtl-BmuQaSettings` to `~/.aws/config`, made from
+- [x] **2. The settings role's profile.** Add a profile for `rtl-BmuQaSettings` to `~/.aws/config`, made from
   `bmu-qa-deploy`'s (the same account and sign-in; nothing is printed):
 
   ```bash
@@ -1428,7 +1431,7 @@ match, above all any `AccessDenied`: the action, the resource, and the fix.
   ```
 
   Expected: `arn:aws:sts::<account>:assumed-role/rtl-BmuQaSettings/…`.
-- [ ] **3. The settings in SSM**, as the settings role:
+- [x] **3. The settings in SSM**, as the settings role:
 
   ```bash
   cd ~/dev/src/rtl/cspace-bulk-media-uploader && ./bmu aws settings push --env ucb-qa
@@ -1439,7 +1442,7 @@ match, above all any `AccessDenied`: the action, the resource, and the fix.
   `FRONT_DOOR=alb`, `WAF_ENABLED=true`, `PROTECT_DATA=false`, `SIMULATED_CSPACE=false`, `DOMAIN_NAME`, `VPC_ID` and
   `ALLOWED_CIDRS`; none of `AWS_PROFILE`, `SETTINGS_PROFILE`, `SETTINGS`, `REQUIRE_CLEAN` or `ALLOW_SELF_REVIEW`. Read
   them; type `y`; "Done. …". An `AccessDenied` here is `rtl-BmuQaSettings`'s policy.
-- [ ] **4. The deployer reads them** (Operations' `SettingsRead`), and nothing has changed yet:
+- [x] **4. The deployer reads them** (Operations' `SettingsRead`), and nothing has changed yet:
 
   ```bash
   cd ~/dev/src/rtl/cspace-bulk-media-uploader && ./bmu aws status --env ucb-qa
@@ -1456,13 +1459,15 @@ match, above all any `AccessDenied`: the action, the resource, and the fix.
 
   Expected: no changes. If there are some, `main`'s Terraform changed since the last laptop deploy; note them here, and
   expect them again in step 7. (`plan` asks nothing, and doesn't ask for the account's number.)
-- [ ] **5. The pipeline's AWS side, with an Operations administrator.** You have no administrator sign-in in this
-  account, so an Operations administrator does this step with you, on your computer, signed in with theirs (or with a
-  time-limited administrator session they give you). Add that profile to `~/.aws/config` as they say, and its name to
-  `deploy/environments/ucb-qa.local.conf` as a line `ADMIN_PROFILE=<the profile's name>`, with your editor. Then:
+- [x] **5. The pipeline's AWS side, by an Operations administrator.** You have no administrator sign-in in this
+  account, so an Operations administrator does this step, once, on their own computer, from their own clone of the
+  repository (as for Serena's pipeline): their administrator profile in their `~/.aws/config`, `gh` signed in as an
+  administrator of the repository (it reads the environments' rules and sets their secrets), and a
+  `deploy/environments/ucb-qa.local.conf` that holds only `ADMIN_PROFILE=<their profile's name>`: the other settings
+  come from SSM (step 3). They run, from their clone's top folder:
 
   ```bash
-  cd ~/dev/src/rtl/cspace-bulk-media-uploader && set -o pipefail; ./bmu aws pipeline --env ucb-qa 2>&1 | tfsummary | tee /tmp/bmu-checklist-33-step5.txt
+  set -o pipefail; ./bmu aws pipeline --env ucb-qa 2>&1 | tfsummary | tee /tmp/bmu-checklist-33-step5.txt
   ```
 
   Expected, in order: "note: self-review is allowed (ALLOW_SELF_REVIEW=true in deploy/environments/ucb-qa.conf; BP8:
@@ -1477,24 +1482,18 @@ match, above all any `AccessDenied`: the action, the resource, and the fix.
   `pipeline` policy, two CodeBuild projects, the log group `/pipeline/bmu-ucb-qa` and the bucket of plans with its
   settings. No simulator policy, no OIDC provider, nothing named `bmu-…` or `serena-…`, nothing that changes or
   destroys. Type `yes`. Then "Set them now with gh, signed in as you? Type y or n:": type `y`. It ends with "Next:
-  Actions › Deploy › Run workflow, from main, with the environment ucb-qa. …". Then take the administrator's profile
-  out of the settings file:
-
-  ```bash
-  cd ~/dev/src/rtl/cspace-bulk-media-uploader && sed -i '' '/^ADMIN_PROFILE=/d' deploy/environments/ucb-qa.local.conf && grep -c '^ADMIN_PROFILE=' deploy/environments/ucb-qa.local.conf
-  ```
-
-  Expected: `0`. Check the GitHub side:
+  Actions › Deploy › Run workflow, from main, with the environment ucb-qa. …". Your own `ucb-qa.local.conf` doesn't
+  change. Check the GitHub side, from your clone:
 
   ```bash
   cd ~/dev/src/rtl/cspace-bulk-media-uploader && gh secret list --repo ets-berkeley-edu/cspace-bulk-media-uploader --env ucb-qa && gh secret list --repo ets-berkeley-edu/cspace-bulk-media-uploader --env ucb-qa-plan
   ```
 
   Expected: `AWS_ROLE_ARN` for each.
-- [ ] **6. `sim-secrets` doesn't apply.** `ucb-qa` uses PAHMA QA, whose read-only account (`BMU_Reader`) was set in
+- [x] **6. `sim-secrets` doesn't apply.** `ucb-qa` uses PAHMA QA, whose read-only account (`BMU_Reader`) was set in
   section 23 with `./bmu aws reader-secret` and stays set: nothing to do. (`./bmu aws sim-secrets --env ucb-qa` would
   say "'ucb-qa' uses a real CollectionSpace: its read-only accounts are set with ./bmu aws reader-secret.")
-- [ ] **7. The first run.** In GitHub: Actions › Deploy › Run workflow, "Use workflow from" `main`, environment
+- [x] **7. The first run.** In GitHub: Actions › Deploy › Run workflow, "Use workflow from" `main`, environment
   `ucb-qa`, Run workflow. The plan build builds and pushes the image, tagged with the commit's first 12 characters
   (about 10 minutes), then plans. Expected in the plan job's summary: "Image repositories and certificate | no changes"
   (they exist since section 23), and "The BMU | 2 to add, 2 to change, 2 to destroy", with a link to the build. Read the plan (the command in "Before you start", or the console): the web and worker task
@@ -1506,14 +1505,14 @@ match, above all any `AccessDenied`: the action, the resource, and the fix.
   Expected: "Applied.", and at the end of the apply build's log "AWS · UC Berkeley QA · PAHMA QA is deployed at commit
   …" and the DNS line naming the load balancer, which is the one `DOMAIN_NAME` already points at. Any `AccessDenied` in
   either build: note it here (the build's role has only the deployer policy).
-- [ ] **8. The app.** `./bmu aws status --env ucb-qa`. Expected: "Deployed by: its pipeline (Actions › Deploy); ./bmu
+- [x] **8. The app.** `./bmu aws status --env ucb-qa`. Expected: "Deployed by: its pipeline (Actions › Deploy); ./bmu
   aws deploy here is break-glass", the image tagged with the commit's first 12 characters, web and worker "running 1
   of 1". Then `https://<DOMAIN_NAME>` (`./bmu open aws` isn't for this environment; `./bmu aws url --env ucb-qa`
   prints it): sign in with your own PAHMA QA account, see the jobs that were there, open a draft, and make a small job
   with one file, submitted to run at once; see it finish (it creates real records in PAHMA QA, as in section 23).
-- [ ] **9. A run with no changes.** Run the workflow again. Expected: "No changes: the environment matches this
+- [x] **9. A run with no changes.** Run the workflow again. Expected: "No changes: the environment matches this
   commit. Nothing to approve.", and the apply job is skipped.
-- [ ] **10. Pause and resume through the pipeline**, as the settings role. Do it when nobody is using `ucb-qa`:
+- [x] **10. Pause and resume through the pipeline**, as the settings role. Do it when nobody is using `ucb-qa`:
 
   ```bash
   cd ~/dev/src/rtl/cspace-bulk-media-uploader && ./bmu aws pause --env ucb-qa
@@ -1525,7 +1524,7 @@ match, above all any `AccessDenied`: the action, the resource, and the fix.
   shows "RUNNING=false in SSM: …" and both "running 0 of 0" (ECS takes a minute). Then `./bmu aws resume --env
   ucb-qa` ("Saved RUNNING=true …"), run the workflow (the reverse plan), approve: both running 1 of 1 again, and the
   app answers.
-- [ ] **11. Break-glass is refused unless asked for.** Don't deploy from here; only check it asks:
+- [x] **11. Break-glass is refused unless asked for.** Don't deploy from here; only check it asks:
 
   ```bash
   cd ~/dev/src/rtl/cspace-bulk-media-uploader && ./bmu aws deploy --env ucb-qa
@@ -1535,13 +1534,44 @@ match, above all any `AccessDenied`: the action, the resource, and the fix.
   "Type 'break glass' to go ahead:". Type `no`: "Stopped; nothing was deployed." Nothing was built or applied. (A real
   break-glass deploy, if the pipeline is ever broken when a deploy is urgent, asks for the account's number too, and
   replaces the two task definitions; the next pipeline run puts the commit's image back, as in section 32, step 13.)
-- [ ] **12. `allow-my-ip` says what to do instead.** `./bmu aws allow-my-ip --env ucb-qa`. Expected, if this
+- [x] **12. `allow-my-ip` says what to do instead.** `./bmu aws allow-my-ip --env ucb-qa`. Expected, if this
   computer's address is new: "'ucb-qa' keeps its settings in SSM. To allow …, set ALLOWED_CIDRS=… in
   deploy/environments/ucb-qa.local.conf; the account's administrator (or SETTINGS_PROFILE) then runs ./bmu aws settings
   push --env ucb-qa, and the next deploy applies it." (or "… is already allowed."). Nothing changes.
 
-**Result:** not yet done. Record here the runs' numbers, the plans' counts, and anything that didn't match, in a pull
-request of its own (as section 32's results were).
+**Result (16 and 17 November 2026): steps 1 to 12 passed** on `ucb-qa`, at `main`'s commit d179e31, with no
+`AccessDenied` anywhere. `ucb-qa` is now deployed by its pipeline. Two things differed from the section as first
+written, and the steps above now say what was done: Richard chose `rtl-ops` as a second reviewer (step 1), and the
+Operations administrator ran step 5 from their own clone, not on Richard's computer. The runs:
+
+- Steps 1 to 4 (16 November): both GitHub environments as step 1 says, with `ucb-qa`'s reviewers Richard and
+  `rtl-ops`; the settings role's profile; the settings pushed to SSM; `status` as the deployer read them (no "files
+  differ" note), web and worker 1 of 1, the running image the laptop deploy of 8fd4737 (clean); `plan`: no changes.
+- Step 5 (17 November, Jira CS-9532): an Operations administrator ran `./bmu aws pipeline --env ucb-qa` from their own
+  clone, with only `ADMIN_PROFILE` in their `ucb-qa.local.conf`: 21 added, 0 changed, 0 destroyed; "GitHub's OIDC
+  provider: the account's own" (Serena's, reused); `AWS_ROLE_ARN` set on `ucb-qa` and `ucb-qa-plan`. Step 6: nothing to
+  do.
+- Step 7, Deploy #9 (run 44184884254): the image `d179e3153ebc` built and pushed; "Image repositories and certificate |
+  no changes", "The BMU | 2 to add, 2 to change, 2 to destroy": the web and worker task definitions replaced for the
+  new image (with them, empty and default fields AWS fills in: `mountPoints`, `systemControls`, `volumesFrom`, the web
+  container's `hostPort`, `tags`), the two services changed in place, nothing else. Approved; "Applied."
+- Step 8: `status` showed "Deployed by: its pipeline", the image `d179e3153ebc` and 1 of 1 each; in the app, signed in,
+  the jobs there, a draft opened, and a one-file job ran to the end in PAHMA QA.
+- Step 9, Deploy #10 (run 44190723333): no changes; the apply job was skipped.
+- Step 10: `pause` as `bmu-qa-settings`, Deploy #11 (run 44198868948): 0 to add, 2 to change (`desired_count` 1 to
+  0), applied; 0 of 0 each, and "RUNNING=false in SSM". `resume`, Deploy #12 (run 44224867759): the reverse plan,
+  applied; 1 of 1 each, and the app answered. A first try at `resume` left RUNNING=false in SSM (`status` still said
+  so; its output wasn't kept, so the cause isn't known); run again, it said "Saved RUNNING=true …".
+- Step 11: `no` at "Type 'break glass' to go ahead:" gave "Stopped; nothing was deployed." at once. Piped through
+  `sed` the first time, the question didn't show before the answer was typed, so "break glass" went in and the next
+  question, the account's number for UC Berkeley data, stopped it at "no": nothing was built or applied either way.
+  Run `deploy` here as the step shows, not piped through another command, which can hold its questions back.
+- Step 12: the address was new, and `allow-my-ip` gave the advice in step 12 (`ALLOWED_CIDRS` in the file, `settings
+  push`, then the pipeline); nothing changed.
+
+Not tested here: the settings role's `Deny` on `/bmu-qa/settings/REAL_DATA_ACCOUNT` (nothing in this section writes
+that setting as that role). GitHub's notice on the runs, that `ubuntu-latest` moves to Ubuntu 26, concerns every
+workflow, not this one.
 
 ## 34. The Selenium tests: Demo tools (16 November 2026; 10 minutes)
 
