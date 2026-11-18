@@ -41,11 +41,11 @@ Start with `./bmu up sim`, open http://localhost:5173.
 - [ ] *Automated:* `test_a_drafts_line_details_and_preview`. From Drafts, click Edit (or Continue editing) on a draft. Expect Create / edit job to open with that draft.
 - [ ] From Drafts, open the preview of a different draft while one is open in the editor: expand that draft and click "Open full preview". (Rows had a Preview button until October 5, 2026; see 2n.) Expect the preview inside the Drafts tab; go to Create / edit job and expect your open draft untouched.
 - [ ] *Partly automated:* `test_submit_and_the_run`; closing the message with its × by hand. Submit a job. Expect to land on Job queue with the blue message saying when it runs. Close the message with its ×.
-- [ ] Click New job while a draft is open. Expect an empty editor; in Drafts, the earlier draft is no longer shown as being edited by you.
+- [ ] *Automated:* `test_new_job_releases_the_draft_and_back_reopens_it`. Click New job while a draft is open. Expect an empty editor; in Drafts, the earlier draft is no longer shown as being edited by you.
 
 **Sign out and session end**
 
-- [ ] Open a draft, then use the menu under your username to Sign out. Sign in as a different user: expect to be able to edit that draft without "Take over".
+- [ ] *Automated:* `test_sign_out_releases_the_draft` (signing in again as `limited`). Open a draft, then use the menu under your username to Sign out. Sign in as a different user: expect to be able to edit that draft without "Take over".
 - [ ] *Automated:* `test_a_session_that_ended_returns_to_the_tab`. Let a session time out (or delete the `bmu_session` cookie in the browser's developer tools), then click something. Expect the sign-in page with the reason shown in a yellow box; after signing in, expect to return to the tab you were on.
 
 **Dark mode**
@@ -93,9 +93,9 @@ On branch `fix/editor-reload-and-deleting` (or `main` once it is merged), in `./
 - [ ] *Automated:* `test_edit_each_kind_of_field_and_reload`, `test_name_a_job_and_add_files`. Open a draft, edit a field, reload the browser. Expect the same draft open, with the edit, and the address ending in `/job/` and the job's id.
 - [ ] *Automated:* `test_name_a_job_and_add_files`. Start a new job by typing a name. Expect the address to gain the job's id. Reload: the job is still open.
 - [ ] *Automated:* `test_the_draft_in_drafts_and_back`. With a draft open, go to Drafts and back by the Create / edit job tab. Expect the draft still open.
-- [ ] Click New job, then the browser's Back button. Expect the earlier draft to reopen.
-- [ ] Delete a draft from Drafts, then paste its old address. Expect a message that the job isn't there, and a new, empty job.
-- [ ] Select 3 documents and Delete selected. Expect the three rows to read "Deleting…" and dim, and the button to read "Deleting…", until they disappear. Note roughly how long it takes.
+- [ ] *Automated:* `test_new_job_releases_the_draft_and_back_reopens_it`. Click New job, then the browser's Back button. Expect the earlier draft to reopen.
+- [ ] *Automated:* `test_a_deleted_drafts_old_address`. Delete a draft from Drafts, then paste its old address. Expect a message that the job isn't there, and a new, empty job.
+- [ ] *Partly automated:* `test_delete_selected_while_it_works` (Chrome slows the requests down so the test sees them); how long it takes by hand. Select 3 documents and Delete selected. Expect the three rows to read "Deleting…" and dim, and the button to read "Deleting…", until they disappear. Note roughly how long it takes.
 
 ## 2c. Drafts and Job queue after part 4 (20 minutes)
 
@@ -228,7 +228,7 @@ Branch `feature/intern-access`. Restart first: `./bmu down sim`, then `./bmu up 
 - [ ] *Automated:* `test_submit_from_drafts_is_off_when_a_document_needs_fixing`. A draft with a document that needs fixing has Submit… off, and the tooltip says to open the draft with Edit.
 - [ ] *Automated:* `test_open_to_interns_from_drafts`. As `admin`, "Open to interns" on a draft's row: the line under its name changes, and a message says so. "Make staff only" changes it back.
 - [ ] *Automated:* `test_open_to_interns_in_the_editor`. As `admin`, open a draft: the "Open to interns" checkbox under the job name does the same.
-- [ ] As `intern`, open a draft that is open to interns. In a private window as `admin`, make it staff only. Back as the intern, the next change is refused and the page says the draft is no longer theirs to edit.
+- [ ] *Automated:* `test_an_interns_change_after_the_draft_is_made_staff_only`. As `intern`, open a draft that is open to interns. In a private window as `admin`, make it staff only. Back as the intern, the next change is refused, the page becomes read-only, and the message says the draft is for staff only now.
 - "Hand over to staff…" is gone: Submit for review replaced it on October 5, 2026. Test that in 2m instead. The two steps that were here no longer apply.
 - [ ] *Automated:* `test_move_to_drafts`. As `admin`, in the Job queue: "Move to Drafts…" on a queued job asks first, then the job is in Drafts with nobody editing it.
 - [ ] *Automated:* `test_an_intern_in_the_job_queue`. As `intern`, in the Job queue: "Move to Drafts…" is off, with "Only staff can do this."
@@ -468,7 +468,7 @@ Branch `fix/review-2026-10-29`. Claude ran both full suites (backend with the ne
 
 **Roles and editing**
 
-- [ ] Two browsers, the same draft: take it over in the second, then change a field in the first. The first shows that it's no longer editing; the field isn't changed for the second.
+- [ ] *Automated:* `test_after_a_take_over_the_first_sessions_change_is_refused`. Two browsers, the same draft: take it over in the second, then change a field in the first. The first shows that it's no longer editing; the field isn't changed for the second.
 - [ ] Add files, and while they upload click New job (or open another draft). Back in the first draft, the documents whose uploads were stopped show Retry, none says "Upload failed" from the server, and Retry sends each file once.
 - [ ] As `intern`, in a fix open to interns with one document: Delete is refused ("only staff can delete it"), and the job stays.
 - [ ] As `limited` (no groups permission), with the job's group on: the bulk panel's Group list offers "No (leave out)"; "Yes" can't be chosen.
@@ -1585,6 +1585,20 @@ One thing the tests showed, not changed here: after Demo tools deletes a person,
 
 - [ ] On the pull request, the `bmut` job passes. Note how long it took.
 - [ ] `./bmu test -k test_demo_tools --headed`: watch Reset everything refused while "bmut demo running" runs, then the lists empty after it.
+
+## 35. The Selenium tests: drafts and their addresses (16 November 2026; 10 minutes)
+
+Branch `test/bmut-drafts-and-addresses`. Six more checks in `bmut/tests/test_drafts_and_addresses.py` (`bmut/README.md` lists them), for steps left by hand in sections 2, 2b, 2j and 12; those steps are marked above. Delete selected's "Deleting…" lasts a moment, so that test has Chrome add 3 seconds to each request while it looks.
+
+Claude ran the new file twice and `./bmu test` once, each on a fresh stack: 83 tests passed (77 before).
+
+Still by hand: how long Delete selected takes.
+
+One change to the app, from what the tests showed (decided November 17, 2026): when staff make a draft staff only while an intern is editing it, the intern's next change was refused with "Open this draft for editing first.", which the intern can't do. It now gives the reason: "This draft is for staff only now, so an intern can't edit it and your change wasn't saved. Everything you changed before was saved." The page still becomes read-only (the refusal is still `not_editing`). `backend/tests/test_roles.py` and the bmut test check the wording.
+
+- [ ] On the pull request, the `bmut` job passes.
+- [ ] `./bmu test -k test_delete_selected_while_it_works --headed`: watch the three rows dim and read "Deleting…".
+- [ ] By hand, as in section 2j, step 6: as `intern` in one browser, open a draft that is open to interns; as `admin` in a private window, make it staff only from Drafts. Back as the intern, change a description: the message reads "This draft is for staff only now, so an intern can't edit it and your change wasn't saved. Everything you changed before was saved.", and the page is read-only.
 
 ## Not tests, but still open
 

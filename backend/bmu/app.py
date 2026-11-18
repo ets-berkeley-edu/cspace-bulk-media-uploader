@@ -263,6 +263,8 @@ ROLES = ("staff", "intern")
 STAFF_REFUSED = ("Only users with the BMU_Staff role can do this. Interns can create drafts and edit the drafts that are "
                  "open to interns.")
 INTERN_DRAFT_REFUSED = "This draft is for staff only, so an intern can't edit or delete it."
+INTERN_STAFF_ONLY_NOW = ("This draft is for staff only now, so an intern can't edit it and your change wasn't saved. "
+                         "Everything you changed before was saved.")
 INTERN_TAKEOVER_REFUSED = "A staff member is editing this draft. Only staff can take it over."
 INTERN_DELETE_RAN = "This job has already run, so only staff can delete it. You can still edit it."
 ADMIN_HELP = "Contact your CollectionSpace administrator if you think this is wrong."
@@ -404,9 +406,14 @@ def _editable(job: dict, sess: "Session | None" = None) -> None:
         raise HTTPException(409, f"The job is {job['status']}; only jobs being prepared can be changed.")
     if sess is not None and job.get("editingSession") != sess.key:
         who = job.get("editingBy")
-        raise HTTPException(409, {"code": "not_editing", "editingBy": who or "",
-                                  "message": f"{who} is editing this draft now, so your change wasn't saved. Everything you "
-                                             "changed before was saved." if who else "Open this draft for editing first."})
+        if sess.role == "intern" and not job.get("internOpen"):
+            # Staff made it staff only, which ended the intern's editing (intern_access): say so, not "open it first"
+            message = INTERN_STAFF_ONLY_NOW
+        elif who:
+            message = f"{who} is editing this draft now, so your change wasn't saved. Everything you changed before was saved."
+        else:
+            message = "Open this draft for editing first."
+        raise HTTPException(409, {"code": "not_editing", "editingBy": who or "", "message": message})
 
 
 def _draft_days(s: "Services", job: dict | None) -> int:
