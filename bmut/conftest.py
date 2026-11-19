@@ -29,8 +29,8 @@ _outcomes: dict[str, str] = {}
 # changes the stack's data (README: The order the tests run in). Demo tools last: it deletes every job.
 FILE_ORDER = ["test_sign_in.py", "test_tabs.py", "test_job_flow.py", "test_roles.py", "test_three_kinds_of_result.py",
               "test_submit_for_review.py", "test_drafts_and_queue.py", "test_editor.py", "test_focus_and_scroll.py",
-              "test_drafts_and_addresses.py",
-              "test_finished_jobs.py", "test_queue_collisions.py", "test_demo_tools.py"]
+              "test_drafts_and_addresses.py", "test_roles_more.py", "test_finished_jobs.py", "test_queue_collisions.py",
+              "test_demo_tools.py"]
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:

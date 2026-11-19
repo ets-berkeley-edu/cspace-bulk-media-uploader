@@ -11,6 +11,12 @@ from bmut.pages.sign_in_page import SignInPage
 ADMIN = ("admin", "admin")      # staff with every permission
 NEWSTAFF = ("newstaff", "newstaff")  # the staff role without the permissions: refused at sign-in
 READER = ("reader", "reader")   # neither BMU role: refused at sign-in
+BMUREADER = ("bmureader", "bmureader")  # the simulator's read-only account for interns' checks: no BMU role either
+NO_ROLE = ("Your CollectionSpace account doesn't have the BMU_Staff or BMU_Intern role, which the BMU needs. Contact your "
+           "CollectionSpace administrator if you think this is wrong.")
+NO_PERMISSIONS = ("Your CollectionSpace account has the BMU_Staff role, but it can't create Media records, update Media "
+                  "records or create relations. The BMU needs that to create Media records. Contact your CollectionSpace "
+                  "administrator if you think this is wrong.")
 
 
 def test_sign_in_returns_to_the_page_asked_for(driver: WebDriver, base_url: str) -> None:
@@ -55,11 +61,13 @@ def test_the_environment_label(driver: WebDriver, base_url: str) -> None:
 
 
 def test_accounts_without_the_role_or_the_permissions_are_refused(driver: WebDriver, base_url: str) -> None:
-    """Section 2i (roles, part 1): newstaff has the staff role but only reads; reader has neither BMU role."""
+    """Section 2i, steps 3 and 4: newstaff has the staff role but only reads; reader has neither BMU role; each is
+    refused with what it lacks and whom to ask. Section 2k, step 8: so is the read-only account, bmureader."""
     sign_in = SignInPage(driver, base_url)
-    for account in (NEWSTAFF, READER):
+    for account, message in ((NEWSTAFF, NO_PERMISSIONS), (READER, NO_ROLE), (BMUREADER, NO_ROLE)):
         sign_in.sign_in(*account)
-        assert sign_in.text_of(sign_in.ERROR), account[0]
+        # the previous account's message is still there until the answer comes, so wait for this one's
+        sign_in.wait_until(lambda d, message=message: sign_in.text_of(sign_in.ERROR) == message)
         assert "/login" in driver.current_url
 
 
