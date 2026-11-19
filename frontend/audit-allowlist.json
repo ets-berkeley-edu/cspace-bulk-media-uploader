@@ -1,1 +1,7 @@
-[]
+[
+  {
+    "id": "GHSA-zzzz-zzzz-zzzz",
+    "reason": "Made up, for testing checklist section 37: a pull request that adds an entry no longer reported must fail. Never merge.",
+    "review_by": "2026-12-18"
+  }
+]
