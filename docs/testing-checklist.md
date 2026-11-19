@@ -205,19 +205,19 @@ On branch `feature/demo-reset` (or `main` once it is merged), after `./bmu down 
 
 Branch `feature/roles-and-sign-in`. The backend changed, so restart first: `./bmu down sim`, then `./bmu up sim`. The simulator's users are listed in the README (Running it locally); each one's password is `<simulator-password>` (see the README).
 
-- [ ] Demo tools has a "Sign in as" box. It says who you are and your role, and has one button for each simulator user. Use it for the switches below instead of signing out and in. Its buttons for `reader` and `newstaff` show the refusal message and leave you signed in as you were.
-- [ ] Clicking a "Sign in as" button for a user who is let in reloads the app as that user, on Create / edit job.
-- [ ] *Partly automated:* `test_accounts_without_the_role_or_the_permissions_are_refused`; the message's wording by hand. Sign in as `reader`: refused, with a message that the account has neither BMU role and to contact the CollectionSpace administrator.
-- [ ] *Partly automated:* `test_accounts_without_the_role_or_the_permissions_are_refused`; the message's wording by hand. Sign in as `newstaff`: refused, with a message naming what the account can't do (create and update Media records, create relations).
+- [ ] *Automated:* `test_sign_in_as_lists_the_users_and_keeps_you_on_a_refusal`. Demo tools has a "Sign in as" box. It says who you are and your role, and has one button for each simulator user. Use it for the switches below instead of signing out and in. Its buttons for `reader` and `newstaff` show the refusal message and leave you signed in as you were.
+- [ ] *Automated:* `test_sign_in_as_a_user_who_is_let_in`. Clicking a "Sign in as" button for a user who is let in reloads the app as that user, on Create / edit job.
+- [ ] *Automated:* `test_accounts_without_the_role_or_the_permissions_are_refused`. Sign in as `reader`: refused, with a message that the account has neither BMU role and to contact the CollectionSpace administrator.
+- [ ] *Automated:* `test_accounts_without_the_role_or_the_permissions_are_refused`. Sign in as `newstaff`: refused, with a message naming what the account can't do (create and update Media records, create relations).
 - [ ] *Automated:* `test_staff_and_interns_in_the_header_and_the_job_queue`. Sign in as `admin`: works as before. No "Intern" chip in the header. The Job queue has every control (reorder, Run now, Set run time, Hold, Schedule settings, Pause queue).
 - [ ] *Automated:* `test_a_staff_draft_is_staff_only`. As `admin`, create a draft, add a file and close it (New job). In Drafts it reads "Staff only" under its name.
 - [ ] *Automated:* `test_an_interns_draft`, `test_staff_and_interns_in_the_header_and_the_job_queue`. Sign in as `intern` (a private window keeps `admin` signed in): the header shows "Intern". New job works; add a file. In Drafts the intern's draft reads "Open to interns", and its Edit and Delete work.
 - [ ] *Automated:* `test_a_staff_draft_is_off_for_an_intern`. As `intern`, in Drafts: Edit and Delete on `admin`'s draft are off, and the tooltip says "This draft is for staff only."
 - [ ] *Automated, as it is now:* `test_an_interns_draft` (an intern has Submit for review in place of Submit job, 2m; the documents are found, 2k). As `intern`, in the editor: Submit job is off, and its tooltip says only staff can submit. Expected for now: the documents show "needs fixing" because the intern's account can read nothing (the service account comes in part 3).
 - [ ] *Automated:* `test_an_intern_in_the_job_queue`. As `intern`, in the Job queue (submit a job as `admin` first): no reorder arrows or run controls, the line "Only staff can change the schedule or the order of the queue", and Edit and Delete off with "Only staff can do this."
-- [ ] As `intern`, in Finished jobs: Fix and reschedule and Delete are off.
-- [ ] As `admin`, open the intern's draft and submit it: it runs under `admin`.
-- [ ] As `limited` (staff who can't create Objects): signs in; behaves as before.
+- [ ] *Automated:* `test_an_intern_cant_fix_or_delete`. As `intern`, in Finished jobs: Fix and reschedule and Delete are off.
+- [ ] *Automated:* `test_staff_submit_an_interns_draft`. As `admin`, open the intern's draft and submit it: it runs under `admin`.
+- [ ] *Automated:* the tests that sign in as `limited` (`test_three_kinds_of_result.py`, `test_drafts_and_addresses.py`, `test_roles_more.py`). As `limited` (staff who can't create Objects): signs in; behaves as before.
 
 ## 2j. Roles, part 2: intern access, Submit from Drafts, Move to Drafts (15 minutes)
 
@@ -243,9 +243,9 @@ Branch `feature/reader-account`. Restart first: `./bmu down sim`, then `./bmu up
 - [ ] *Automated:* `test_an_interns_checks_use_the_read_only_account`. As `intern`, add `12-2001_1.jpg`. Expect a protected file whose reason reads "marked sensitive in CollectionSpace", with no mention of Human Remains or "culturally", and no thumbnail.
 - [ ] *Automated:* `test_an_interns_checks_use_the_read_only_account`. As `intern`, add `12-2003_1.jpg`. Expect the warning "Object 12-2003 has a note about access in CollectionSpace", without the kind of restriction.
 - [ ] *Automated:* `test_staff_see_the_full_reasons`. Sign in as `admin` and preview the same draft: the full reasons are there.
-- [ ] As `intern`: the Creator field's search finds terms, the Language list fills, and a date such as `1920s` gets its preview.
+- [ ] *Automated:* `test_an_interns_lookups`. As `intern`: the Creator field's search finds terms, the Language list fills, and a date such as `1920s` gets its preview.
 - [ ] `./bmu logs sim web` shows lines like "reader: intern made 3 lookups (checking job …)".
-- [ ] The sign-in page refuses `bmureader` / `<simulator-password>`, and "Sign in as" doesn't list it.
+- [ ] *Automated:* `test_accounts_without_the_role_or_the_permissions_are_refused`, `test_sign_in_as_lists_the_users_and_keeps_you_on_a_refusal`. The sign-in page refuses `bmureader` / `<simulator-password>`, and "Sign in as" doesn't list it.
 
 ## 2l. Roles, part 4: three kinds of result (20 minutes)
 
@@ -470,8 +470,8 @@ Branch `fix/review-2026-10-29`. Claude ran both full suites (backend with the ne
 
 - [ ] *Automated:* `test_after_a_take_over_the_first_sessions_change_is_refused`. Two browsers, the same draft: take it over in the second, then change a field in the first. The first shows that it's no longer editing; the field isn't changed for the second.
 - [ ] Add files, and while they upload click New job (or open another draft). Back in the first draft, the documents whose uploads were stopped show Retry, none says "Upload failed" from the server, and Retry sends each file once.
-- [ ] As `intern`, in a fix open to interns with one document: Delete is refused ("only staff can delete it"), and the job stays.
-- [ ] As `limited` (no groups permission), with the job's group on: the bulk panel's Group list offers "No (leave out)"; "Yes" can't be chosen.
+- [ ] *Automated:* `test_an_intern_cant_delete_a_fix`. As `intern`, in a fix open to interns with one document: Delete is refused ("only staff can delete it"), and the job stays.
+- [ ] *Automated:* `test_without_the_groups_permission_the_bulk_group_list_leaves_out`. As `limited` (no groups permission), with the job's group on: the bulk panel's Group list offers "No (leave out)"; "Yes" can't be chosen.
 
 **Sign-in**
 
@@ -1639,6 +1639,17 @@ The first test's first version failed on CI and was unreliable: it scrolled to t
 Still by hand: what VoiceOver says; Job queue to Drafts and the editor to Drafts opening at the top (both done 18 November 2026: section 36).
 
 - [x] On the pull request, the `bmut` job passes.
+
+## 39. The Selenium tests: the rest of roles (18 November 2026; 10 minutes)
+
+Branch `test/bmut-roles-rest`. Tests only: no change to the app. Six more checks in `bmut/tests/test_roles_more.py` (`bmut/README.md` lists them), for steps left by hand in sections 2i, 2k and 12: Demo tools' Sign in as box (its list of users, a refused account leaving you signed in as you were, and a user who is let in); an intern's Creator search, Language list and date preview through the read-only account; staff submitting an intern's draft, which runs under `admin`; an intern's Delete off in a fix; and, as `limited`, the bulk panel's Group list. `test_accounts_without_the_role_or_the_permissions_are_refused` (`test_sign_in.py`) now checks the refusal's wording for `newstaff` and `reader`, and refuses `bmureader` too. Three steps already automated elsewhere are marked as well (section 2i: Finished jobs as `intern`, and `limited`).
+
+Claude ran the new file and `./bmu test` on a fresh stack, on top of `main` of 18 November: 93 tests passed (87 before).
+
+Still by hand: section 2k's log line ("reader: intern made 3 lookups"), which is in the web app's log, not on the page.
+
+- [ ] On the pull request, the `bmut` job passes.
+- [ ] `./bmu test -k test_sign_in_as --headed`: watch the reader and newstaff buttons show their refusals, and the intern button reload the app as `intern`.
 
 ## Not tests, but still open
 
