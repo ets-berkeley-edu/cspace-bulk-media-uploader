@@ -10,6 +10,9 @@ deployment is built (`deploy/README.md`); what it leaves for later is listed the
 
 For museum staff, [BMU v2.0: what's changing](docs/bmu-v2-whats-changing.md) compares it with the legacy BMU.
 
+For developers and ops: the [CollectionSpace hosting inventory](https://drive.google.com/file/d/1l4In1IwlmcXnb_7g05Sk5YJgMP3r6OQR/view) (PDF; UC Berkeley sign-in
+required) lists what runs today on the hosts of the legacy webapps, the legacy BMU, Solr, the ETL and Glimmer.
+
 ## What it does
 
 - **Sign in** with your CollectionSpace account (HTTP Basic). The BMU reads your permissions
