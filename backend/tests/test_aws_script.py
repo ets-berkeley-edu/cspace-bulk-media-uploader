@@ -928,6 +928,7 @@ def test_before_migrate_the_parameters_are_read_and_set_and_push_refuse(tree):
     assert "one parameter per setting" in r.stdout and "settings migrate --env t" in r.stdout
     for result in (set_(tree, "ENV_LABEL", "x"), push(tree)):
         assert result.returncode == 1 and "settings migrate --env t" in result.stderr
+        assert "Write th" not in result.stdout  # refused before it asks
     assert not (settings_dir(tree) / "all").exists()
 
 

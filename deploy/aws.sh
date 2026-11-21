@@ -641,6 +641,9 @@ settings_set() {  # settings_set SETTING VALUE
     FRONT_DOOR:*) case "$value" in cloudfront|alb|"") ;; *) die "FRONT_DOOR must be cloudfront or alb." ;; esac ;;
     WAF_MANAGED_RULES:*) case "$value" in count|block|"") ;; *) die "WAF_MANAGED_RULES must be count or block." ;; esac ;;
   esac
+  local store; store="$(settings_store)" || exit 1
+  [ "$store" != parameters ] ||
+    die "'$ENV' keeps its settings one parameter each, from before the settings document. The account's administrator (or SETTINGS_PROFILE) moves them first: ./bmu aws settings migrate --env $ENV"
   lines="$(ssm_settings)" || exit 1
   [ -n "$(settings_in_files_only "$lines")" ] ||
     die "'$ENV' has no settings in SSM yet (account $ACCOUNT_ID, $(settings_path)/): ./bmu aws settings push --env $ENV"
