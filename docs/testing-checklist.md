@@ -1716,6 +1716,77 @@ cd <your clone> && git switch deploy/settings-pull-set && git pull && aws sso lo
   The next deploy uses it. [y/N]`; answer `y`. Then `Done.` Run step 1 again: the same settings as at first, and no
   line ends `(the files here: …)`.
 
+## 41. The settings as one document, on ucb-qa (21 November 2026; 30 minutes, with Operations for step 3)
+
+Branch `deploy/settings-document`. Operations mostly edit the settings' values and wanted to see and change them in
+one place, so `ucb-qa`'s settings move from about 20 SSM parameters into one, the settings document
+`/bmu-qa/settings/all`: one `NAME="value"` line per setting, with comments, edited in the AWS console. `RUNNING` and
+`REAL_DATA_ACCOUNT` stay parameters of their own. CI checks it against a stand-in AWS (`backend/tests/test_aws_script.py`);
+this moves `ucb-qa` itself and checks the whole round: an edit in the console, `show` and `pull`, a mistake caught
+before Terraform, `set`, and a pipeline run reading the document. No IAM policy changes: the document's name is under
+`settings/*`, which the deployer, the settings role and the build already read (and the settings role writes).
+
+Run the commands from a checkout of the branch (after the merge, `main`) that has your
+`deploy/environments/ucb-qa.local.conf`, which names `SETTINGS_PROFILE`. Sign in first:
+
+```bash
+cd <your clone> && git switch deploy/settings-document && git pull && aws sso login --sso-session <your session>
+```
+
+- [ ] **1. Before: one parameter per setting.**
+
+  ```bash
+  cd <your clone> && ./bmu aws settings show --env ucb-qa
+  ```
+
+  Expected: `'ucb-qa' in SSM, account …, one parameter per setting under /bmu-qa/settings/`, then `(from before the
+  settings document: ./bmu aws settings migrate --env ucb-qa moves them into one):` and the settings. Keep this output
+  to compare in step 2.
+- [ ] **2. Move them into the document** (as `SETTINGS_PROFILE`, which the command uses itself):
+
+  ```bash
+  cd <your clone> && ./bmu aws settings migrate --env ucb-qa
+  ```
+
+  Expected: `This moves the settings of 'ucb-qa' (account …) into one document, /bmu-qa/settings/all:`, the document
+  (three comment lines, then one `NAME="value"` line per setting, the same values as step 1's), `RUNNING and
+  REAL_DATA_ACCOUNT stay as they are.`, and `Go ahead? [y/N]`. Answer `y`: `Done. Edit it in the AWS console …`. Then
+  run step 1's command again: `the document /bmu-qa/settings/all (version 1):` and the same settings as before, with
+  `RUNNING` and `REAL_DATA_ACCOUNT` among them. In the console (us-west-2, Systems Manager › Parameter Store), under
+  `/bmu-qa/settings/` there are now three parameters: `all`, `REAL_DATA_ACCOUNT` and `RUNNING`.
+- [ ] **3. Operations edit it in the console.** With Operations, as they would: open `/bmu-qa/settings/all` › Edit.
+  Add a comment line at the end, `# Checklist 41: an Ops comment`, add ` (test)` at the end of `ENV_LABEL`'s value
+  (inside the quotes), and Save changes. The History tab shows version 2, saved by the person who edited it.
+- [ ] **4. Show and pull see the edit.**
+
+  ```bash
+  cd <your clone> && ./bmu aws settings show --env ucb-qa && ./bmu aws settings pull --env ucb-qa
+  ```
+
+  Expected: `(version 2)`, `ENV_LABEL=… (test)   (the files here: …)` and `To bring the files here up to date: …`;
+  then pull lists `  ENV_LABEL=… (test)   (was …)` and `Updated 1 setting(s) in …/ucb-qa.local.conf from SSM`.
+- [ ] **5. A mistake stops before Terraform.** In the console, edit the document again and remove the closing `"`
+  from `ENV_LABEL`'s value; save. Then:
+
+  ```bash
+  cd <your clone> && ./bmu aws plan --env ucb-qa
+  ```
+
+  Expected: ``Line <n> of /bmu-qa/settings/all in SSM: ENV_LABEL's value must be in double quotes, without " $ ` or \
+  in it: …``, and no Terraform output. Put the `"` back in the console and save (version 4).
+- [ ] **6. Set changes one line and keeps the comment.** Use `ENV_LABEL`'s value from step 1:
+
+  ```bash
+  cd <your clone> && ./bmu aws settings set --env ucb-qa ENV_LABEL "<the value from step 1>"
+  ```
+
+  Expected: `  ~ ENV_LABEL=<the value from step 1> (was … (test))` and `Write this to SSM? …`; answer `y`, then `Done.`
+  In the console, the document (version 5) still ends with `# Checklist 41: an Ops comment`. Remove that line there
+  if you like (version 6).
+- [ ] **7. The pipeline reads the document.** GitHub › Actions › Deploy › Run workflow, from `main`, with `ucb-qa`
+  (after the merge). Expected: the plan job ends with no changes to the app from the settings (an image change only if
+  `main` moved), so the build read the same values from the document as before.
+
 ## Not tests, but still open
 
 - The design doc's Open questions and findings, in particular its "Blocking production" and "Before going live" items.

@@ -43,13 +43,20 @@ case "$*" in
     ls "$SSM$path" 2>/dev/null | sed "s|^|$path/|" | paste -s -d '\t' - ;;
   *"ssm get-parameters"*)
     echo "read as $(arg --profile "$@")" >> "$FAKE_LOG_DIR/ssm-reads"
-    take=false
-    for a in "$@"; do
-      case "$a" in --names) take=true ;; --*) take=false ;;
-        *) [ "$take" = false ] || printf '%s\t%s\n' "$a" "$(cat "$SSM$a")" ;; esac
-    done ;;
+    first="$(arg --names "$@")"
+    case "$(arg --query "$@")" in
+      'Parameters[0].Value') if [ -f "$SSM$first" ]; then cat "$SSM$first"; echo; else echo None; fi ;;
+      'Parameters[0].Version') cat "$FAKE_LOG_DIR/ssm-version$first" 2>/dev/null || echo None ;;
+      *) take=false
+        for a in "$@"; do
+          case "$a" in --names) take=true ;; --*) take=false ;;
+            *) [ "$take" = false ] || [ ! -f "$SSM$a" ] || printf '%s\t%s\n' "$a" "$(cat "$SSM$a")" ;; esac
+        done ;;
+    esac ;;
   *"ssm put-parameter"*)
-    name="$(arg --name "$@")"; mkdir -p "$(dirname "$SSM$name")"; printf '%s' "$(arg --value "$@")" > "$SSM$name"
+    name="$(arg --name "$@")"; mkdir -p "$(dirname "$SSM$name")" "$(dirname "$FAKE_LOG_DIR/ssm-version$name")"
+    printf '%s' "$(arg --value "$@")" > "$SSM$name"
+    echo $(( $(cat "$FAKE_LOG_DIR/ssm-version$name" 2>/dev/null || echo 0) + 1 )) > "$FAKE_LOG_DIR/ssm-version$name"
     echo "put $name as $(arg --profile "$@")" >> "$FAKE_LOG_DIR/ssm-writes" ;;
   *"ssm delete-parameter"*)
     rm -f "$SSM$(arg --name "$@")"; echo "delete $(arg --name "$@") as $(arg --profile "$@")" >> "$FAKE_LOG_DIR/ssm-writes" ;;
@@ -732,10 +739,41 @@ def test_without_require_clean_a_dirty_checkout_deploys_with_a_dirty_tag(clean_c
 SSM_LOCAL = "SETTINGS=ssm\nADMIN_PROFILE=bmu-admin\n"
 
 
+SETTINGS_DIR = ("log", "ssm", "bmu-dev", "settings")
+
+
+def settings_dir(tree):
+    return tree.joinpath(*SETTINGS_DIR)
+
+
+def doc_text(tree):
+    """The settings document's text, /bmu-dev/settings/all."""
+    return (settings_dir(tree) / "all").read_text()
+
+
 def ssm(tree):
-    """The stand-in SSM's parameters under /bmu-dev/settings/, as {SETTING: value}."""
-    root = tree / "log" / "ssm" / "bmu-dev" / "settings"
-    return {p.name: p.read_text() for p in root.iterdir()} if root.exists() else {}
+    """The stand-in SSM's settings under /bmu-dev/settings/, as {SETTING: value}: the document's lines, and the
+    parameters beside it (RUNNING, REAL_DATA_ACCOUNT; before the document, one per setting)."""
+    root = settings_dir(tree)
+    if not root.exists():
+        return {}
+    settings = {p.name: p.read_text() for p in root.iterdir() if p.name != "all"}
+    if (root / "all").exists():
+        for line in doc_text(tree).splitlines():
+            if "=" in line and not line.lstrip().startswith("#"):
+                key, value = line.split("=", 1)
+                settings[key.strip()] = value.strip().strip('"')
+    return settings
+
+
+def ops_edit(tree, key, value=None):
+    """Operations edits the document in the console: KEY's line gets VALUE, or goes (no VALUE); the version goes up."""
+    lines = [line for line in doc_text(tree).splitlines() if not line.startswith(f"{key}=")]
+    if value is not None:
+        lines.append(f'{key}="{value}"')
+    (settings_dir(tree) / "all").write_text("\n".join(lines))
+    version = tree / "log" / "ssm-version" / "bmu-dev" / "settings" / "all"
+    version.write_text(str(int(version.read_text()) + 1) + "\n")
 
 
 def ssm_writes(tree):
@@ -773,17 +811,145 @@ def test_settings_push_shows_the_changes_and_writes_them_as_the_administrator_on
     assert any("Key=project,Value=bmu" in w for w in ssm_writes(tree))
 
 
-def test_settings_push_is_only_for_a_new_environment(tree):
-    """Once SSM holds the settings, it is their one copy (Operations may change one in the console): a push from files
-    that may be out of date would undo that, so it refuses and names set and pull."""
-    write_env(tree, local_extra=SSM_LOCAL)
+def test_settings_push_only_adds(tree):
+    """SSM is the settings' one copy (Operations may change one in the console): a push from files that may be out of
+    date adds what SSM doesn't have, and leaves what it has as it is, naming set and pull."""
+    local = write_env(tree, local_extra=SSM_LOCAL)
     push(tree)
+    ops_edit(tree, "ALLOWED_CIDRS", "198.51.100.0/24")
     before = ssm(tree)
     r = push(tree)
+    assert r.returncode == 0, r.stderr
+    assert "  ALLOWED_CIDRS=198.51.100.0/24   (the files here: 203.0.113.7/32)" in r.stdout
+    assert "settings set --env t" in r.stdout and "settings pull --env t" in r.stdout
+    assert "Nothing to add" in r.stdout and ssm(tree) == before
+    local.write_text(local.read_text() + 'VPC_ID="vpc-0abc"\nAPP_SUBNET_IDS="subnet-0a,subnet-0b"\n')
+    r = push(tree)
+    assert r.returncode == 0, r.stderr
+    assert "  + VPC_ID=vpc-0abc" in r.stdout and "  + APP_SUBNET_IDS=subnet-0a,subnet-0b" in r.stdout
+    assert ssm(tree) == {**before, "VPC_ID": "vpc-0abc", "APP_SUBNET_IDS": "subnet-0a,subnet-0b"}
+
+
+def test_the_settings_are_one_document_with_its_comments_kept(tree):
+    """One parameter, /bmu-dev/settings/all, NAME="value" per line; set changes one line and keeps the rest, comments
+    included; RUNNING stays a parameter of its own."""
+    write_env(tree, local_extra=SSM_LOCAL)
+    push(tree)
+    root = settings_dir(tree)
+    assert sorted(p.name for p in root.iterdir()) == ["all"]
+    text = doc_text(tree)
+    assert text.startswith("# The BMU's settings for 't' (account 111122223333).")
+    assert 'ALLOWED_CIDRS="203.0.113.7/32"' in text.splitlines()
+    (root / "all").write_text(text + "\n# Ops: the VPN range is the second one\n")
+    assert set_(tree, "ENV_LABEL", "New label").returncode == 0
+    text = doc_text(tree)
+    assert "# Ops: the VPN range is the second one" in text and 'ENV_LABEL="New label"' in text
+    assert 'ALLOWED_CIDRS="203.0.113.7/32"' in text
+
+
+@pytest.mark.parametrize("line, message", [
+    ('ALLOWED_CIDRS="203.0.113.7/32', "must be in double quotes"),
+    ("ALLOWED_CIDRS=203.0.113.7/32 198.51.100.0/24", "must be in double quotes"),
+    ('ENV_LABEL="$(touch /tmp/x)"', "must be in double quotes"),
+    ('ENV_LABEL="a`b`"', "must be in double quotes"),
+    ('OLD_SETTING="x"', "OLD_SETTING isn't a setting ./bmu aws reads"),
+    ('RUNNING="false"', "RUNNING isn't kept in the document"),
+    ('ALLOWED_CIDRS="198.51.100.0/24"', "ALLOWED_CIDRS is set twice"),
+    ("allowed_cidrs=x", "isn't NAME=\"value\""),
+])
+def test_a_mistake_in_the_document_stops_every_command_and_names_its_line(tree, line, message):
+    """The document is data, never run, so a value can't run a command; a line that isn't NAME="value" for a setting
+    ./bmu aws reads stops the plan (and the pipeline's build) before Terraform, naming the line."""
+    write_env(tree, local_extra=SSM_LOCAL)
+    push(tree)
+    key = line.split("=", 1)[0]
+    if "twice" not in message:
+        ops_edit(tree, key)  # the line replaces the setting's own
+    root = settings_dir(tree)
+    text = doc_text(tree)
+    (root / "all").write_text(text + "\n" + line)
+    number = len(text.splitlines()) + 1
+    r = run(tree, "plan", museums=f"pahma={QA}")
     assert r.returncode == 1
-    assert "SSM already has the settings of 't'" in r.stderr
-    assert "settings set --env t SETTING VALUE" in r.stderr and "settings pull --env t" in r.stderr
-    assert ssm(tree) == before
+    assert f"Line {number} of /bmu-dev/settings/all in SSM" in r.stderr and message in r.stderr, r.stderr
+    assert not (tree / "log" / "terraform-plan-app").exists()
+
+
+def test_a_value_set_quoted_or_bare_with_a_comment_reads_the_same(tree):
+    write_env(tree, local_extra=SSM_LOCAL)
+    push(tree)
+    ops_edit(tree, "ALLOWED_CIDRS")
+    (settings_dir(tree) / "all").write_text(doc_text(tree) + "\n  ALLOWED_CIDRS=198.51.100.0/24   # the VPN\n")
+    r = run(tree, "plan", museums=f"pahma={QA}")
+    assert r.returncode == 0, r.stderr
+    assert tf_args(tree, "plan-app")["allowed_cidrs"] == '["198.51.100.0/24"]'
+
+
+def test_set_stops_if_someone_saved_the_document_meanwhile(tree):
+    """set reads the document, then writes it back: if its version changed in between, it stops rather than undo
+    that change. Here the stand-in's version changes on every read of it, as if someone kept saving."""
+    write_env(tree, local_extra=SSM_LOCAL)
+    push(tree)
+    version = tree / "log" / "ssm-version" / "bmu-dev" / "settings" / "all"
+    fake = tree / "bin" / "aws"
+    fake.write_text(fake.read_text().replace(
+        "'Parameters[0].Version') cat",
+        "'Parameters[0].Version') echo $(( $(cat \"$FAKE_LOG_DIR/ssm-version$first\") + 1 )) > \"$FAKE_LOG_DIR/ssm-version$first\"; cat"))
+    before = doc_text(tree)
+    r = set_(tree, "ENV_LABEL", "x")
+    assert r.returncode == 1 and "Someone saved /bmu-dev/settings/all just now" in r.stderr, r.stderr
+    assert doc_text(tree) == before and version.exists()
+
+
+def legacy_settings(tree, values):
+    """An environment from before the settings document: one parameter per setting."""
+    root = settings_dir(tree)
+    root.mkdir(parents=True, exist_ok=True)
+    for key, value in values.items():
+        (root / key).write_text(value)
+
+
+LEGACY = {"ACCOUNT_ID": ACCOUNT, "ALLOWED_CIDRS": "198.51.100.0/24", "TENANT": "pahma", "CSPACE_URL": QA,
+          "FRONT_DOOR": "cloudfront", "RUNNING": "true", "OLD_SETTING": "x"}
+
+
+def test_before_migrate_the_parameters_are_read_and_set_and_push_refuse(tree):
+    write_env(tree, local_extra=SSM_LOCAL)
+    legacy_settings(tree, LEGACY)
+    r = run(tree, "plan", museums=f"pahma={QA}")
+    assert r.returncode == 0, r.stderr
+    assert tf_args(tree, "plan-app")["allowed_cidrs"] == '["198.51.100.0/24"]'
+    r = run(tree, "settings", "show")
+    assert "one parameter per setting" in r.stdout and "settings migrate --env t" in r.stdout
+    for result in (set_(tree, "ENV_LABEL", "x"), push(tree)):
+        assert result.returncode == 1 and "settings migrate --env t" in result.stderr
+    assert not (settings_dir(tree) / "all").exists()
+
+
+def test_migrate_moves_the_parameters_into_the_document_from_ssms_values(tree):
+    """From SSM's values, never the files'; RUNNING stays a parameter of its own; a parameter ./bmu aws doesn't read
+    is left alone; the old parameters go only once the document reads back."""
+    write_env(tree, local_extra=SSM_LOCAL)  # its files say ALLOWED_CIDRS=203.0.113.7/32: SSM's 198.51.100.0/24 wins
+    legacy_settings(tree, LEGACY)
+    r = run(tree, "settings", "migrate", answers="n\n")
+    assert r.returncode == 1 and not (settings_dir(tree) / "all").exists()
+    assert 'ALLOWED_CIDRS="198.51.100.0/24"' in r.stdout and "Left alone, as ./bmu aws doesn't read them: OLD_SETTING" in r.stdout
+    r = run(tree, "settings", "migrate", answers="y\n")
+    assert r.returncode == 0, r.stderr
+    assert sorted(p.name for p in settings_dir(tree).iterdir()) == ["OLD_SETTING", "RUNNING", "all"]
+    assert ssm(tree) == LEGACY
+    assert all(w.endswith(" as bmu-admin") for w in ssm_writes(tree) if w.startswith(("put ", "delete ")))
+    r = run(tree, "plan", museums=f"pahma={QA}")
+    assert r.returncode == 0, r.stderr
+    assert tf_args(tree, "plan-app")["allowed_cidrs"] == '["198.51.100.0/24"]'
+    assert "already keeps its settings in one document" in run(tree, "settings", "migrate").stdout
+
+
+def test_set_refuses_a_value_that_would_run_in_the_files_here(tree):
+    write_env(tree, local_extra=SSM_LOCAL)
+    push(tree)
+    r = set_(tree, "ENV_LABEL", "$(whoami)")
+    assert r.returncode == 1 and "can't have" in r.stderr
 
 
 def set_(tree, *args, answers="y\n"):
@@ -795,7 +961,7 @@ def test_settings_set_changes_one_setting_and_leaves_the_others_alone(tree):
     only ALLOWED_CIDRS changes, in SSM and in the files here, written as the administrator, after asking."""
     local = write_env(tree, local_extra=SSM_LOCAL + 'ENV_LABEL="AWS · test"\n')
     push(tree)
-    (tree / "log" / "ssm" / "bmu-dev" / "settings" / "ENV_LABEL").write_text("Set by Ops")
+    ops_edit(tree, "ENV_LABEL", "Set by Ops")
     r = set_(tree, "ALLOWED_CIDRS", "198.51.100.0/24", answers="n\n")
     assert r.returncode == 1 and ssm(tree)["ALLOWED_CIDRS"] == "203.0.113.7/32"
     assert "  ~ ALLOWED_CIDRS=198.51.100.0/24 (was 203.0.113.7/32)" in r.stdout
@@ -803,8 +969,8 @@ def test_settings_set_changes_one_setting_and_leaves_the_others_alone(tree):
     assert r.returncode == 0, r.stderr
     assert ssm(tree)["ALLOWED_CIDRS"] == "198.51.100.0/24" and ssm(tree)["ENV_LABEL"] == "Set by Ops"
     assert 'ALLOWED_CIDRS="198.51.100.0/24"' in local.read_text()
-    assert ssm_writes(tree)[-2:] == ["put /bmu-dev/settings/ALLOWED_CIDRS as bmu-admin",
-                                     "tag /bmu-dev/settings/ALLOWED_CIDRS Key=project,Value=bmu"]
+    assert ssm_writes(tree)[-2:] == ["put /bmu-dev/settings/all as bmu-admin",
+                                     "tag /bmu-dev/settings/all Key=project,Value=bmu"]
 
 
 def test_settings_set_with_no_value_removes_the_setting(tree):
@@ -845,11 +1011,10 @@ def test_settings_pull_brings_the_files_here_up_to_date_as_the_deployer(tree):
     nothing in SSM; the profiles stay, and a setting that is only a default here isn't written."""
     local = write_env(tree, local_extra=SSM_LOCAL + 'ENV_LABEL="AWS · test"\n')
     push(tree)
-    settings = tree / "log" / "ssm" / "bmu-dev" / "settings"
-    (settings / "ALLOWED_CIDRS").write_text("198.51.100.0/24")
-    (settings / "CSPACE_URL").write_text(BAMPFA)
-    (settings / "ENV_LABEL").unlink()
-    (settings / "FRONT_DOOR").unlink()  # a default here: not written
+    ops_edit(tree, "ALLOWED_CIDRS", "198.51.100.0/24")
+    ops_edit(tree, "CSPACE_URL", BAMPFA)
+    ops_edit(tree, "ENV_LABEL")
+    ops_edit(tree, "FRONT_DOOR")  # a default here: not written
     before = ssm_writes(tree)
     r = run(tree, "settings", "pull")
     assert r.returncode == 0, r.stderr
@@ -899,7 +1064,7 @@ def test_with_no_settings_in_ssm_a_command_says_who_puts_them_there(tree):
 def test_settings_in_ssm_from_another_account_are_refused(tree):
     write_env(tree, local_extra=SSM_LOCAL)
     push(tree)
-    (tree / "log" / "ssm" / "bmu-dev" / "settings" / "ACCOUNT_ID").write_text("999988887777")
+    ops_edit(tree, "ACCOUNT_ID", "999988887777")
     r = run(tree, "plan")
     assert r.returncode == 1
     assert "SSM's ACCOUNT_ID for 't' (999988887777) isn't the account it is in" in r.stderr
@@ -927,13 +1092,12 @@ def test_the_deployer_never_writes_a_setting_to_ssm(tree):
 def test_settings_show_marks_what_the_files_here_disagree_with(tree):
     local = write_env(tree, local_extra=SSM_LOCAL)
     push(tree)
-    (tree / "log" / "ssm" / "bmu-dev" / "settings" / "OLD_SETTING").write_text("x")
     local.write_text(local.read_text().replace("203.0.113.7/32", "198.51.100.0/24"))
     r = run(tree, "settings", "show")
     assert r.returncode == 0, r.stderr
     assert "  ALLOWED_CIDRS=203.0.113.7/32   (the files here: 198.51.100.0/24)" in r.stdout
     assert f"  CSPACE_URL={QA}\n" in r.stdout
-    assert "  OLD_SETTING=x   (not a setting ./bmu aws reads; ignored)" in r.stdout
+    assert "the document /bmu-dev/settings/all (version 1)" in r.stdout
     assert "To bring the files here up to date: ./bmu aws settings pull --env t" in r.stdout
 
 
@@ -964,7 +1128,7 @@ def test_a_rehearsals_settings_can_be_deleted_once_its_vpc_is_gone(tree):
     local = write_env(tree, local_extra=SSM_LOCAL + 'REHEARSAL=true\nVPC_ID="vpc-0abc"\nAPP_SUBNET_IDS="subnet-0a,subnet-0b"\n')
     push(tree)
     for key in ("VPC_ID", "APP_SUBNET_IDS"):
-        (tree / "log" / "ssm" / "bmu-dev" / "settings" / key).unlink()
+        ops_edit(tree, key)
     local.write_text("\n".join(l for l in local.read_text().splitlines() if not l.startswith(("VPC_ID", "APP_SUBNET"))) + "\n")
     assert "is a rehearsal: first" in run(tree, "plan").stderr  # the other commands still need the VPC
     r = run(tree, "settings", "delete", answers="t\n")

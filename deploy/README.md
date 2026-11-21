@@ -32,7 +32,7 @@ prototype: the image is built from this repository and runs on ECS Fargate. Demo
 | `./bmu aws reader-secret [museum]` | Sets or changes the sign-in of a museum's read-only CollectionSpace account, which checks its interns' drafts. It asks for the user name and password; see below. The museum can be left out when the environment serves only one. |
 | `./bmu aws destroy` | Deletes everything in AWS for the environment, data included. It asks for the environment's name first. |
 | `./bmu aws rehearsal-vpc [destroy]` | A rehearsal environment only (`REHEARSAL=true`): makes, or deletes, what Operations provides in UC Berkeley's account, a VPC with a NAT gateway and a deployer role with only the deployer policy, signed in as the account's administrator. See "Rehearsing the deploy in your own account". |
-| `./bmu aws settings push` / `set` / `pull` / `show` / `delete` | An environment with `SETTINGS=ssm`, where SSM Parameter Store holds the settings: `push` puts a new environment's there from its files, once; `set SETTING [VALUE]` changes one (no value removes it), in SSM and in the files here; `pull` brings the files here up to date with SSM; `show` lists them. `push` and `set` run as `SETTINGS_PROFILE` or the account's administrator, `pull` and `show` as the deployer; `delete` removes them once the environment is destroyed, as the administrator. See "Settings in SSM Parameter Store". |
+| `./bmu aws settings push` / `set` / `pull` / `show` / `migrate` / `delete` | An environment with `SETTINGS=ssm`, where one SSM parameter, the settings document `/bmu-<env>/settings/all`, holds the settings: `push` adds the settings SSM doesn't have yet from the files; `set SETTING [VALUE]` changes one (no value removes it), in SSM and in the files here; `pull` brings the files here up to date with SSM; `show` lists them; `migrate` moves an environment from one parameter per setting into the document. `push`, `set` and `migrate` run as `SETTINGS_PROFILE` or the account's administrator, `pull` and `show` as the deployer; `delete` removes them once the environment is destroyed, as the administrator. See "Settings in SSM Parameter Store". |
 | `./bmu aws pipeline [destroy]` | An environment with `SETTINGS=ssm`, as the account's administrator: makes, or deletes, its deploy pipeline. See "The deploy pipeline". |
 | `./bmu aws sim-secrets` | With the simulated CollectionSpace, in an environment the pipeline deploys: sets the simulator's read-only account, which a deploy from a laptop sets itself. Nothing is shown. |
 | `./bmu aws ci-role` | Once per account: the role CI assumes to sign in to ECR Public (see "CI's sign-in to ECR Public" below). Prints the command that sets the repository's `ECR_PUBLIC_ROLE_ARN` variable. |
@@ -394,27 +394,45 @@ person's computer, so that everyone who deploys it, and later the deploy pipelin
 (design: Deploys, BP4). Every environment the pipeline deploys will; `personal-dev` keeps its files.
 
 - **Switching it on.** Add `SETTINGS=ssm` to the environment's `.local.conf` (or its `.conf`). From then on every
-  `./bmu aws` command reads the settings from SSM, one String parameter each under `/bmu-<BMU_ENV_NAME>/settings/`,
-  except `AWS_PROFILE`, `AWS_REGION`, `BMU_ENV_NAME`, `ADMIN_PROFILE`, `SETTINGS` and `REQUIRE_CLEAN`, which always
+  `./bmu aws` command reads the settings from SSM, from one String parameter, the settings document
+  `/bmu-<BMU_ENV_NAME>/settings/all` (below), except `AWS_PROFILE`, `AWS_REGION`, `BMU_ENV_NAME`, `ADMIN_PROFILE`, `SETTINGS` and `REQUIRE_CLEAN`, which always
   come from the files. Its `ACCOUNT_ID` in SSM must be the account it's in. A command whose files disagree with SSM
   says so ("the files on this computer differ from SSM in …") and uses SSM's.
 - **SSM is the one copy.** Once an environment's settings are in SSM, a developer's files are only a copy, which may
   be out of date: anyone with access may change a setting in SSM, Operations too, in the AWS console or with
-  `aws ssm put-parameter`, and nobody has to tell anyone. No command copies a whole set of files into SSM again.
-- **Putting them there, once.** `./bmu aws settings push --env <env>`, as the account's administrator (`ADMIN_PROFILE`,
-  as for `rehearsal-vpc`), or as `SETTINGS_PROFILE` where the environment has one (below): for a new environment, it
-  lists what it would write from the `.conf` and `.local.conf` on this computer and asks first, even with
-  `BMU_AWS_YES=1`. Once SSM has the environment's settings it refuses, and names `set` and `pull`.
+  `aws ssm put-parameter`, and nobody has to tell anyone. No command copies a whole set of files over SSM's.
+- **One document (decided 21 November 2026).** The settings are one parameter, `/bmu-<BMU_ENV_NAME>/settings/all`,
+  so that Operations can see and change them all at once in the AWS console (Systems Manager › Parameter Store › the
+  parameter › Edit). One line per setting, `NAME="value"`, as in the `.conf` files, and comments (`#`), which stay.
+  It is read as data, never run: a line that isn't a comment, a blank or `NAME="value"` for a setting `./bmu aws`
+  reads, a setting given twice, or a value with `"`, `$`, `` ` `` or `\` in it stops every command (and the pipeline's
+  plan, before Terraform) with the line's number. SSM keeps each version of the document (the console's History
+  tab), and CloudTrail records who saved it. `RUNNING` and `REAL_DATA_ACCOUNT` stay parameters of their own beside it,
+  so that editing the document can't change them. A standard parameter holds up to 4 KB; the settings are about 1 KB.
+- **Putting them there.** `./bmu aws settings push --env <env>`, as the account's administrator (`ADMIN_PROFILE`, as
+  for `rehearsal-vpc`), or as `SETTINGS_PROFILE` where the environment has one (below): it adds the settings SSM
+  doesn't have yet from the `.conf` and `.local.conf` on this computer, listing them and asking first, even with
+  `BMU_AWS_YES=1`. A setting SSM already has stays as SSM has it (push lists any the files here disagree with, and
+  names `set` and `pull`), so out-of-date files never undo someone's change.
 - **Changing one.** `./bmu aws settings set --env <env> ALLOWED_CIDRS "<cidr>,<cidr>"`, as `SETTINGS_PROFILE` or the
   administrator: it shows the old and new value, asks first (even with `BMU_AWS_YES=1`), writes that one setting to
-  SSM and to the `.local.conf` here, and touches nothing else, so another person's change stays. With no value it
+  SSM and to the `.local.conf` here, and touches nothing else, so another person's change stays: it rewrites that
+  setting's line in the document and keeps every other line, comments included. If someone saved the document between
+  its read and its write, it stops, and changes nothing. With no value it
   removes the setting. It refuses `RUNNING`, `REAL_DATA_ACCOUNT` and `ACCOUNT_ID`, and a value that isn't one the
   setting takes (true or false, for example). The next deploy applies the change.
 - **Bringing the files here up to date.** `./bmu aws settings pull --env <env>`, as the deployer: it writes each
   setting SSM has that the files here don't (and, as empty, one SSM no longer has) into the `.local.conf`, and lists
   them. It changes nothing in SSM, and keeps the profiles and `SETTINGS`, which are always the files'.
-- **Looking at them.** `./bmu aws settings show --env <env>`, as the deployer, lists them, marking any the files here
-  disagree with (then naming `pull`). `./bmu aws status` says where an environment's settings are.
+- **Looking at them.** `./bmu aws settings show --env <env>`, as the deployer, lists them with the document's version,
+  marking any the files here disagree with (then naming `pull`). `./bmu aws status` says where an environment's
+  settings are.
+- **From one parameter per setting to the document.** An environment set up before the document (`ucb-qa`, the
+  rehearsal) keeps working: every command reads its parameters as before, and `show` says so. `set` and `push` refuse
+  until `./bmu aws settings migrate --env <env>`, as `SETTINGS_PROFILE` or the administrator, moves them: it shows the
+  document it would write from SSM's values (never the files'), asks, writes it, checks it reads back, and only then
+  deletes the old parameters. `RUNNING` and `REAL_DATA_ACCOUNT` stay as they are, and a parameter `./bmu aws` doesn't
+  read is left alone.
 - **Deleting them.** `./bmu aws settings delete --env <env>`, as the administrator, once the environment is destroyed
   (a rehearsal's VPC too): it refuses while any of its Terraform state holds resources, and asks you to type the environment's name. The
   files stay.
@@ -432,7 +450,7 @@ person's computer, so that everyone who deploys it, and later the deploy pipelin
 The values are private but not secret (the account number, Operations' VPC and subnets, the allowed ranges, the
 BMU's name): no password or key is ever a setting.
 
-Two settings are in SSM only, never in the files, and `settings push` leaves them alone: `REAL_DATA_ACCOUNT`, the
+Two settings are in SSM only, never in the files or the document, and `settings push` leaves them alone: `REAL_DATA_ACCOUNT`, the
 account an administrator confirmed for UC Berkeley data (`./bmu aws pipeline` writes it), and `RUNNING`, whether the
 services run in an environment with a deploy pipeline (`./bmu aws pause` and `resume` write it). `settings show`
 marks both.
