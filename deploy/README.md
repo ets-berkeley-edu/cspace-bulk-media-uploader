@@ -403,10 +403,13 @@ person's computer, so that everyone who deploys it, and later the deploy pipelin
   `aws ssm put-parameter`, and nobody has to tell anyone. No command copies a whole set of files over SSM's.
 - **One document (decided 21 November 2026).** The settings are one parameter, `/bmu-<BMU_ENV_NAME>/settings/all`,
   so that Operations can see and change them all at once in the AWS console (Systems Manager › Parameter Store › the
-  parameter › Edit). One line per setting, `NAME="value"`, as in the `.conf` files, and comments (`#`), which stay.
+  parameter › Edit). One line per setting, `NAME="value"`, as in the `.conf` files, and comments (`#`, at the start of
+  a line or after a space), which stay. A line `NAME=""` sets the setting to nothing, and `settings push` leaves it so.
   It is read as data, never run: a line that isn't a comment, a blank or `NAME="value"` for a setting `./bmu aws`
-  reads, a setting given twice, or a value with `"`, `$`, `` ` `` or `\` in it stops every command (and the pipeline's
-  plan, before Terraform) with the line's number. SSM keeps each version of the document (the console's History
+  reads, a setting given twice, a value with `"`, `$`, `` ` ``, `\`, `'` or a curly quote in it, stops every command
+  (and the pipeline's plan, before Terraform) with the line's number. A value read from SSM that could run in a
+  `.local.conf` (from before the document too, or in `RUNNING`) is refused before `pull` writes anything, and a read
+  that AWS refuses or throttles stops the command; it never counts as "no settings". SSM keeps each version of the document (the console's History
   tab), and CloudTrail records who saved it. `RUNNING` and `REAL_DATA_ACCOUNT` stay parameters of their own beside it,
   so that editing the document can't change them. A standard parameter holds up to 4 KB; the settings are about 1 KB.
 - **Putting them there.** `./bmu aws settings push --env <env>`, as the account's administrator (`ADMIN_PROFILE`, as
@@ -418,7 +421,8 @@ person's computer, so that everyone who deploys it, and later the deploy pipelin
   administrator: it shows the old and new value, asks first (even with `BMU_AWS_YES=1`), writes that one setting to
   SSM and to the `.local.conf` here, and touches nothing else, so another person's change stays: it rewrites that
   setting's line in the document and keeps every other line, comments included. If someone saved the document between
-  its read and its write, it stops, and changes nothing. With no value it
+  its read and its write, it stops, and changes nothing. (SSM has no conditional write, so a save in the instant
+  between that check and the write could still be replaced; the History tab keeps it.) With no value it
   removes the setting. It refuses `RUNNING`, `REAL_DATA_ACCOUNT` and `ACCOUNT_ID`, and a value that isn't one the
   setting takes (true or false, for example). The next deploy applies the change.
 - **Bringing the files here up to date.** `./bmu aws settings pull --env <env>`, as the deployer: it writes each

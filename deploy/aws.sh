@@ -256,6 +256,8 @@ sim_url() { echo "http://fakecspace.$NAME.internal:8180"; }
 # would save a setting stops first (ensure_allowlist, allow-my-ip) and ACCOUNT_ID always comes from SSM (from_ssm).
 save_local() {  # save_local KEY VALUE: set one setting in the environment's .local.conf (and SSM, SETTINGS=ssm)
   local key="$1" value="$2" tmp
+  # The .local.conf is sourced: a value with " $ ` \ or a line break in it could run as a command there.
+  case "$value" in *[\"\$\`\\]*|*$'\n'*) die "$key's value can't have \" \$ \` \\ or a line break in it: not saved in $LOCAL." ;; esac
   if [ "$SETTINGS" = ssm ] && [ "$CMD" != settings ] && is_ssm_setting "$key"; then put_setting "$key" "$value"; fi
   tmp="$(mktemp)"
   { [ -f "$LOCAL" ] && grep -v "^$key=" "$LOCAL" || echo "# ./bmu aws settings for '$ENV' on this computer only (not committed)."; } > "$tmp"
@@ -325,7 +327,7 @@ ssm_param_names() {  # every parameter under settings_path, one name per line
 # How the environment's settings are kept in SSM: document (settings_doc), parameters (one per setting, before the
 # document; settings migrate moves them) or none.
 settings_store() {
-  local names; names="$(ssm_param_names)"
+  local names; names="$(ssm_param_names)" || exit 1
   if grep -qx "$(settings_doc)" <<<"$names"; then echo document
   elif grep -v -x -e "$(settings_path)/REAL_DATA_ACCOUNT" -e "$(settings_path)/RUNNING" <<<"$names" | grep -q .; then echo parameters
   else echo none
@@ -346,11 +348,12 @@ settings_doc_version() {  # the document's version number; None if there's none
 
 # The document's settings, one "SETTING<tab>VALUE" line each; stops at the first line that isn't a comment, a blank or
 # NAME="value" for a setting ./bmu aws keeps here, naming the line. A value is taken as written, never run: no " $ `
-# or \ in it (a value goes into a developer's .local.conf, which is sourced). An empty value is left out, as unset.
+# or \ in it (a value goes into a developer's .local.conf, which is sourced). An empty value is kept, as set to
+# nothing: settings push doesn't fill it in.
 settings_doc_lines() {  # settings_doc_lines TEXT
   local n=0 line key rest value seen=" "
   local name_re='^[[:space:]]*([A-Z][A-Z0-9_]*)=(.*)$'
-  local quoted_re='^"([^"$`\\]*)"[[:space:]]*(#.*)?$' bare_re='^([^"$`\\#[:space:]]*)[[:space:]]*(#.*)?$'
+  local quoted_re='^"([^"$`\\]*)"([[:space:]]+#.*)?[[:space:]]*$' bare_re="^([^\"\$\`\\\\#'[:space:]]*)([[:space:]]+#.*)?[[:space:]]*\$"
   local where="of $(settings_doc) in SSM"
   while IFS= read -r line || [ -n "$line" ]; do
     n=$((n + 1)); line="${line%$'\r'}"
@@ -366,28 +369,59 @@ settings_doc_lines() {  # settings_doc_lines TEXT
     if [[ "$rest" =~ $quoted_re ]] || [[ "$rest" =~ $bare_re ]]; then value="${BASH_REMATCH[1]}"
     else die "Line $n $where: $key's value must be in double quotes, without \" \$ \` or \\ in it: $line"
     fi
-    [ -z "$value" ] || printf '%s\t%s\n' "$key" "$value"
+    case "$value" in *“*|*”*|*‘*|*’*) die "Line $n $where: $key's value has a curly quote in it (copied from a document?): use straight double quotes: $line" ;; esac
+    printf '%s\t%s\n' "$key" "$value"   # an empty value too: the line is there, set to nothing
   done <<<"$1"
 }
 
+# One parameter's value ("" if it doesn't exist), read on its own so that a line break in it can't pass for another
+# setting's line.
+read_param() {  # read_param NAME
+  local value
+  value="$(aws_ ssm get-parameters --names "$1" --query 'Parameters[0].Value' --output text)" ||
+    die "Couldn't read $1 in SSM (see above)."
+  [ "$value" = None ] || printf '%s' "$value"
+}
+
+# RUNNING and REAL_DATA_ACCOUNT, the parameters beside the document, checked: true or false, and an account number.
+pipeline_settings_lines() {  # pipeline_settings_lines NAMES (ssm_param_names' output)
+  local key value
+  for key in $PIPELINE_SETTINGS; do
+    grep -qx "$(settings_path)/$key" <<<"$1" || continue
+    value="$(read_param "$(settings_path)/$key")" || exit 1
+    case "$key:$value" in
+      RUNNING:true|RUNNING:false) ;;
+      REAL_DATA_ACCOUNT:*) [[ "$value" =~ ^[0-9]{12}$ ]] || die "$(settings_path)/$key in SSM isn't an account number." ;;
+      *) die "$(settings_path)/$key in SSM must be true or false." ;;
+    esac
+    printf '%s\t%s\n' "$key" "$value"
+  done
+}
+
 ssm_settings() {  # the environment's settings in SSM, one "SETTING<tab>VALUE" line each, sorted; nothing if none
-  local names pipeline=() name
-  names="$(ssm_param_names)"
+  local names text out="" line
+  names="$(ssm_param_names)" || exit 1
   [ -n "$names" ] || return 0
   if grep -qx "$(settings_doc)" <<<"$names"; then
-    settings_doc_lines "$(read_settings_doc)" || exit 1
-    for name in $PIPELINE_SETTINGS; do grep -qx "$(settings_path)/$name" <<<"$names" && pipeline+=("$(settings_path)/$name"); done
-    [ ${#pipeline[@]} = 0 ] || aws_ ssm get-parameters --names "${pipeline[@]}" --query 'Parameters[].[Name,Value]' --output text |
-      sed "s|^$(settings_path)/||" || die "Couldn't read $(settings_path)/ in SSM (see above)."
-  else
+    text="$(read_settings_doc)" || exit 1
+    out="$(settings_doc_lines "$text")" || exit 1
+  else   # one parameter per setting, from before the document: each line must be one of them
     # shellcheck disable=SC2086
-    set -- $names
+    set -- $(grep -v -x -e "$(settings_path)/REAL_DATA_ACCOUNT" -e "$(settings_path)/RUNNING" <<<"$names" || true)
     while [ $# -gt 0 ]; do   # GetParameters takes at most 10 names
-      aws_ ssm get-parameters --names "${@:1:10}" --query 'Parameters[].[Name,Value]' --output text ||
+      text="$(aws_ ssm get-parameters --names "${@:1:10}" --query 'Parameters[].[Name,Value]' --output text)" ||
         die "Couldn't read $(settings_path)/ in SSM (see above)."
+      while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        [[ "$line" =~ ^$(settings_path)/[A-Za-z0-9_.-]+$'\t' ]] ||
+          die "A value under $(settings_path)/ in SSM has a line break in it. Fix it in SSM first."
+        out+="${line#"$(settings_path)/"}"$'\n'
+      done <<<"$text"
       shift $(( $# < 10 ? $# : 10 ))
-    done | sed "s|^$(settings_path)/||"
-  fi | sort
+    done
+  fi
+  out+=$'\n'"$(pipeline_settings_lines "$names")" || exit 1
+  printf '%s\n' "$out" | grep . | sort || true
 }
 
 setting_in() {  # setting_in SETTING LINES: its value in ssm_settings' LINES; empty if it isn't there
@@ -418,7 +452,8 @@ EOF
 set_in_settings_doc() {  # set_in_settings_doc SETTING VALUE
   local key="$1" value="$2" text version out="" line found=false
   case "$value" in *[\"\$\`\\]*|*$'\n'*) die "A setting's value can't have \" \$ \` \\ or a line break in it." ;; esac
-  version="$(settings_doc_version)"; text="$(read_settings_doc)"
+  version="$(settings_doc_version)" || exit 1
+  text="$(read_settings_doc)" || exit 1
   [ -n "$text" ] || text="$(settings_doc_header)"
   while IFS= read -r line || [ -n "$line" ]; do
     if [[ "$line" =~ ^[[:space:]]*$key= ]]; then
@@ -442,7 +477,8 @@ put_setting() {  # put_setting SETTING VALUE: in SSM; an empty VALUE removes it 
     aws_ ssm add-tags-to-resource --resource-type Parameter --resource-id "$name" --tags Key=project,Value=bmu
     return 0
   fi
-  [ "$(settings_store)" != parameters ] ||
+  local store; store="$(settings_store)" || exit 1
+  [ "$store" != parameters ] ||
     die "'$ENV' keeps its settings one parameter each, from before the settings document. The account's administrator (or SETTINGS_PROFILE) moves them first: ./bmu aws settings migrate --env $ENV"
   set_in_settings_doc "$1" "$2"
 }
@@ -455,7 +491,7 @@ from_ssm() {
   who="$(signed_in_account)" || exit 1
   [ -z "$ACCOUNT_ID" ] || [ "$ACCOUNT_ID" = "$who" ] ||
     die "$(signed_in_as) is signed in to account $who, but '$ENV' is account $ACCOUNT_ID ($LOCAL). Stopped."
-  lines="$(ssm_settings)"
+  lines="$(ssm_settings)" || exit 1
   [ -n "$lines" ] || die "'$ENV' keeps its settings in SSM (SETTINGS=ssm), and account $who has none under $(settings_path)/.
 The account's administrator (or SETTINGS_PROFILE) puts them there from $CONF and $LOCAL: ./bmu aws settings push --env $ENV"
   for key in $SSM_SETTINGS; do
@@ -506,14 +542,15 @@ settings() {
 # console), and the files here may be out of date. Always asks, even with BMU_AWS_YES=1.
 settings_push() {
   local lines key value old adds="" kept="" ok store text
-  store="$(settings_store)"
+  store="$(settings_store)" || exit 1
   [ "$store" != parameters ] ||
     die "'$ENV' keeps its settings one parameter each, from before the settings document: ./bmu aws settings migrate --env $ENV"
-  lines="$(ssm_settings)"
+  lines="$(ssm_settings)" || exit 1
   for key in $SSM_SETTINGS; do
     value="${!key}"; old="$(setting_in "$key" "$lines")"
     [ "$value" != "$old" ] || continue
-    if [ -z "$old" ]; then
+    # A line SSM has, even set to nothing ("" on purpose), stays as it is.
+    if [ -z "$old" ] && case $'\n'"$lines"$'\n' in *$'\n'"$key"$'\t'*) false ;; *) true ;; esac; then
       case "$value" in *[\"\$\`\\]*) die "$key's value can't have \" \$ \` or \\ in it ($CONF, $LOCAL)." ;; esac
       adds="$adds$key "
     else kept="$kept  $key=$old   (the files here: ${value:-not set})
@@ -548,12 +585,12 @@ settings_push() {
 # then are the old parameters deleted. RUNNING and REAL_DATA_ACCOUNT stay parameters of their own. Always asks.
 settings_migrate() {
   local store lines key value text other="" ok
-  store="$(settings_store)"
+  store="$(settings_store)" || exit 1
   case "$store" in
     document) echo "'$ENV' already keeps its settings in one document, $(settings_doc)."; return 0 ;;
     none) die "'$ENV' has no settings in SSM yet: ./bmu aws settings push --env $ENV" ;;
   esac
-  lines="$(ssm_settings)"
+  lines="$(ssm_settings)" || exit 1
   text="$(settings_doc_header)"
   for key in $SSM_SETTINGS; do
     value="$(setting_in "$key" "$lines")"
@@ -604,7 +641,7 @@ settings_set() {  # settings_set SETTING VALUE
     FRONT_DOOR:*) case "$value" in cloudfront|alb|"") ;; *) die "FRONT_DOOR must be cloudfront or alb." ;; esac ;;
     WAF_MANAGED_RULES:*) case "$value" in count|block|"") ;; *) die "WAF_MANAGED_RULES must be count or block." ;; esac ;;
   esac
-  lines="$(ssm_settings)"
+  lines="$(ssm_settings)" || exit 1
   [ -n "$(settings_in_files_only "$lines")" ] ||
     die "'$ENV' has no settings in SSM yet (account $ACCOUNT_ID, $(settings_path)/): ./bmu aws settings push --env $ENV"
   old="$(setting_in "$key" "$lines")"
@@ -627,9 +664,14 @@ settings_set() {  # settings_set SETTING VALUE
 # have, as empty). Only the files here change; the profiles and SETTINGS, which are always the files', are kept.
 settings_pull() {
   local lines key value changes=0
-  lines="$(ssm_settings)"
+  lines="$(ssm_settings)" || exit 1
   [ -n "$(settings_in_files_only "$lines")" ] ||
     die "'$ENV' has no settings in SSM yet (account $ACCOUNT_ID, $(settings_path)/): ./bmu aws settings push --env $ENV"
+  for key in $SSM_SETTINGS; do   # every value checked before any is written, so the .local.conf is never half done
+    case "$(setting_in "$key" "$lines")" in
+      *[\"\$\`\\]*) die "$(settings_path)/$key's value in SSM has \" \$ \` or \\ in it: fix it in SSM first. Nothing was changed here." ;;
+    esac
+  done
   for key in $SSM_SETTINGS; do
     value="$(setting_in "$key" "$lines")"
     [ "$value" != "${!key}" ] || continue
@@ -646,9 +688,11 @@ settings_pull() {
 
 settings_show() {
   local lines key value differ=""
-  lines="$(ssm_settings)"
-  case "$(settings_store)" in
-    document) echo "'$ENV' in SSM, account $ACCOUNT_ID, the document $(settings_doc) (version $(settings_doc_version)):" ;;
+  lines="$(ssm_settings)" || exit 1
+  local store version; store="$(settings_store)" || exit 1
+  case "$store" in
+    document) version="$(settings_doc_version)" || exit 1
+      echo "'$ENV' in SSM, account $ACCOUNT_ID, the document $(settings_doc) (version $version):" ;;
     parameters) echo "'$ENV' in SSM, account $ACCOUNT_ID, one parameter per setting under $(settings_path)/"
       echo "(from before the settings document: ./bmu aws settings migrate --env $ENV moves them into one):" ;;
     *) echo "'$ENV' in SSM, account $ACCOUNT_ID, $(settings_path)/:" ;;
@@ -677,7 +721,7 @@ settings_delete() {  # only once the environment is destroyed: a deploy, plan or
     ! state_has_resources "$key" ||
       die "'$ENV' is still deployed (bmu/$BMU_ENV_NAME/$key.tfstate): destroy it first (./bmu aws destroy, pipeline destroy, then rehearsal-vpc destroy for a rehearsal)."
   done
-  lines="$(ssm_param_names)"
+  lines="$(ssm_param_names)" || exit 1
   [ -n "$lines" ] || { echo "'$ENV' has no settings in SSM (account $ACCOUNT_ID, $(settings_path)/)."; return 0; }
   echo "This deletes $(printf '%s\n' "$lines" | grep -c .) parameter(s) of '$ENV' in SSM, account $ACCOUNT_ID, $(settings_path)/."
   echo "The files on this computer stay."

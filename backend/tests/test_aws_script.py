@@ -39,13 +39,15 @@ arg() {  # arg OPTION ARGS...: the value after OPTION
 SSM="$FAKE_LOG_DIR/ssm"
 case "$*" in
   *"ssm describe-parameters"*)
+    [ "${FAKE_SSM_FAIL:-}" != describe ] || { echo "ThrottlingException" >&2; exit 254; }
     path="$(arg --parameter-filters "$@" | sed 's/.*Values=//')"
     ls "$SSM$path" 2>/dev/null | sed "s|^|$path/|" | paste -s -d '\t' - ;;
   *"ssm get-parameters"*)
     echo "read as $(arg --profile "$@")" >> "$FAKE_LOG_DIR/ssm-reads"
     first="$(arg --names "$@")"
     case "$(arg --query "$@")" in
-      'Parameters[0].Value') if [ -f "$SSM$first" ]; then cat "$SSM$first"; echo; else echo None; fi ;;
+      'Parameters[0].Value') [ "${FAKE_SSM_FAIL:-}" != value ] || { echo "ThrottlingException" >&2; exit 254; }
+        if [ -f "$SSM$first" ]; then cat "$SSM$first"; echo; else echo None; fi ;;
       'Parameters[0].Version') cat "$FAKE_LOG_DIR/ssm-version$first" 2>/dev/null || echo None ;;
       *) take=false
         for a in "$@"; do
@@ -856,6 +858,9 @@ def test_the_settings_are_one_document_with_its_comments_kept(tree):
     ('RUNNING="false"', "RUNNING isn't kept in the document"),
     ('ALLOWED_CIDRS="198.51.100.0/24"', "ALLOWED_CIDRS is set twice"),
     ("allowed_cidrs=x", "isn't NAME=\"value\""),
+    ("VPC_ID='vpc-1'", "must be in double quotes"),
+    ("ENV_LABEL=a#b", "must be in double quotes"),
+    ("VPC_ID=\u201cvpc-1\u201d", "has a curly quote in it"),
 ])
 def test_a_mistake_in_the_document_stops_every_command_and_names_its_line(tree, line, message):
     """The document is data, never run, so a value can't run a command; a line that isn't NAME="value" for a setting
@@ -943,6 +948,64 @@ def test_migrate_moves_the_parameters_into_the_document_from_ssms_values(tree):
     assert r.returncode == 0, r.stderr
     assert tf_args(tree, "plan-app")["allowed_cidrs"] == '["198.51.100.0/24"]'
     assert "already keeps its settings in one document" in run(tree, "settings", "migrate").stdout
+
+
+@pytest.mark.parametrize("fail", ["describe", "value"])
+@pytest.mark.parametrize("command", [("settings", "push"), ("settings", "set", "ENV_LABEL", "x"),
+                                     ("settings", "pull"), ("settings", "show"), ("settings", "migrate"), ("plan",)])
+def test_a_failed_ssm_read_stops_every_command_before_it_changes_anything(tree, fail, command):
+    """A read refused or throttled by AWS must never pass for "no settings": push would then rewrite the document
+    from the files here, undoing Operations' changes."""
+    local = write_env(tree, local_extra=SSM_LOCAL + 'VPC_ID="vpc-0abc"\nAPP_SUBNET_IDS="subnet-0a,subnet-0b"\n')
+    push(tree)
+    ops_edit(tree, "ENV_LABEL", "Set by Ops")
+    before, writes, files = doc_text(tree), ssm_writes(tree), local.read_text()
+    r = run(tree, *command, answers="y\n", ssm_fail=fail, museums=f"pahma={QA}")
+    if command[-1] == "migrate" and fail == "value":  # it needn't read the document to see it's there
+        assert "already keeps its settings in one document" in r.stdout
+    else:
+        assert r.returncode != 0, r.stdout
+        assert "Couldn't" in r.stderr, r.stderr
+    assert doc_text(tree) == before and ssm_writes(tree) == writes and local.read_text() == files
+
+
+def test_a_line_break_in_running_cant_add_a_setting(tree):
+    """RUNNING and REAL_DATA_ACCOUNT are read one at a time and checked, so a line break in one can't pass for a
+    setting's line, which pull would write into the sourced .local.conf."""
+    local = write_env(tree, local_extra=SSM_LOCAL)
+    push(tree)
+    (settings_dir(tree) / "RUNNING").write_text('true\nENV_LABEL\tx"; touch PWNED; #')
+    files = local.read_text()
+    for command in (("settings", "pull"), ("plan",)):
+        r = run(tree, *command, museums=f"pahma={QA}")
+        assert r.returncode == 1 and "/bmu-dev/settings/RUNNING in SSM must be true or false" in r.stderr, r.stderr
+    assert local.read_text() == files and not (tree / "PWNED").exists()
+
+
+@pytest.mark.parametrize("value, message", [
+    ('x"; touch PWNED; #', "fix it in SSM first"),  # would run when the .local.conf is sourced
+    ("first line\nENV_LABEL\tsecond", "has a line break in it"),
+])
+def test_before_migrate_a_value_that_could_run_never_reaches_the_files_here(tree, value, message):
+    local = write_env(tree, local_extra=SSM_LOCAL)
+    legacy_settings(tree, {**LEGACY, "ENV_LABEL": value})
+    files = local.read_text()
+    r = run(tree, "settings", "pull")
+    assert r.returncode == 1 and message in r.stderr, r.stderr
+    assert local.read_text() == files and not (tree / "PWNED").exists()
+    r = run(tree, "settings", "migrate", answers="y\n")
+    assert r.returncode == 1 and not (settings_dir(tree) / "all").exists()
+
+
+def test_push_leaves_a_setting_set_to_nothing_on_purpose(tree):
+    """A line Operations set to "" is a value: push doesn't fill it in from the files here."""
+    write_env(tree, local_extra=SSM_LOCAL + 'ENV_LABEL="From the files"\n')
+    push(tree)
+    ops_edit(tree, "ENV_LABEL", "")
+    r = push(tree)
+    assert r.returncode == 0, r.stderr
+    assert "ENV_LABEL" not in [line.split("=")[0].strip(" +") for line in r.stdout.splitlines() if line.startswith("  +")]
+    assert 'ENV_LABEL=""' in doc_text(tree)
 
 
 def test_set_refuses_a_value_that_would_run_in_the_files_here(tree):
