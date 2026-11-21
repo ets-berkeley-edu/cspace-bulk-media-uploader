@@ -41,7 +41,7 @@ worker's and the tasks' execution role), so a role with such a name could change
 
 Added 16 November 2026, for the deploy pipeline (`../README.md`, Settings in SSM Parameter Store, and "Stage 2: UC
 Berkeley's account", step 6). `ucb-qa` keeps its settings in SSM under `/bmu-qa/settings/`, which the deployer and
-the pipeline's build only read. Someone has to write them (`./bmu aws settings push`, and `RUNNING` for `pause` and
+the pipeline's build only read. Someone has to write them (`./bmu aws settings push` and `set`, and `RUNNING` for `pause` and
 `resume`), and the person deploying isn't the account's administrator. So: a role **`rtl-BmuQaSettings`**, with the
 same trust as `rtl-BmuQaDeployer`, and `bmu-qa-settings-policy.json` as its only policy (about 500 characters, one
 customer managed or inline policy):
@@ -73,7 +73,7 @@ From Serena's stage 2 deployer policy (`ets-berkeley-edu/cspace-media-server`, `
   `ReadMetadata`): an environment with `SETTINGS=ssm` keeps its settings in SSM Parameter Store under
   `/bmu-<name>/settings/`, so that the deploy pipeline's build and a deploy from a laptop read the same values
   (`../README.md`, Settings in SSM Parameter Store). The deployer only reads them (`ssm:GetParameters`); the
-  account's administrator writes them with `./bmu aws settings push`. Adding it changed parts 1 and 3; part 2 is
+  account's administrator writes them with `./bmu aws settings push` and `set`. Adding it changed parts 1 and 3; part 2 is
   unchanged.
 
 Like Serena's stage 2 policy, it can't create or change a VPC, subnets, routes or gateways. In the existing VPC it

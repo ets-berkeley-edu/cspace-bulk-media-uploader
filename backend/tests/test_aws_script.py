@@ -10,8 +10,9 @@
 - ci-role: CI's ECR Public role, with the account's GitHub OIDC provider created or reused.
 - the front door (FRONT_DOOR, DOMAIN_NAME): its settings, the certificate's DNS record, and no change of front door
   once deployed (check_front_door); REQUIRE_CLEAN (check_clean).
-- the settings in SSM Parameter Store (SETTINGS=ssm; settings push, show and delete): pushed by the administrator,
-  read by every other command, never written by the deployer.
+- the settings in SSM Parameter Store (SETTINGS=ssm; settings push, set, pull, show and delete): pushed once by the
+  administrator, then changed one at a time (set) without undoing anyone else's change, brought into the files here
+  (pull), read by every other command, never written by the deployer.
 - the deploy pipeline: UC Berkeley data only in a UC Berkeley account (a deploy asks; the build needs
   REAL_DATA_ACCOUNT), a deploy from here is break-glass once there is a pipeline, pause and resume set RUNNING for it,
   and the plan build (pipeline-plan) in a checkout, as CodeBuild runs it.
@@ -41,6 +42,7 @@ case "$*" in
     path="$(arg --parameter-filters "$@" | sed 's/.*Values=//')"
     ls "$SSM$path" 2>/dev/null | sed "s|^|$path/|" | paste -s -d '\t' - ;;
   *"ssm get-parameters"*)
+    echo "read as $(arg --profile "$@")" >> "$FAKE_LOG_DIR/ssm-reads"
     take=false
     for a in "$@"; do
       case "$a" in --names) take=true ;; --*) take=false ;;
@@ -769,16 +771,111 @@ def test_settings_push_shows_the_changes_and_writes_them_as_the_administrator_on
     writes = [w for w in ssm_writes(tree) if w.startswith("put ")]
     assert writes and all(w.endswith(" as bmu-admin") for w in writes)  # never as the deployer (bmu-test)
     assert any("Key=project,Value=bmu" in w for w in ssm_writes(tree))
-    assert "SSM already has these settings" in push(tree).stdout
 
 
-def test_settings_push_removes_a_setting_the_files_no_longer_have(tree):
+def test_settings_push_is_only_for_a_new_environment(tree):
+    """Once SSM holds the settings, it is their one copy (Operations may change one in the console): a push from files
+    that may be out of date would undo that, so it refuses and names set and pull."""
+    write_env(tree, local_extra=SSM_LOCAL)
+    push(tree)
+    before = ssm(tree)
+    r = push(tree)
+    assert r.returncode == 1
+    assert "SSM already has the settings of 't'" in r.stderr
+    assert "settings set --env t SETTING VALUE" in r.stderr and "settings pull --env t" in r.stderr
+    assert ssm(tree) == before
+
+
+def set_(tree, *args, answers="y\n"):
+    return run(tree, "settings", "set", *args, answers=answers)
+
+
+def test_settings_set_changes_one_setting_and_leaves_the_others_alone(tree):
+    """Operations changes ENV_LABEL in the console; a developer whose files still have the old one sets ALLOWED_CIDRS:
+    only ALLOWED_CIDRS changes, in SSM and in the files here, written as the administrator, after asking."""
     local = write_env(tree, local_extra=SSM_LOCAL + 'ENV_LABEL="AWS · test"\n')
     push(tree)
-    local.write_text(local.read_text().replace('ENV_LABEL="AWS · test"\n', ""))
-    r = push(tree)
+    (tree / "log" / "ssm" / "bmu-dev" / "settings" / "ENV_LABEL").write_text("Set by Ops")
+    r = set_(tree, "ALLOWED_CIDRS", "198.51.100.0/24", answers="n\n")
+    assert r.returncode == 1 and ssm(tree)["ALLOWED_CIDRS"] == "203.0.113.7/32"
+    assert "  ~ ALLOWED_CIDRS=198.51.100.0/24 (was 203.0.113.7/32)" in r.stdout
+    r = set_(tree, "ALLOWED_CIDRS", "198.51.100.0/24")
     assert r.returncode == 0, r.stderr
-    assert "  ~ ENV_LABEL=test (was AWS · test)" in r.stdout and ssm(tree)["ENV_LABEL"] == "test"
+    assert ssm(tree)["ALLOWED_CIDRS"] == "198.51.100.0/24" and ssm(tree)["ENV_LABEL"] == "Set by Ops"
+    assert 'ALLOWED_CIDRS="198.51.100.0/24"' in local.read_text()
+    assert ssm_writes(tree)[-2:] == ["put /bmu-dev/settings/ALLOWED_CIDRS as bmu-admin",
+                                     "tag /bmu-dev/settings/ALLOWED_CIDRS Key=project,Value=bmu"]
+
+
+def test_settings_set_with_no_value_removes_the_setting(tree):
+    local = write_env(tree, local_extra=SSM_LOCAL + 'ENV_LABEL="AWS · test"\n')
+    push(tree)
+    r = set_(tree, "ENV_LABEL")
+    assert r.returncode == 0, r.stderr
+    assert "  - ENV_LABEL (was AWS · test)" in r.stdout
+    assert "ENV_LABEL" not in ssm(tree) and 'ENV_LABEL=""' in local.read_text()
+
+
+@pytest.mark.parametrize("args, message", [
+    (("RUNNING", "false"), "set by ./bmu aws pause and resume"),
+    (("REAL_DATA_ACCOUNT", ACCOUNT), "set by ./bmu aws pipeline"),
+    (("ACCOUNT_ID", "999988887777"), "ACCOUNT_ID is the account the settings are in"),
+    (("AWS_PROFILE", "x"), "isn't a setting ./bmu aws keeps in SSM"),
+    (("PROTECT_DATA", "yes"), "PROTECT_DATA must be true or false"),
+    (("WAF_MANAGED_RULES", "on"), "WAF_MANAGED_RULES must be count or block"),
+    (("ALLOWED_CIDRS", "a", "b"), "SETTING [VALUE]"),
+])
+def test_settings_set_refuses_what_it_cant_set(tree, args, message):
+    write_env(tree, local_extra=SSM_LOCAL)
+    push(tree)
+    before = ssm(tree)
+    r = set_(tree, *args)
+    assert r.returncode == 1 and message in r.stderr, r.stderr
+    assert ssm(tree) == before
+
+
+def test_settings_set_needs_settings_pushed_first(tree):
+    write_env(tree, local_extra=SSM_LOCAL)
+    r = set_(tree, "ALLOWED_CIDRS", "198.51.100.0/24")
+    assert r.returncode == 1 and "settings push --env t" in r.stderr and ssm(tree) == {}
+
+
+def test_settings_pull_brings_the_files_here_up_to_date_as_the_deployer(tree):
+    """Operations changed two settings in SSM and removed one: pull writes them into the .local.conf and changes
+    nothing in SSM; the profiles stay, and a setting that is only a default here isn't written."""
+    local = write_env(tree, local_extra=SSM_LOCAL + 'ENV_LABEL="AWS · test"\n')
+    push(tree)
+    settings = tree / "log" / "ssm" / "bmu-dev" / "settings"
+    (settings / "ALLOWED_CIDRS").write_text("198.51.100.0/24")
+    (settings / "CSPACE_URL").write_text(BAMPFA)
+    (settings / "ENV_LABEL").unlink()
+    (settings / "FRONT_DOOR").unlink()  # a default here: not written
+    before = ssm_writes(tree)
+    r = run(tree, "settings", "pull")
+    assert r.returncode == 0, r.stderr
+    assert "  ALLOWED_CIDRS=198.51.100.0/24   (was 203.0.113.7/32)" in r.stdout
+    assert "Updated 3 setting(s)" in r.stdout
+    text = local.read_text()
+    assert 'ALLOWED_CIDRS="198.51.100.0/24"' in text and f'CSPACE_URL="{BAMPFA}"' in text and 'ENV_LABEL=""' in text
+    assert "ADMIN_PROFILE=bmu-admin" in text and "FRONT_DOOR" not in text
+    assert ssm_writes(tree) == before
+    assert "already match SSM" in run(tree, "settings", "pull").stdout
+    assert "differ from SSM" not in run(tree, "plan", museums=f"pahma={BAMPFA}").stderr
+
+
+def test_settings_pull_and_show_run_as_the_deployer(tree):
+    """They only read, which the deployer may: every developer can bring their files up to date."""
+    write_env(tree, local_extra=SSM_LOCAL + "SETTINGS_PROFILE=bmu-settings\n")
+    push(tree)
+    reads = tree / "log" / "ssm-reads"
+    for sub in ("pull", "show"):
+        reads.unlink(missing_ok=True)
+        r = run(tree, "settings", sub)
+        assert r.returncode == 0, r.stderr
+        assert set(reads.read_text().splitlines()) == {"read as bmu-test"}
+    reads.unlink()
+    set_(tree, "ENV_LABEL", "x")
+    assert set(reads.read_text().splitlines()) == {"read as bmu-settings"}
 
 
 def test_with_settings_in_ssm_a_command_uses_ssms_and_says_where_the_files_differ(tree):
@@ -814,16 +911,17 @@ def test_the_deployer_never_writes_a_setting_to_ssm(tree):
     before = ssm_writes(tree)
     r = run(tree, "allow-my-ip")
     assert r.returncode == 1
-    assert 'set ALLOWED_CIDRS="203.0.113.7/32,198.51.100.9/32" in' in r.stderr and "settings push --env t" in r.stderr
+    assert 'settings set --env t ALLOWED_CIDRS "203.0.113.7/32,198.51.100.9/32"' in r.stderr
+    assert ssm_writes(tree) == before
     # With no allowed addresses in SSM, a deploy stops instead of adding this computer's.
-    local.write_text(local.read_text().replace('ALLOWED_CIDRS="203.0.113.7/32"\n', ""))
-    push(tree)
+    set_(tree, "ALLOWED_CIDRS")
     assert "ALLOWED_CIDRS" not in ssm(tree)
     before = ssm_writes(tree)
     r = run(tree, "deploy")
     assert r.returncode == 1
     assert "has no ALLOWED_CIDRS in SSM" in r.stderr
-    assert ssm_writes(tree) == before and "ALLOWED_CIDRS" not in local.read_text()
+    assert ssm_writes(tree) == before
+    assert local.read_text().count("ALLOWED_CIDRS=") == 1 and 'ALLOWED_CIDRS=""' in local.read_text()
 
 
 def test_settings_show_marks_what_the_files_here_disagree_with(tree):
@@ -836,6 +934,7 @@ def test_settings_show_marks_what_the_files_here_disagree_with(tree):
     assert "  ALLOWED_CIDRS=203.0.113.7/32   (the files here: 198.51.100.0/24)" in r.stdout
     assert f"  CSPACE_URL={QA}\n" in r.stdout
     assert "  OLD_SETTING=x   (not a setting ./bmu aws reads; ignored)" in r.stdout
+    assert "To bring the files here up to date: ./bmu aws settings pull --env t" in r.stdout
 
 
 def test_settings_delete_waits_until_the_environment_is_destroyed(tree):
