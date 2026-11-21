@@ -1653,6 +1653,69 @@ Still by hand: section 2k's log line ("reader: intern made 3 lookups"), which is
 - [ ] On the pull request, the `bmut` job passes.
 - [ ] `./bmu test -k test_sign_in_as --headed`: watch the reader and newstaff buttons show their refusals, and the intern button reload the app as `intern`.
 
+## 40. SSM is the settings' one copy: settings set and pull, on ucb-qa (20 November 2026; 15 minutes)
+
+Branch `deploy/settings-pull-set`. Operations may now change a setting of `ucb-qa` in SSM Parameter Store (in the AWS
+console) without telling anyone: `./bmu aws settings push` no longer copies a whole `.local.conf` into SSM once SSM has
+the environment's settings, so an out-of-date copy can't undo their change. Instead, `./bmu aws settings set` changes
+one setting, and `./bmu aws settings pull` brings your `.local.conf` up to date with SSM. CI checks them against a
+stand-in AWS (`backend/tests/test_aws_script.py`); this checks them against `ucb-qa`'s real SSM. Nothing here deploys
+anything: a setting changes the environment only at the next pipeline run, and the last step puts the one you change
+back.
+
+Run the commands from a checkout of the branch that has your `deploy/environments/ucb-qa.local.conf` (it isn't
+committed). Sign in first, through your IAM Identity Center session:
+
+```bash
+cd <your clone> && git switch deploy/settings-pull-set && git pull && aws sso login --sso-session <your session>
+```
+
+- [ ] **1. Show the settings, as the deployer.**
+
+  ```bash
+  cd <your clone> && ./bmu aws settings show --env ucb-qa
+  ```
+
+  Expected: `'ucb-qa' in SSM, account …, /bmu-qa/settings/:` and one line per setting. Note `ENV_LABEL`'s value: step 5
+  puts it back. If any line ends `(the files here: …)`, the last line says `To bring the files here up to date: ./bmu
+  aws settings pull --env ucb-qa`; run step 4 first, then come back.
+- [ ] **2. Change a setting as Operations would,** straight in SSM, as `SETTINGS_PROFILE` (the profile named in your
+  `ucb-qa.local.conf`). Either in the AWS console (Systems Manager › Parameter Store › `/bmu-qa/settings/ENV_LABEL` ›
+  Edit, adding ` (test)` at the end), or:
+
+  ```bash
+  cd <your clone> && aws ssm put-parameter --name /bmu-qa/settings/ENV_LABEL --type String --overwrite --value "AWS · UC Berkeley QA · PAHMA QA (test)" --profile <your SETTINGS_PROFILE> --region us-west-2
+  ```
+
+  Expected: `{"Version": …, "Tier": "Standard"}`.
+- [ ] **3. A push from your files is refused.**
+
+  ```bash
+  cd <your clone> && ./bmu aws settings push --env ucb-qa
+  ```
+
+  Expected: `SSM already has the settings of 'ucb-qa' …`, naming `./bmu aws settings set --env ucb-qa SETTING VALUE`
+  and `./bmu aws settings pull --env ucb-qa`. Nothing is changed (`settings show` still has the ` (test)` label).
+- [ ] **4. Pull brings your file up to date.**
+
+  ```bash
+  cd <your clone> && ./bmu aws settings pull --env ucb-qa && ./bmu aws settings pull --env ucb-qa
+  ```
+
+  Expected: the first lists `  ENV_LABEL=AWS · UC Berkeley QA · PAHMA QA (test)   (was …)` and `Updated 1 setting(s)
+  in …/ucb-qa.local.conf from SSM`; the second says `The files here already match SSM (/bmu-qa/settings/).`
+  `ucb-qa.local.conf` now has the line `ENV_LABEL="AWS · UC Berkeley QA · PAHMA QA (test)"`, and your profile lines are
+  unchanged.
+- [ ] **5. Set puts it back, and changes only that setting.** Use the value you noted in step 1:
+
+  ```bash
+  cd <your clone> && ./bmu aws settings set --env ucb-qa ENV_LABEL "<the value from step 1>"
+  ```
+
+  Expected: `  ~ ENV_LABEL=<the value from step 1> (was AWS · UC Berkeley QA · PAHMA QA (test))` and `Write this to SSM?
+  The next deploy uses it. [y/N]`; answer `y`. Then `Done.` Run step 1 again: the same settings as at first, and no
+  line ends `(the files here: …)`.
+
 ## Not tests, but still open
 
 - The design doc's Open questions and findings, in particular its "Blocking production" and "Before going live" items.

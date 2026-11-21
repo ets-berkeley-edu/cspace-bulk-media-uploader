@@ -32,7 +32,7 @@ prototype: the image is built from this repository and runs on ECS Fargate. Demo
 | `./bmu aws reader-secret [museum]` | Sets or changes the sign-in of a museum's read-only CollectionSpace account, which checks its interns' drafts. It asks for the user name and password; see below. The museum can be left out when the environment serves only one. |
 | `./bmu aws destroy` | Deletes everything in AWS for the environment, data included. It asks for the environment's name first. |
 | `./bmu aws rehearsal-vpc [destroy]` | A rehearsal environment only (`REHEARSAL=true`): makes, or deletes, what Operations provides in UC Berkeley's account, a VPC with a NAT gateway and a deployer role with only the deployer policy, signed in as the account's administrator. See "Rehearsing the deploy in your own account". |
-| `./bmu aws settings push` / `show` / `delete` | An environment with `SETTINGS=ssm`: puts its settings in SSM Parameter Store from its files (showing what changes and asking) or lists them, as `SETTINGS_PROFILE` or the account's administrator; or deletes them once it is destroyed, as the administrator. See "Settings in SSM Parameter Store". |
+| `./bmu aws settings push` / `set` / `pull` / `show` / `delete` | An environment with `SETTINGS=ssm`, where SSM Parameter Store holds the settings: `push` puts a new environment's there from its files, once; `set SETTING [VALUE]` changes one (no value removes it), in SSM and in the files here; `pull` brings the files here up to date with SSM; `show` lists them. `push` and `set` run as `SETTINGS_PROFILE` or the account's administrator, `pull` and `show` as the deployer; `delete` removes them once the environment is destroyed, as the administrator. See "Settings in SSM Parameter Store". |
 | `./bmu aws pipeline [destroy]` | An environment with `SETTINGS=ssm`, as the account's administrator: makes, or deletes, its deploy pipeline. See "The deploy pipeline". |
 | `./bmu aws sim-secrets` | With the simulated CollectionSpace, in an environment the pipeline deploys: sets the simulator's read-only account, which a deploy from a laptop sets itself. Nothing is shown. |
 | `./bmu aws ci-role` | Once per account: the role CI assumes to sign in to ECR Public (see "CI's sign-in to ECR Public" below). Prints the command that sets the repository's `ECR_PUBLIC_ROLE_ARN` variable. |
@@ -339,7 +339,7 @@ pipeline deploys it (step 6).
 6. **The deploy pipeline** (testing checklist section 33). Three more sign-ins in UC Berkeley's account:
    - `rtl-BmuQaSettings`, a role that reads and writes only `/bmu-qa/settings/*` in SSM, never `REAL_DATA_ACCOUNT`
      (`deploy/iam/bmu-qa-settings-policy.json`): a profile in `~/.aws/config` like `bmu-qa-deploy`'s, named in
-     `ucb-qa.local.conf` as `SETTINGS_PROFILE`. `settings push`, `settings show`, `pause` and `resume` run as it.
+     `ucb-qa.local.conf` as `SETTINGS_PROFILE`. `settings push`, `settings set`, `pause` and `resume` run as it.
    - An administrator of the account, which Richard isn't: an Operations administrator runs `./bmu aws pipeline
      --env ucb-qa` once, from their own clone of the repository, with their own administrator sign-in and
      `gh` signed in as an administrator of the repository. Their `ucb-qa.local.conf` holds only `ADMIN_PROFILE`: the
@@ -398,19 +398,30 @@ person's computer, so that everyone who deploys it, and later the deploy pipelin
   except `AWS_PROFILE`, `AWS_REGION`, `BMU_ENV_NAME`, `ADMIN_PROFILE`, `SETTINGS` and `REQUIRE_CLEAN`, which always
   come from the files. Its `ACCOUNT_ID` in SSM must be the account it's in. A command whose files disagree with SSM
   says so ("the files on this computer differ from SSM in …") and uses SSM's.
-- **Putting them there.** `./bmu aws settings push --env <env>`, as the account's administrator (`ADMIN_PROFILE`, as
-  for `rehearsal-vpc`), or as `SETTINGS_PROFILE` where the environment has one (below): it lists what would change (`+` added, `~` changed, `-` removed) from the `.conf` and
-  `.local.conf` on this computer and asks first, even with `BMU_AWS_YES=1`, since another computer's files may be out of
-  date. A setting the files no longer have is removed. The next deploy applies the change.
-- **Looking at them.** `./bmu aws settings show --env <env>` lists them, marking any the files here disagree with.
-  `./bmu aws status` says where an environment's settings are.
+- **SSM is the one copy.** Once an environment's settings are in SSM, a developer's files are only a copy, which may
+  be out of date: anyone with access may change a setting in SSM, Operations too, in the AWS console or with
+  `aws ssm put-parameter`, and nobody has to tell anyone. No command copies a whole set of files into SSM again.
+- **Putting them there, once.** `./bmu aws settings push --env <env>`, as the account's administrator (`ADMIN_PROFILE`,
+  as for `rehearsal-vpc`), or as `SETTINGS_PROFILE` where the environment has one (below): for a new environment, it
+  lists what it would write from the `.conf` and `.local.conf` on this computer and asks first, even with
+  `BMU_AWS_YES=1`. Once SSM has the environment's settings it refuses, and names `set` and `pull`.
+- **Changing one.** `./bmu aws settings set --env <env> ALLOWED_CIDRS "<cidr>,<cidr>"`, as `SETTINGS_PROFILE` or the
+  administrator: it shows the old and new value, asks first (even with `BMU_AWS_YES=1`), writes that one setting to
+  SSM and to the `.local.conf` here, and touches nothing else, so another person's change stays. With no value it
+  removes the setting. It refuses `RUNNING`, `REAL_DATA_ACCOUNT` and `ACCOUNT_ID`, and a value that isn't one the
+  setting takes (true or false, for example). The next deploy applies the change.
+- **Bringing the files here up to date.** `./bmu aws settings pull --env <env>`, as the deployer: it writes each
+  setting SSM has that the files here don't (and, as empty, one SSM no longer has) into the `.local.conf`, and lists
+  them. It changes nothing in SSM, and keeps the profiles and `SETTINGS`, which are always the files'.
+- **Looking at them.** `./bmu aws settings show --env <env>`, as the deployer, lists them, marking any the files here
+  disagree with (then naming `pull`). `./bmu aws status` says where an environment's settings are.
 - **Deleting them.** `./bmu aws settings delete --env <env>`, as the administrator, once the environment is destroyed
   (a rehearsal's VPC too): it refuses while any of its Terraform state holds resources, and asks you to type the environment's name. The
   files stay.
 - **The deployer only reads them.** Its policy allows `ssm:DescribeParameters` and `ssm:GetParameters` on
   `parameter/bmu-*/settings/*`, nothing else in SSM. So in an environment with `SETTINGS=ssm`, a command that would
-  save a setting stops and says what to change instead: `allow-my-ip` (add the address to `ALLOWED_CIDRS` in the
-  `.local.conf`, then `settings push`), and a first deploy with no `ALLOWED_CIDRS`. `rehearsal-vpc`, which runs as the
+  save a setting stops and says what to change instead: `allow-my-ip` (it names the `settings set` command that adds
+  the address to `ALLOWED_CIDRS`), and a first deploy with no `ALLOWED_CIDRS`. `rehearsal-vpc`, which runs as the
   administrator, saves the VPC's IDs to SSM as well as to the `.local.conf`.
 - **A role for the settings (`SETTINGS_PROFILE`).** Where the person deploying isn't the account's administrator
   (`ucb-qa`, in UC Berkeley's account), a role that can read and write only that environment's settings, and never
@@ -472,7 +483,7 @@ in the plan build's log.
 it asks you to type "break glass", and is only for when the pipeline is broken and a deploy is urgent; the next
 pipeline run confirms the environment matches `main`. `pause` and `resume` set `RUNNING` in SSM, as `SETTINGS_PROFILE` or
 the account's administrator, and the next pipeline run applies it. `allow-my-ip` refuses (the allowed ranges are a setting:
-change them in the files, `settings push`, then run the pipeline). `status` says the pipeline deploys it. `plan`,
+change them with `settings set`, then run the pipeline). `status` says the pipeline deploys it. `plan`,
 `logs`, `url`, `reader-secret` and `destroy` are as before; after a destroy, `./bmu aws pipeline destroy` deletes the
 pipeline, then `settings delete`.
 

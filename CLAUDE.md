@@ -82,8 +82,9 @@ Actions variable `ECR_PUBLIC_ROLE_ARN` (deploy/README.md, "CI's sign-in to ECR P
 changing a `.tf` file, run `terraform fmt -recursive deploy/terraform`.
 `.github/workflows/deploy.yml` is the deploy pipeline (deploy/README.md, The deploy pipeline): started by hand and
 approved by a reviewer in GitHub; never started or approved by Claude. It deploys `ucb-qa` (UC Berkeley data):
-there, `./bmu aws deploy` from a laptop is break-glass, settings change in `ucb-qa.local.conf`, then
-`./bmu aws settings push` (as `SETTINGS_PROFILE`) and a pipeline run, and `pause`/`resume` set `RUNNING` for the next
+there, `./bmu aws deploy` from a laptop is break-glass, a setting changes in SSM, with
+`./bmu aws settings set` (as `SETTINGS_PROFILE`; Operations may change one in the console) and a pipeline run, and
+`./bmu aws settings pull` brings `ucb-qa.local.conf` up to date, and `pause`/`resume` set `RUNNING` for the next
 run. `ALLOW_SELF_REVIEW` goes only in a committed `.conf`.
 `.github/workflows/audit.yml` repeats the audit every Monday.
 A pull request that changes only documentation (`docs/`, `*.md`, `LICENSE`, issue/PR templates) skips `backend`,

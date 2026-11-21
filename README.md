@@ -12,6 +12,9 @@ For museum staff, [BMU v2.0: what's changing](docs/bmu-v2-whats-changing.md) com
 
 For developers and ops: the [CollectionSpace hosting inventory](https://drive.google.com/file/d/1l4In1IwlmcXnb_7g05Sk5YJgMP3r6OQR/view) (PDF; UC Berkeley sign-in
 required) lists what runs today on the hosts of the legacy webapps, the legacy BMU, Solr, the ETL and Glimmer.
+[BMU settings and secrets: a guide for Ops](https://docs.google.com/document/d/119ynkoovQ4mkUWEiHBaRncgEivQKw5qkwXtlb-rPVgs/edit)
+(Google Doc) says how to change the AWS environments' settings in SSM Parameter Store and the read-only account's
+secret in Secrets Manager.
 
 ## What it does
 

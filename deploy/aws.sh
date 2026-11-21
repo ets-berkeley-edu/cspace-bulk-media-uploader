@@ -20,10 +20,13 @@
 #                           delete) what Operations provides in UC Berkeley's account, a VPC with public subnets and a
 #                           NAT gateway and a deployer role with only deploy/iam/bmu-deployer-policy.json (and the
 #                           simulator's bmu-simulator-dns-policy.json), as ADMIN_PROFILE
-#   ./bmu aws settings push|show|delete   an environment with SETTINGS=ssm (BP4): put its settings in SSM Parameter
-#                           Store from its files (shows what changes and asks) or list them (marking any the files here
-#                           disagree with), as SETTINGS_PROFILE if it has one, else ADMIN_PROFILE; or delete them once
-#                           the environment is destroyed, as ADMIN_PROFILE
+#   ./bmu aws settings push|set|pull|show|delete   an environment with SETTINGS=ssm (BP4), where SSM Parameter Store
+#                           holds the settings and the files are only this computer's copy: push puts a new
+#                           environment's settings there from its files, once; set KEY [VALUE] changes one setting (or
+#                           removes it) in SSM and in the files here; pull brings the files here up to date with SSM;
+#                           show lists them, marking any the files here disagree with. push and set run as
+#                           SETTINGS_PROFILE if it has one, else ADMIN_PROFILE; pull and show as the deployer, which
+#                           only reads; delete removes them once the environment is destroyed, as ADMIN_PROFILE
 #   ./bmu aws pipeline [destroy]   as the account's administrator (ADMIN_PROFILE), for an environment with
 #                           SETTINGS=ssm: make (or delete) its deploy pipeline (deploy/terraform/pipeline): the roles the
 #                           deploy workflow assumes, the CodeBuild projects and their role, and GitHub's OIDC provider
@@ -35,7 +38,7 @@
 #
 # Once an environment has a deploy pipeline (docs/design.md, Deploys), the pipeline deploys it: ./bmu aws deploy from a
 # laptop is a break-glass deploy (it asks you to type "break glass"), pause and resume set RUNNING in SSM for the next
-# pipeline run, as SETTINGS_PROFILE or the administrator, and allow-my-ip refuses (the allowed ranges change with settings push). A deploy
+# pipeline run, as SETTINGS_PROFILE or the administrator, and allow-my-ip refuses (the allowed ranges change with settings set). A deploy
 # of an environment with a real CollectionSpace (UC Berkeley's data) asks the person deploying to type the account's
 # number, and the pipeline's builds need the account an administrator confirmed (REAL_DATA_ACCOUNT): UC Berkeley data
 # only in UC Berkeley accounts.
@@ -44,10 +47,12 @@
 # deploy/environments/NAME.conf; NAME.local.conf (not committed) holds the account number and allowed addresses.
 # With SETTINGS=ssm (design: Deploys, BP4), every setting but AWS_PROFILE, AWS_REGION, BMU_ENV_NAME, ADMIN_PROFILE,
 # SETTINGS_PROFILE, SETTINGS and REQUIRE_CLEAN is read from SSM Parameter Store in the account instead
-# (/bmu-<name>/settings/<SETTING>), where ./bmu aws settings push puts them from the files; the files then matter only
-# to settings push. The deployer only reads them: a change is made in the files, then pushed by the account's
-# administrator, or, where the environment has one, by SETTINGS_PROFILE, a role that can write only its settings (in
-# UC Berkeley's account, where the person deploying isn't the account's administrator; deploy/iam/README.md).
+# (/bmu-<name>/settings/<SETTING>). SSM is then the settings' one copy: anyone with access may change one there,
+# including Operations in the AWS console, so nobody has to tell anyone. ./bmu aws settings push puts a new
+# environment's settings there from its files, once; after that, settings set changes one, and settings pull brings
+# the files here up to date. The deployer only reads them: set is the account's administrator's, or, where the
+# environment has one, SETTINGS_PROFILE's, a role that can write only its settings (in UC Berkeley's account, where the
+# person deploying isn't the account's administrator; deploy/iam/README.md).
 # CSPACE_TENANTS lists the museums the environment serves, each with its CollectionSpace server
 # ("pahma=https://... bampfa=https://..."); TENANT and CSPACE_URL instead mean a list of one.
 # Sign in first with aws sso login: for a profile that takes a role from another (source_profile, as in UC Berkeley's
@@ -84,7 +89,7 @@ while [ $# -gt 0 ]; do
 done
 set -- ${ARGS[@]+"${ARGS[@]}"}
 CMD="${1:-help}"; shift || true
-SUBCMD="${1:-}"   # settings push|show|delete, pipeline [destroy], …
+SUBCMD="${1:-}"   # settings push|set|pull|show|delete, pipeline [destroy], …
 
 # ---- settings -----------------------------------------------------------------------------------------------------
 load_env() {
@@ -112,10 +117,11 @@ load_env() {
   NAME="bmu-$BMU_ENV_NAME"   # the cluster's name and the prefix of every resource
   # A rehearsal's VPC and deployer, the settings in SSM and the pipeline are the account administrator's to make: the
   # deployer can't make itself, and only reads the settings. Where SETTINGS_PROFILE is set, it writes the settings
-  # instead (settings push and show; pause and resume in pipeline_pause), and the administrator deletes them.
+  # instead (settings push and set; pause and resume in pipeline_pause), and the administrator deletes them.
   DEPLOYER_PROFILE="$AWS_PROFILE"
   case "$CMD" in rehearsal-vpc|pipeline) [ -z "$ADMIN_PROFILE" ] || AWS_PROFILE="$ADMIN_PROFILE" ;; esac
-  [ "$CMD" != settings ] || [ -z "$(settings_writer)" ] || AWS_PROFILE="$(settings_writer)"
+  case "$CMD:$SUBCMD" in settings:pull|settings:show) ;;   # they only read: the deployer may
+    settings:*) [ -z "$(settings_writer)" ] || AWS_PROFILE="$(settings_writer)" ;; esac
   # The pipeline's builds sign in as the build's own role, and always read the settings from SSM.
   IN_BUILD=false
   case "$CMD" in pipeline-plan|pipeline-apply)
@@ -123,7 +129,7 @@ load_env() {
     IN_BUILD=true SETTINGS=ssm; unset AWS_PROFILE ;;
   esac
   case "${SETTINGS:=files}" in files|ssm) ;; *) die "SETTINGS must be files or ssm ($CONF, $LOCAL)." ;; esac
-  [ "$SETTINGS" = files ] || [ "$CMD" = settings ] || from_ssm   # settings push reads the files
+  [ "$SETTINGS" = files ] || [ "$CMD" = settings ] || from_ssm   # settings compares the files with SSM itself
   case "${REHEARSAL:=false}" in true|false) ;; *) die "REHEARSAL must be true or false ($CONF)." ;; esac
   case "${ALWAYS_RUN_TIME:=false}" in true|false) ;; *) die "ALWAYS_RUN_TIME must be true or false ($CONF, $LOCAL)." ;; esac
   case "${SIMULATED_CSPACE:=false}" in true|false) ;; *) die "SIMULATED_CSPACE must be true or false ($CONF, $LOCAL)." ;; esac
@@ -243,7 +249,7 @@ tenants_var() {  # MUSEUMS as a Terraform map: {"pahma"="https://...","bampfa"="
 sim_url() { echo "http://fakecspace.$NAME.internal:8180"; }
 
 # With SETTINGS=ssm, a setting saved (or removed) by a command goes to SSM, which the commands read, and to the
-# .local.conf as well, so that the files stay a whole copy and a later settings push doesn't undo it. Only the
+# .local.conf as well, so that the files here stay a whole copy. Only the
 # administrator's commands save one there (rehearsal-vpc): the deployer can't write SSM, so a deployer's command that
 # would save a setting stops first (ensure_allowlist, allow-my-ip) and ACCOUNT_ID always comes from SSM (from_ssm).
 save_local() {  # save_local KEY VALUE: set one setting in the environment's .local.conf (and SSM, SETTINGS=ssm)
@@ -258,8 +264,8 @@ save_local() {  # save_local KEY VALUE: set one setting in the environment's .lo
 # ---- settings in SSM Parameter Store (SETTINGS=ssm; design: Deploys, BP4) -------------------------------------------
 # One String parameter per setting, /bmu-<name>/settings/<SETTING>, in the environment's account, so that the deploy
 # pipeline's build and a person's ./bmu aws read the same values. They are private (addresses, Operations' VPC and
-# subnets, the BMU's name) but not secret. ./bmu aws settings push puts them there from the files, as the account's
-# administrator; the deployer policy only reads them (ssm:DescribeParameters, and ssm:GetParameters on
+# subnets, the BMU's name) but not secret. ./bmu aws settings push puts a new environment's there from the files, and
+# settings set changes one, as the account's administrator or SETTINGS_PROFILE; the deployer policy only reads them (ssm:DescribeParameters, and ssm:GetParameters on
 # parameter/bmu-*/settings/*).
 SSM_SETTINGS="ACCOUNT_ID ALLOWED_CIDRS SIMULATED_CSPACE ENV_LABEL CSPACE_TENANTS TENANT CSPACE_URL WAF_ENABLED
   ORIGIN_DOMAIN ORIGIN_CERTIFICATE_ARN FRONT_DOOR DOMAIN_NAME PROTECT_DATA ALWAYS_RUN_TIME WAF_MANAGED_RULES VPC_ID
@@ -345,7 +351,7 @@ The account's administrator (or SETTINGS_PROFILE) puts them there from $CONF and
   done
   for key in $PIPELINE_SETTINGS; do printf -v "$key" '%s' "$(setting_in "$key" "$lines")"; done
   [ "$ACCOUNT_ID" = "$who" ] ||
-    die "SSM's ACCOUNT_ID for '$ENV' (${ACCOUNT_ID:-none}) isn't the account it is in ($who): ./bmu aws settings push --env $ENV"
+    die "SSM's ACCOUNT_ID for '$ENV' (${ACCOUNT_ID:-none}) isn't the account it is in ($who). Stopped: check the account the profile signs in to."
   while IFS='	' read -r key value; do
     [ -n "$key" ] || continue
     is_ssm_setting "$key" || is_pipeline_setting "$key" ||
@@ -358,11 +364,12 @@ EOF
     [ -z "$value" ] || [ "$value" = "${!key}" ] || differ="$differ $key"
   done
   [ -z "$differ" ] ||
-    echo "Note: the files on this computer differ from SSM in$differ; SSM's are used (./bmu aws settings show)." >&2
+    echo "Note: the files on this computer differ from SSM in$differ; SSM's are used (./bmu aws settings pull brings the files up to date)." >&2
 }
 
-# ./bmu aws settings push|show|delete (SETTINGS=ssm). The account is this computer's ACCOUNT_ID, asked the first time
-# as for a deploy; they run as the environment's SETTINGS_PROFILE or ADMIN_PROFILE, if it has one (settings_writer).
+# ./bmu aws settings push|set|pull|show|delete (SETTINGS=ssm). The account is this computer's ACCOUNT_ID, asked the
+# first time as for a deploy. push, set and delete run as the environment's SETTINGS_PROFILE or ADMIN_PROFILE, if it has
+# one (settings_writer); pull and show as the deployer.
 settings() {
   load_env
   [ "$SETTINGS" = ssm ] || die "'$ENV' keeps its settings in $CONF and $LOCAL. To keep them in SSM Parameter Store instead
@@ -370,17 +377,25 @@ settings() {
   check_account
   case "${1:-}" in
     push) settings_push ;;
+    set) [ $# -ge 2 ] && [ $# -le 3 ] || die "./bmu aws settings set --env $ENV SETTING [VALUE] (no VALUE removes it)"
+      settings_set "$2" "${3:-}" ;;
+    pull) settings_pull ;;
     show) settings_show ;;
     delete) settings_delete ;;
-    *) die "./bmu aws settings push|show|delete" ;;
+    *) die "./bmu aws settings push|set|pull|show|delete" ;;
   esac
 }
 
-# The files' settings (after load_env's defaults), compared with SSM's; asks, then writes the changes. Always asks,
-# even with BMU_AWS_YES=1: another computer's files may be out of date, and a setting missing there is deleted.
+# A new environment's settings, from the files (after load_env's defaults) to SSM, once: SSM is then their one copy,
+# which anyone with access may change (Operations too, in the console), so the files here may be out of date. Always
+# asks, even with BMU_AWS_YES=1.
 settings_push() {
   local lines key value old changes="" ok
   lines="$(ssm_settings)"
+  [ -z "$(settings_in_files_only "$lines")" ] ||
+    die "SSM already has the settings of '$ENV' (account $ACCOUNT_ID, $(settings_path)/), and they may have changed since
+these files were written. Change one with: ./bmu aws settings set --env $ENV SETTING VALUE
+Bring the files here up to date with: ./bmu aws settings pull --env $ENV"
   for key in $SSM_SETTINGS; do
     value="${!key}"; old="$(setting_in "$key" "$lines")"
     [ "$value" != "$old" ] || continue
@@ -407,8 +422,71 @@ settings_push() {
   echo "Done. ./bmu aws plan --env $ENV shows what they change."
 }
 
+settings_in_files_only() {  # settings_in_files_only LINES: ssm_settings' LINES, less what pipeline commands write
+  local key value
+  while IFS='	' read -r key value; do
+    [ -z "$key" ] || is_pipeline_setting "$key" || echo "$key"
+  done <<EOF
+$1
+EOF
+}
+
+# One setting, in SSM and in the files here, as SETTINGS_PROFILE or the administrator; no VALUE removes it. The other
+# settings aren't touched, so nobody else's change is undone. Always asks, even with BMU_AWS_YES=1.
+settings_set() {  # settings_set SETTING VALUE
+  local key="$1" value="$2" lines old ok
+  is_pipeline_setting "$key" &&
+    die "$key is set by ./bmu aws $([ "$key" = RUNNING ] && echo "pause and resume" || echo pipeline), not settings set."
+  is_ssm_setting "$key" || die "$key isn't a setting ./bmu aws keeps in SSM. Those are: $(echo $SSM_SETTINGS)"
+  [ "$key" != ACCOUNT_ID ] || die "ACCOUNT_ID is the account the settings are in ($ACCOUNT_ID): it can't be set."
+  case "$key:$value" in
+    SIMULATED_CSPACE:*|PROTECT_DATA:*|ALWAYS_RUN_TIME:*|WAF_ENABLED:*|CREATE_GATEWAY_ENDPOINTS:*|REHEARSAL:*)
+      case "$value" in true|false|"") ;; *) die "$key must be true or false." ;; esac ;;
+    FRONT_DOOR:*) case "$value" in cloudfront|alb|"") ;; *) die "FRONT_DOOR must be cloudfront or alb." ;; esac ;;
+    WAF_MANAGED_RULES:*) case "$value" in count|block|"") ;; *) die "WAF_MANAGED_RULES must be count or block." ;; esac ;;
+  esac
+  lines="$(ssm_settings)"
+  [ -n "$(settings_in_files_only "$lines")" ] ||
+    die "'$ENV' has no settings in SSM yet (account $ACCOUNT_ID, $(settings_path)/): ./bmu aws settings push --env $ENV"
+  old="$(setting_in "$key" "$lines")"
+  if [ "$value" = "$old" ]; then echo "$key is already ${value:-not set} in SSM."
+  else
+    echo "In SSM, account $ACCOUNT_ID, $(settings_path)/:"
+    if [ -z "$old" ]; then echo "  + $key=$value"
+    elif [ -z "$value" ]; then echo "  - $key (was $old)"
+    else echo "  ~ $key=$value (was $old)"
+    fi
+    read -r -p "Write this to SSM? The next deploy uses it. [y/N] " ok
+    case "$ok" in y|Y|yes) ;; *) die "Stopped; nothing was changed." ;; esac
+    put_setting "$key" "$value"
+  fi
+  save_local "$key" "$value"   # CMD=settings: the files here only
+  echo "Done. ./bmu aws plan --env $ENV shows what it changes."
+}
+
+# The files here brought up to date with SSM: each setting that differs is written to the .local.conf (one SSM doesn't
+# have, as empty). Only the files here change; the profiles and SETTINGS, which are always the files', are kept.
+settings_pull() {
+  local lines key value changes=0
+  lines="$(ssm_settings)"
+  [ -n "$(settings_in_files_only "$lines")" ] ||
+    die "'$ENV' has no settings in SSM yet (account $ACCOUNT_ID, $(settings_path)/): ./bmu aws settings push --env $ENV"
+  for key in $SSM_SETTINGS; do
+    value="$(setting_in "$key" "$lines")"
+    [ "$value" != "${!key}" ] || continue
+    # Not in SSM, and only a default here (load_env's, not in the files): nothing to bring.
+    [ -n "$value" ] || grep -q "^[[:space:]]*$key=" "$CONF" "$LOCAL" 2>/dev/null || continue
+    echo "  $key=$value   (was ${!key:-not set})"
+    save_local "$key" "$value"
+    changes=$((changes + 1))
+  done
+  if [ "$changes" = 0 ]; then echo "The files here already match SSM ($(settings_path)/)."
+  else echo "Updated $changes setting(s) in $LOCAL from SSM ($(settings_path)/)."
+  fi
+}
+
 settings_show() {
-  local lines key value
+  local lines key value differ=""
   lines="$(ssm_settings)"
   echo "'$ENV' in SSM, account $ACCOUNT_ID, $(settings_path)/:"
   [ -n "$lines" ] || { echo "  none yet (./bmu aws settings push --env $ENV)"; return 0; }
@@ -416,15 +494,17 @@ settings_show() {
     if [ "$key" = REAL_DATA_ACCOUNT ]; then echo "  $key=$value   (set by ./bmu aws pipeline)"
     elif [ "$key" = RUNNING ]; then echo "  $key=$value   (set by ./bmu aws pause and resume)"
     elif ! is_ssm_setting "$key"; then echo "  $key=$value   (not a setting ./bmu aws reads; ignored)"
-    elif [ "${!key}" != "$value" ]; then echo "  $key=$value   (the files here: ${!key:-not set})"
+    elif [ "${!key}" != "$value" ]; then echo "  $key=$value   (the files here: ${!key:-not set})"; differ=yes
     else echo "  $key=$value"
     fi
   done <<EOF
 $lines
 EOF
   for key in $SSM_SETTINGS; do
-    [ -z "${!key}" ] || [ -n "$(setting_in "$key" "$lines")" ] || echo "  ($key isn't in SSM; the files here: ${!key})"
+    [ -z "${!key}" ] || [ -n "$(setting_in "$key" "$lines")" ] ||
+      { echo "  ($key isn't in SSM; the files here: ${!key})"; differ=yes; }
   done
+  [ -z "$differ" ] || echo "SSM's are the ones used. To bring the files here up to date: ./bmu aws settings pull --env $ENV"
 }
 
 settings_delete() {  # only once the environment is destroyed: a deploy, plan or destroy needs them
@@ -541,7 +621,7 @@ my_ip() {
 ensure_allowlist() {
   [ -n "$ALLOWED_CIDRS" ] && return
   [ "$SETTINGS" = files ] ||
-    die "'$ENV' has no ALLOWED_CIDRS in SSM. Add the allowed ranges to $LOCAL, then the account's administrator (or SETTINGS_PROFILE) runs: ./bmu aws settings push --env $ENV"
+    die "'$ENV' has no ALLOWED_CIDRS in SSM. The account's administrator (or SETTINGS_PROFILE) adds the allowed ranges: ./bmu aws settings set --env $ENV ALLOWED_CIDRS \"<cidr>,<cidr>\""
   local ip; ip="$(my_ip)"
   echo "The BMU in AWS is open only to listed addresses. Adding this computer's: $ip/32"
   echo "(More later with ./bmu aws allow-my-ip, or edit ALLOWED_CIDRS in $LOCAL and deploy.)"
@@ -1011,7 +1091,7 @@ destroy() {
   # Review 5.5: an environment whose data matters is never destroyed by the script; its tables and buckets refuse it
   # anyway, but the destroy would get as far as scheduling its KMS keys (with them, the audit files) for deletion.
   [ "${PROTECT_DATA:-false}" != true ] ||
-    die "'$ENV' protects its data (PROTECT_DATA=true), so it can't be destroyed. To destroy it on purpose, set PROTECT_DATA=false in the settings ($CONF or $LOCAL, then settings push if it keeps them in SSM) and deploy first (that turns off the tables' deletion protection), then destroy."
+    die "'$ENV' protects its data (PROTECT_DATA=true), so it can't be destroyed. To destroy it on purpose, set PROTECT_DATA=false in the settings ($CONF or $LOCAL, or, if it keeps them in SSM, ./bmu aws settings set --env $ENV PROTECT_DATA false) and deploy first (that turns off the tables' deletion protection), then destroy."
   prepare
   echo "This deletes the '$ENV' BMU in AWS account $ACCOUNT_ID: its jobs, staged files, audit entries, logs and images."
   echo "Records it created in CollectionSpace stay. The KMS keys are deleted after a 7-day waiting period (aws kms cancel-key-deletion stops it)."
@@ -1482,9 +1562,9 @@ case "$CMD" in
     ip="$(my_ip)/32"
     case ",$ALLOWED_CIDRS," in *",$ip,"*) echo "$ip is already allowed." ; exit 0 ;; esac
     new="${ALLOWED_CIDRS:+$ALLOWED_CIDRS,}$ip"
-    # The deployer can't change a setting in SSM: the administrator pushes the change from the files (BP4, BP6).
+    # The deployer can't change a setting in SSM: the administrator (or SETTINGS_PROFILE) sets it (BP4, BP6).
     [ "$SETTINGS" = files ] ||
-      die "'$ENV' keeps its settings in SSM. To allow $ip, set ALLOWED_CIDRS=\"$new\" in $LOCAL; the account's administrator (or SETTINGS_PROFILE) then runs ./bmu aws settings push --env $ENV, and the next deploy applies it."
+      die "'$ENV' keeps its settings in SSM. To allow $ip, the account's administrator (or SETTINGS_PROFILE) runs ./bmu aws settings set --env $ENV ALLOWED_CIDRS \"$new\", and the next deploy applies it."
     save_local ALLOWED_CIDRS "$new"; ALLOWED_CIDRS="$new"
     echo "Allowed: $new"
     prepare; tf_init app
@@ -1494,7 +1574,7 @@ case "$CMD" in
   reader-secret) reader_secret "${1:-}" ;;
   ci-role) ci_role ;;
   rehearsal-vpc) rehearsal_vpc "${1:-}" ;;
-  settings) settings "${1:-}" ;;
+  settings) settings "$@" ;;
   pipeline) pipeline_root "${1:-}" ;;
   pipeline-plan) pipeline_plan ;;
   pipeline-apply) pipeline_apply ;;
