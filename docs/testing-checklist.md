@@ -1653,7 +1653,12 @@ Still by hand: section 2k's log line ("reader: intern made 3 lookups"), which is
 - [ ] On the pull request, the `bmut` job passes.
 - [ ] `./bmu test -k test_sign_in_as --headed`: watch the reader and newstaff buttons show their refusals, and the intern button reload the app as `intern`.
 
-## 40. SSM is the settings' one copy: settings set and pull, on ucb-qa (20 November 2026; 15 minutes)
+## 40. SSM is the settings' one copy: settings set and pull, on ucb-qa (not run: replaced by section 41, 22 November 2026)
+
+Not run, and it can't be now: `ucb-qa` moved to the settings document (section 41) before this was done, so its
+settings are no longer one parameter each. Section 41 checked show, pull and set against `ucb-qa`'s document. Step 3
+below (a push refused once SSM has the settings) was checked only in CI
+(`backend/tests/test_aws_script.py`). Kept as written, for the record.
 
 Branch `deploy/settings-pull-set`. Operations may now change a setting of `ucb-qa` in SSM Parameter Store (in the AWS
 console) without telling anyone: `./bmu aws settings push` no longer copies a whole `.local.conf` into SSM once SSM has

@@ -326,6 +326,11 @@ ssm_param_names() {  # every parameter under settings_path, one name per line
 
 # How the environment's settings are kept in SSM: document (settings_doc), parameters (one per setting, before the
 # document; settings migrate moves them) or none.
+# Where the settings are, for messages: the document's name, or the parameters' path.
+settings_where() {
+  case "$(settings_store)" in document) settings_doc ;; *) echo "$(settings_path)/" ;; esac
+}
+
 settings_store() {
   local names; names="$(ssm_param_names)" || exit 1
   if grep -qx "$(settings_doc)" <<<"$names"; then echo document
@@ -650,7 +655,7 @@ settings_set() {  # settings_set SETTING VALUE
   old="$(setting_in "$key" "$lines")"
   if [ "$value" = "$old" ]; then echo "$key is already ${value:-not set} in SSM."
   else
-    echo "In SSM, account $ACCOUNT_ID, $(settings_path)/:"
+    echo "In SSM, account $ACCOUNT_ID, the document $(settings_doc):"
     if [ -z "$old" ]; then echo "  + $key=$value"
     elif [ -z "$value" ]; then echo "  - $key (was $old)"
     else echo "  ~ $key=$value (was $old)"
@@ -684,8 +689,9 @@ settings_pull() {
     save_local "$key" "$value"
     changes=$((changes + 1))
   done
-  if [ "$changes" = 0 ]; then echo "The files here already match SSM ($(settings_path)/)."
-  else echo "Updated $changes setting(s) in $LOCAL from SSM ($(settings_path)/)."
+  local where; where="$(settings_where)" || exit 1
+  if [ "$changes" = 0 ]; then echo "The files here already match SSM ($where)."
+  else echo "Updated $changes setting(s) in $LOCAL from SSM ($where)."
   fi
 }
 

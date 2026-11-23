@@ -1083,12 +1083,12 @@ def test_settings_pull_brings_the_files_here_up_to_date_as_the_deployer(tree):
     r = run(tree, "settings", "pull")
     assert r.returncode == 0, r.stderr
     assert "  ALLOWED_CIDRS=198.51.100.0/24   (was 203.0.113.7/32)" in r.stdout
-    assert "Updated 3 setting(s)" in r.stdout
+    assert "Updated 3 setting(s)" in r.stdout and "from SSM (/bmu-dev/settings/all)." in r.stdout
     text = local.read_text()
     assert 'ALLOWED_CIDRS="198.51.100.0/24"' in text and f'CSPACE_URL="{BAMPFA}"' in text and 'ENV_LABEL=""' in text
     assert "ADMIN_PROFILE=bmu-admin" in text and "FRONT_DOOR" not in text
     assert ssm_writes(tree) == before
-    assert "already match SSM" in run(tree, "settings", "pull").stdout
+    assert "already match SSM (/bmu-dev/settings/all)." in run(tree, "settings", "pull").stdout
     assert "differ from SSM" not in run(tree, "plan", museums=f"pahma={BAMPFA}").stderr
 
 
